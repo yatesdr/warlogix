@@ -15,16 +15,17 @@ WAR stands for "whispers across realms" - this application is intended to provid
 - **REST API**: Expose PLC tag values via a REST API for integration with other systems
 - **MQTT Publishing**: Publish tag values to MQTT brokers on change, with retained messages
 - **MQTT Write-back**: Write to PLC tags via MQTT with proper type conversion and validation
-- **Multi-PLC Support**: Connect to and manage multiple PLCs simultaneously
+- **MQTT Authentication**: Username/password authentication for secured brokers
+- **MQTT TLS/SSL**: Encrypted connections to MQTT brokers
+- **Multi-PLC Support**: Connect to and manage multiple PLCs simultaneously (12+ PLCs supported)
+- **Array Support**: Arrays of known types are published as native JSON arrays
 - **Configuration Persistence**: Save your PLC connections, tag selections, and settings to YAML
 
 ## Limitations
 
-- Does not currently decode structs or UDT's.
-- Not tested for Strings and Arrays, but in theory they should work (?).
-- No auth for MQTT or configuring settings.
-- Only limited testing has been done on one ControlLogix PLC for the basic types.
-- This is a BETA release and will be improved as bugs are identified and remediated.
+- Structs and UDTs are published as raw byte arrays (not decoded into fields)
+- Only limited testing has been done on ControlLogix PLCs
+- This is a BETA release and will be improved as bugs are identified and remediated
 
 ## Warnings
 
@@ -67,7 +68,7 @@ Download the binary, or build from source, and run the application.
   
 </pre>
 
-- The MQTT re-publisher can republish to any accessible MQTT broker, but does not currently support auth.  This is the primary way to move data into the IT world as it can punch out of the typical machine network onto the IT side with a proper firewall config.
+- The MQTT re-publisher can republish to any accessible MQTT broker with optional username/password authentication and TLS encryption. This is the primary way to move data into the IT world as it can punch out of the typical machine network onto the IT side with a proper firewall config.
 - MQTT protocol offers write-back for write-enabled tags with a properly formatted write request (see more below).  This is only tested on basic types and should not be used as part of a control system.   It is intended for ack / clear requests to the PLC.
 <img width="887" height="579" alt="image" src="https://github.com/user-attachments/assets/20bbab85-bf11-4d58-a352-058acab28197" />
 <pre>
@@ -170,6 +171,9 @@ mqtt:
     enabled: true
     broker: localhost
     port: 1883
+    username: ""           # optional
+    password: ""           # optional
+    use_tls: false         # set true for SSL/TLS
     client_id: warlogix-main
     root_topic: factory
 
@@ -246,6 +250,32 @@ The following PLC data types are fully supported for reading and writing:
 | REAL   | 32-bit float          | IEEE 754 single precision      |
 | LREAL  | 64-bit float          | IEEE 754 double precision      |
 | STRING | String                | Up to 82 characters            |
+
+### Arrays
+
+Arrays of the above types are published as native JSON arrays:
+
+```json
+{
+  "tag": "MyDintArray",
+  "type": "DINT[]",
+  "value": [100, 200, 300, 400, 500]
+}
+```
+
+### Structs and UDTs
+
+Structs and UDTs are published as byte arrays for manual decoding:
+
+```json
+{
+  "tag": "MyUDT",
+  "type": "STRUCT",
+  "value": [212, 153, 4, 0, 0, 0, 128, 0, ...]
+}
+```
+
+Each element represents one byte (0-255). Decode using the UDT's field layout (little-endian byte order).
 
 
 ## Roadmap

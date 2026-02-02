@@ -164,19 +164,26 @@ func (v *TagValue) String() (string, error) {
 
 // GoValue returns the tag value converted to an appropriate Go type.
 // Returns nil if there's an error. The returned type depends on the tag's data type:
-//   - BOOL -> bool
-//   - SINT, INT, DINT, LINT -> int64
-//   - USINT, UINT, UDINT, ULINT -> uint64
-//   - REAL, LREAL -> float64
+//   - BOOL -> bool (or []bool for arrays)
+//   - SINT, INT, DINT, LINT -> int64 (or []int64 for arrays)
+//   - USINT, UINT, UDINT, ULINT -> uint64 (or []uint64 for arrays)
+//   - REAL, LREAL -> float64 (or []float64 for arrays)
 //   - STRING, SHORT_STRING -> string
-//   - STRUCT or unknown -> []byte (raw)
+//   - STRUCT or unknown -> []int (byte array for JSON compatibility)
 func (v *TagValue) GoValue() interface{} {
 	if v.Error != nil {
 		return nil
 	}
 
 	baseType := v.DataType & 0x0FFF
+	isArray := IsArray(v.DataType)
 
+	// Handle arrays of known types
+	if isArray {
+		return v.parseArray(baseType)
+	}
+
+	// Handle scalar values
 	switch baseType {
 	case TypeBOOL:
 		if val, err := v.Bool(); err == nil {
@@ -200,8 +207,143 @@ func (v *TagValue) GoValue() interface{} {
 		}
 	}
 
-	// For structs, arrays, or unknown types, return raw bytes
-	return v.Bytes
+	// For structs or unknown types, return as []int for JSON compatibility.
+	// This avoids base64 encoding that occurs with []byte and produces a readable
+	// integer array like [212, 153, 4, 0, ...] that can be easily parsed.
+	return v.bytesToIntArray()
+}
+
+// parseArray parses the raw bytes as an array of the given base type.
+// Returns a typed slice for known types, or []int (byte array) for unknown types.
+func (v *TagValue) parseArray(baseType uint16) interface{} {
+	switch baseType {
+	case TypeBOOL:
+		// BOOL arrays: each element is 1 byte (0 or non-zero)
+		result := make([]bool, len(v.Bytes))
+		for i, b := range v.Bytes {
+			result[i] = b != 0
+		}
+		return result
+
+	case TypeSINT:
+		// SINT: 1 byte signed
+		result := make([]int64, len(v.Bytes))
+		for i, b := range v.Bytes {
+			result[i] = int64(int8(b))
+		}
+		return result
+
+	case TypeUSINT:
+		// USINT: 1 byte unsigned
+		result := make([]uint64, len(v.Bytes))
+		for i, b := range v.Bytes {
+			result[i] = uint64(b)
+		}
+		return result
+
+	case TypeINT:
+		// INT: 2 bytes signed
+		elemSize := 2
+		count := len(v.Bytes) / elemSize
+		result := make([]int64, count)
+		for i := 0; i < count; i++ {
+			offset := i * elemSize
+			result[i] = int64(int16(binary.LittleEndian.Uint16(v.Bytes[offset:])))
+		}
+		return result
+
+	case TypeUINT:
+		// UINT: 2 bytes unsigned
+		elemSize := 2
+		count := len(v.Bytes) / elemSize
+		result := make([]uint64, count)
+		for i := 0; i < count; i++ {
+			offset := i * elemSize
+			result[i] = uint64(binary.LittleEndian.Uint16(v.Bytes[offset:]))
+		}
+		return result
+
+	case TypeDINT:
+		// DINT: 4 bytes signed
+		elemSize := 4
+		count := len(v.Bytes) / elemSize
+		result := make([]int64, count)
+		for i := 0; i < count; i++ {
+			offset := i * elemSize
+			result[i] = int64(int32(binary.LittleEndian.Uint32(v.Bytes[offset:])))
+		}
+		return result
+
+	case TypeUDINT:
+		// UDINT: 4 bytes unsigned
+		elemSize := 4
+		count := len(v.Bytes) / elemSize
+		result := make([]uint64, count)
+		for i := 0; i < count; i++ {
+			offset := i * elemSize
+			result[i] = uint64(binary.LittleEndian.Uint32(v.Bytes[offset:]))
+		}
+		return result
+
+	case TypeLINT:
+		// LINT: 8 bytes signed
+		elemSize := 8
+		count := len(v.Bytes) / elemSize
+		result := make([]int64, count)
+		for i := 0; i < count; i++ {
+			offset := i * elemSize
+			result[i] = int64(binary.LittleEndian.Uint64(v.Bytes[offset:]))
+		}
+		return result
+
+	case TypeULINT:
+		// ULINT: 8 bytes unsigned
+		elemSize := 8
+		count := len(v.Bytes) / elemSize
+		result := make([]uint64, count)
+		for i := 0; i < count; i++ {
+			offset := i * elemSize
+			result[i] = binary.LittleEndian.Uint64(v.Bytes[offset:])
+		}
+		return result
+
+	case TypeREAL:
+		// REAL: 4 bytes float
+		elemSize := 4
+		count := len(v.Bytes) / elemSize
+		result := make([]float64, count)
+		for i := 0; i < count; i++ {
+			offset := i * elemSize
+			bits := binary.LittleEndian.Uint32(v.Bytes[offset:])
+			result[i] = float64(math.Float32frombits(bits))
+		}
+		return result
+
+	case TypeLREAL:
+		// LREAL: 8 bytes float
+		elemSize := 8
+		count := len(v.Bytes) / elemSize
+		result := make([]float64, count)
+		for i := 0; i < count; i++ {
+			offset := i * elemSize
+			bits := binary.LittleEndian.Uint64(v.Bytes[offset:])
+			result[i] = math.Float64frombits(bits)
+		}
+		return result
+
+	default:
+		// Unknown array element type - return as byte array
+		return v.bytesToIntArray()
+	}
+}
+
+// bytesToIntArray converts the raw bytes to []int for JSON-friendly output.
+func (v *TagValue) bytesToIntArray() []int {
+	intBytes := make([]int, len(v.Bytes))
+	for i, b := range v.Bytes {
+		intBytes[i] = int(b)
+	}
+	return intBytes
 }
 
 // TypeName returns the human-readable type name for this tag.
