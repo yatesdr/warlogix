@@ -119,7 +119,10 @@ func main() {
 	manager.ConnectEnabled()
 
 	// Auto-start enabled MQTT publishers
-	mqttMgr.StartAll()
+	if started := mqttMgr.StartAll(); started > 0 {
+		// Force publish all current values for initial sync
+		app.ForcePublishAllValues()
+	}
 
 	// Run TUI (Shutdown handles all cleanup)
 	if err := app.Run(); err != nil {

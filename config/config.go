@@ -51,6 +51,7 @@ type MQTTConfig struct {
 	Password  string `yaml:"password,omitempty"`
 	ClientID  string `yaml:"client_id"`
 	RootTopic string `yaml:"root_topic"`
+	UseTLS    bool   `yaml:"use_tls,omitempty"`
 }
 
 // DefaultConfig returns a configuration with sensible defaults.

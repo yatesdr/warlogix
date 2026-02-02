@@ -252,6 +252,12 @@ func (a *App) Run() error {
 		})
 	})
 
+	// Refresh all tabs to reflect current state after auto-connect/auto-start
+	a.plcsTab.Refresh()
+	a.browserTab.Refresh()
+	a.mqttTab.Refresh()
+	a.restTab.Refresh()
+
 	return a.app.Run()
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"warlogix/config"
@@ -96,6 +97,16 @@ func (m *ManagedPLC) GetIdentity() *logix.DeviceInfo {
 	return m.Identity
 }
 
+// GetConnectionMode returns a human-readable string describing the connection mode.
+func (m *ManagedPLC) GetConnectionMode() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.Client == nil {
+		return "Not connected"
+	}
+	return m.Client.ConnectionMode()
+}
+
 // ValueChange represents a tag value that has changed.
 type ValueChange struct {
 	PLCName  string
@@ -106,296 +117,81 @@ type ValueChange struct {
 
 // PollStats tracks polling statistics for debugging.
 type PollStats struct {
-	LastPollTime   time.Time
-	TagsPolled     int
-	ChangesFound   int
-	LastError      error
+	LastPollTime time.Time
+	TagsPolled   int
+	ChangesFound int
+	LastError    error
 }
 
-// Manager manages multiple PLC connections and polling.
-type Manager struct {
-	plcs          map[string]*ManagedPLC
-	mu            sync.RWMutex
-	pollRate      time.Duration
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	onChange      func()                     // Callback when status changes
-	onValueChange func(changes []ValueChange) // Callback when tag values change
-	lastPollStats PollStats                  // Stats from last poll cycle
+// PLCWorker manages polling for a single PLC in its own goroutine.
+type PLCWorker struct {
+	plc      *ManagedPLC
+	manager  *Manager
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	pollRate time.Duration
+
+	// Per-worker stats
+	tagsPolled   int
+	changesFound int
+	lastError    error
+	statsMu      sync.RWMutex
 }
 
-// NewManager creates a new PLC manager.
-func NewManager(pollRate time.Duration) *Manager {
-	if pollRate <= 0 {
-		pollRate = time.Second
-	}
-	return &Manager{
-		plcs:     make(map[string]*ManagedPLC),
+// newPLCWorker creates a new worker for a PLC.
+func newPLCWorker(plc *ManagedPLC, manager *Manager, pollRate time.Duration) *PLCWorker {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &PLCWorker{
+		plc:      plc,
+		manager:  manager,
+		ctx:      ctx,
+		cancel:   cancel,
 		pollRate: pollRate,
 	}
 }
 
-// SetOnChange sets a callback that fires when PLC status changes.
-func (m *Manager) SetOnChange(fn func()) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.onChange = fn
+// Start begins the worker's poll loop.
+func (w *PLCWorker) Start() {
+	w.wg.Add(1)
+	go w.pollLoop()
 }
 
-// SetOnValueChange sets a callback that fires when tag values change.
-func (m *Manager) SetOnValueChange(fn func(changes []ValueChange)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.onValueChange = fn
+// Stop halts the worker and waits for it to finish.
+func (w *PLCWorker) Stop() {
+	w.cancel()
+	w.wg.Wait()
 }
 
-func (m *Manager) notifyChange() {
-	m.mu.RLock()
-	fn := m.onChange
-	m.mu.RUnlock()
-	if fn != nil {
-		fn()
-	}
+// GetStats returns the worker's current stats.
+func (w *PLCWorker) GetStats() (tagsPolled, changesFound int, lastError error) {
+	w.statsMu.RLock()
+	defer w.statsMu.RUnlock()
+	return w.tagsPolled, w.changesFound, w.lastError
 }
 
-func (m *Manager) notifyValueChange(changes []ValueChange) {
-	m.mu.RLock()
-	fn := m.onValueChange
-	m.mu.RUnlock()
-	if fn != nil && len(changes) > 0 {
-		fn(changes)
-	}
-}
+func (w *PLCWorker) pollLoop() {
+	defer w.wg.Done()
 
-// AddPLC adds a PLC to management.
-func (m *Manager) AddPLC(cfg *config.PLCConfig) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.plcs[cfg.Name]; exists {
-		return nil // Already exists
-	}
-
-	m.plcs[cfg.Name] = &ManagedPLC{
-		Config: cfg,
-		Status: StatusDisconnected,
-		Values: make(map[string]*logix.TagValue),
-	}
-	return nil
-}
-
-// RemovePLC removes a PLC from management and disconnects it.
-func (m *Manager) RemovePLC(name string) error {
-	m.mu.Lock()
-	plc, exists := m.plcs[name]
-	if exists {
-		delete(m.plcs, name)
-	}
-	m.mu.Unlock()
-
-	if exists && plc.Client != nil {
-		plc.Client.Close()
-	}
-	m.notifyChange()
-	return nil
-}
-
-// Connect establishes a connection to the named PLC.
-func (m *Manager) Connect(name string) error {
-	m.mu.RLock()
-	plc, exists := m.plcs[name]
-	m.mu.RUnlock()
-
-	if !exists {
-		return nil
-	}
-
-	plc.mu.Lock()
-	plc.Status = StatusConnecting
-	plc.LastError = nil
-	plc.mu.Unlock()
-	m.notifyChange()
-
-	// Build connection options
-	opts := []logix.Option{}
-	if plc.Config.Slot > 0 {
-		opts = append(opts, logix.WithSlot(plc.Config.Slot))
-	}
-
-	client, err := logix.Connect(plc.Config.Address, opts...)
-	if err != nil {
-		plc.mu.Lock()
-		plc.Status = StatusError
-		plc.LastError = err
-		plc.mu.Unlock()
-		m.notifyChange()
-		return err
-	}
-
-	// Get identity
-	identity, _ := client.Identity()
-
-	// Discover programs and tags
-	programs, _ := client.Programs()
-	tags, _ := client.AllTags()
-
-	plc.mu.Lock()
-	plc.Client = client
-	plc.Identity = identity
-	plc.Programs = programs
-	plc.Tags = tags
-	plc.Status = StatusConnected
-	plc.mu.Unlock()
-	m.notifyChange()
-
-	return nil
-}
-
-// Disconnect closes the connection to the named PLC.
-func (m *Manager) Disconnect(name string) error {
-	m.mu.RLock()
-	plc, exists := m.plcs[name]
-	m.mu.RUnlock()
-
-	if !exists {
-		return nil
-	}
-
-	plc.mu.Lock()
-	if plc.Client != nil {
-		plc.Client.Close()
-		plc.Client = nil
-	}
-	plc.Status = StatusDisconnected
-	plc.LastError = nil
-	plc.Identity = nil
-	plc.mu.Unlock()
-	m.notifyChange()
-
-	return nil
-}
-
-// GetPLC returns the managed PLC with the given name.
-func (m *Manager) GetPLC(name string) *ManagedPLC {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.plcs[name]
-}
-
-// ListPLCs returns all managed PLCs.
-func (m *Manager) ListPLCs() []*ManagedPLC {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	result := make([]*ManagedPLC, 0, len(m.plcs))
-	for _, plc := range m.plcs {
-		result = append(result, plc)
-	}
-	return result
-}
-
-// Start begins background polling for all connected PLCs.
-func (m *Manager) Start() {
-	m.mu.Lock()
-	if m.ctx != nil {
-		m.mu.Unlock()
-		return // Already running
-	}
-	m.ctx, m.cancel = context.WithCancel(context.Background())
-	m.mu.Unlock()
-
-	m.wg.Add(1)
-	go m.pollLoop()
-}
-
-// Stop halts background polling.
-func (m *Manager) Stop() {
-	m.mu.Lock()
-	if m.cancel != nil {
-		m.cancel()
-	}
-	m.mu.Unlock()
-
-	m.wg.Wait()
-
-	m.mu.Lock()
-	m.ctx = nil
-	m.cancel = nil
-	m.mu.Unlock()
-}
-
-func (m *Manager) pollLoop() {
-	defer m.wg.Done()
-
-	ticker := time.NewTicker(m.pollRate)
+	ticker := time.NewTicker(w.pollRate)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-m.ctx.Done():
+		case <-w.ctx.Done():
 			return
 		case <-ticker.C:
-			m.pollAll()
+			w.poll()
 		}
 	}
 }
 
-func (m *Manager) pollAll() {
-	m.mu.RLock()
-	plcs := make([]*ManagedPLC, 0, len(m.plcs))
-	for _, plc := range m.plcs {
-		plcs = append(plcs, plc)
-	}
-	m.mu.RUnlock()
+func (w *PLCWorker) poll() {
+	plc := w.plc
 
-	totalTags := 0
-	totalChanges := 0
-	var lastErr error
+	// Check if auto-reconnect is needed
+	w.checkAutoReconnect()
 
-	for _, plc := range plcs {
-		// Check if auto-reconnect is needed
-		m.checkAutoReconnect(plc)
-		// Poll for tag values
-		tags, changes, err := m.pollPLC(plc)
-		totalTags += tags
-		totalChanges += changes
-		if err != nil {
-			lastErr = err
-		}
-	}
-
-	// Update stats
-	m.mu.Lock()
-	m.lastPollStats = PollStats{
-		LastPollTime: time.Now(),
-		TagsPolled:   totalTags,
-		ChangesFound: totalChanges,
-		LastError:    lastErr,
-	}
-	m.mu.Unlock()
-}
-
-func (m *Manager) checkAutoReconnect(plc *ManagedPLC) {
-	plc.mu.RLock()
-	status := plc.Status
-	enabled := plc.Config.Enabled
-	name := plc.Config.Name
-	plc.mu.RUnlock()
-
-	// Only auto-reconnect if enabled and currently disconnected or in error state
-	if !enabled {
-		return
-	}
-	if status == StatusConnected || status == StatusConnecting {
-		return
-	}
-
-	// Attempt reconnection
-	go m.Connect(name)
-}
-
-func (m *Manager) pollPLC(plc *ManagedPLC) (tagsPolled int, changesFound int, pollErr error) {
 	plc.mu.RLock()
 	client := plc.Client
 	status := plc.Status
@@ -410,7 +206,12 @@ func (m *Manager) pollPLC(plc *ManagedPLC) (tagsPolled int, changesFound int, po
 	plc.mu.RUnlock()
 
 	if status != StatusConnected || client == nil {
-		return 0, 0, nil
+		w.statsMu.Lock()
+		w.tagsPolled = 0
+		w.changesFound = 0
+		w.lastError = nil
+		w.statsMu.Unlock()
+		return
 	}
 
 	// Determine which tags to read
@@ -422,18 +223,30 @@ func (m *Manager) pollPLC(plc *ManagedPLC) (tagsPolled int, changesFound int, po
 	}
 
 	if len(tagsToRead) == 0 {
-		return 0, 0, nil
+		w.statsMu.Lock()
+		w.tagsPolled = 0
+		w.changesFound = 0
+		w.lastError = nil
+		w.statsMu.Unlock()
+		return
 	}
 
-	// Read selected tags
+	// Read selected tags - this is the blocking I/O operation
 	values, err := client.Read(tagsToRead...)
 	if err != nil {
 		plc.mu.Lock()
 		plc.LastError = err
 		plc.Status = StatusError
 		plc.mu.Unlock()
-		m.notifyChange()
-		return len(tagsToRead), 0, err
+
+		w.statsMu.Lock()
+		w.tagsPolled = len(tagsToRead)
+		w.changesFound = 0
+		w.lastError = err
+		w.statsMu.Unlock()
+
+		w.manager.markStatusDirty()
+		return
 	}
 
 	// Detect changes and update values
@@ -458,10 +271,419 @@ func (m *Manager) pollPLC(plc *ManagedPLC) (tagsPolled int, changesFound int, po
 	plc.LastPoll = time.Now()
 	plc.mu.Unlock()
 
-	m.notifyChange()
-	m.notifyValueChange(changes)
+	w.statsMu.Lock()
+	w.tagsPolled = len(tagsToRead)
+	w.changesFound = len(changes)
+	w.lastError = nil
+	w.statsMu.Unlock()
 
-	return len(tagsToRead), len(changes), nil
+	// Send changes to the manager's aggregator
+	if len(changes) > 0 {
+		w.manager.sendChanges(changes)
+	}
+	w.manager.markStatusDirty()
+}
+
+func (w *PLCWorker) checkAutoReconnect() {
+	plc := w.plc
+
+	plc.mu.RLock()
+	status := plc.Status
+	enabled := plc.Config.Enabled
+	plc.mu.RUnlock()
+
+	// Only auto-reconnect if enabled and currently disconnected or in error state
+	if !enabled {
+		return
+	}
+	if status == StatusConnected || status == StatusConnecting {
+		return
+	}
+
+	// Attempt reconnection (runs in this worker's goroutine)
+	w.manager.connectPLC(plc)
+}
+
+// Manager manages multiple PLC connections and polling.
+type Manager struct {
+	plcs    map[string]*ManagedPLC
+	workers map[string]*PLCWorker
+	mu      sync.RWMutex
+
+	pollRate      time.Duration
+	batchInterval time.Duration
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	// Callbacks
+	onChange      func()
+	onValueChange func(changes []ValueChange)
+
+	// Batched update channels
+	changeChan  chan []ValueChange // Aggregates value changes from workers
+	statusDirty int32              // Atomic flag: 1 if UI needs refresh
+
+	// Aggregated stats
+	lastPollStats PollStats
+	statsMu       sync.RWMutex
+}
+
+// NewManager creates a new PLC manager.
+func NewManager(pollRate time.Duration) *Manager {
+	if pollRate <= 0 {
+		pollRate = time.Second
+	}
+	return &Manager{
+		plcs:          make(map[string]*ManagedPLC),
+		workers:       make(map[string]*PLCWorker),
+		pollRate:      pollRate,
+		batchInterval: 100 * time.Millisecond, // Batch UI updates every 100ms
+		changeChan:    make(chan []ValueChange, 100),
+	}
+}
+
+// SetOnChange sets a callback that fires when PLC status changes.
+func (m *Manager) SetOnChange(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onChange = fn
+}
+
+// SetOnValueChange sets a callback that fires when tag values change.
+func (m *Manager) SetOnValueChange(fn func(changes []ValueChange)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onValueChange = fn
+}
+
+// markStatusDirty signals that the UI needs to be refreshed.
+func (m *Manager) markStatusDirty() {
+	atomic.StoreInt32(&m.statusDirty, 1)
+}
+
+// sendChanges sends value changes to the aggregator channel.
+func (m *Manager) sendChanges(changes []ValueChange) {
+	select {
+	case m.changeChan <- changes:
+	default:
+		// Channel full, drop oldest and retry
+		select {
+		case <-m.changeChan:
+		default:
+		}
+		select {
+		case m.changeChan <- changes:
+		default:
+		}
+	}
+}
+
+// AddPLC adds a PLC to management.
+func (m *Manager) AddPLC(cfg *config.PLCConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.plcs[cfg.Name]; exists {
+		return nil // Already exists
+	}
+
+	plc := &ManagedPLC{
+		Config: cfg,
+		Status: StatusDisconnected,
+		Values: make(map[string]*logix.TagValue),
+	}
+	m.plcs[cfg.Name] = plc
+
+	// If manager is running, start a worker for this PLC
+	if m.ctx != nil {
+		worker := newPLCWorker(plc, m, m.pollRate)
+		m.workers[cfg.Name] = worker
+		worker.Start()
+	}
+
+	return nil
+}
+
+// RemovePLC removes a PLC from management and disconnects it.
+func (m *Manager) RemovePLC(name string) error {
+	m.mu.Lock()
+	plc, exists := m.plcs[name]
+	worker := m.workers[name]
+	if exists {
+		delete(m.plcs, name)
+		delete(m.workers, name)
+	}
+	m.mu.Unlock()
+
+	// Stop worker first (outside lock)
+	if worker != nil {
+		worker.Stop()
+	}
+
+	if exists && plc.Client != nil {
+		plc.Client.Close()
+	}
+
+	m.markStatusDirty()
+	return nil
+}
+
+// connectPLC establishes a connection to a PLC (called from worker goroutine).
+func (m *Manager) connectPLC(plc *ManagedPLC) error {
+	plc.mu.Lock()
+	plc.Status = StatusConnecting
+	plc.LastError = nil
+	plc.mu.Unlock()
+	m.markStatusDirty()
+
+	// Build connection options
+	opts := []logix.Option{}
+	if plc.Config.Slot > 0 {
+		opts = append(opts, logix.WithSlot(plc.Config.Slot))
+	}
+
+	client, err := logix.Connect(plc.Config.Address, opts...)
+	if err != nil {
+		plc.mu.Lock()
+		plc.Status = StatusError
+		plc.LastError = err
+		plc.mu.Unlock()
+		m.markStatusDirty()
+		return err
+	}
+
+	// Get identity
+	identity, _ := client.Identity()
+
+	// Discover programs and tags
+	programs, _ := client.Programs()
+	tags, _ := client.AllTags()
+
+	plc.mu.Lock()
+	plc.Client = client
+	plc.Identity = identity
+	plc.Programs = programs
+	plc.Tags = tags
+	plc.Status = StatusConnected
+	plc.mu.Unlock()
+	m.markStatusDirty()
+
+	return nil
+}
+
+// Connect establishes a connection to the named PLC.
+// This can be called from UI thread - runs connection in background.
+func (m *Manager) Connect(name string) error {
+	m.mu.RLock()
+	plc, exists := m.plcs[name]
+	m.mu.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("PLC not found: %s", name)
+	}
+
+	// Run connection in a separate goroutine to not block UI
+	go m.connectPLC(plc)
+	return nil
+}
+
+// Disconnect closes the connection to the named PLC.
+func (m *Manager) Disconnect(name string) error {
+	m.mu.RLock()
+	plc, exists := m.plcs[name]
+	m.mu.RUnlock()
+
+	if !exists {
+		return nil
+	}
+
+	plc.mu.Lock()
+	if plc.Client != nil {
+		plc.Client.Close()
+		plc.Client = nil
+	}
+	plc.Status = StatusDisconnected
+	plc.LastError = nil
+	plc.Identity = nil
+	plc.mu.Unlock()
+	m.markStatusDirty()
+
+	return nil
+}
+
+// GetPLC returns the managed PLC with the given name.
+func (m *Manager) GetPLC(name string) *ManagedPLC {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.plcs[name]
+}
+
+// ListPLCs returns all managed PLCs.
+func (m *Manager) ListPLCs() []*ManagedPLC {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	result := make([]*ManagedPLC, 0, len(m.plcs))
+	for _, plc := range m.plcs {
+		result = append(result, plc)
+	}
+	return result
+}
+
+// Start begins background polling for all PLCs.
+func (m *Manager) Start() {
+	m.mu.Lock()
+	if m.ctx != nil {
+		m.mu.Unlock()
+		return // Already running
+	}
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+
+	// Start workers for all existing PLCs
+	for name, plc := range m.plcs {
+		worker := newPLCWorker(plc, m, m.pollRate)
+		m.workers[name] = worker
+		worker.Start()
+	}
+	m.mu.Unlock()
+
+	// Start the batched update loop
+	m.wg.Add(1)
+	go m.batchedUpdateLoop()
+
+	// Start the stats aggregator
+	m.wg.Add(1)
+	go m.statsAggregatorLoop()
+}
+
+// Stop halts all background polling.
+func (m *Manager) Stop() {
+	m.mu.Lock()
+	if m.cancel != nil {
+		m.cancel()
+	}
+
+	// Stop all workers
+	workers := make([]*PLCWorker, 0, len(m.workers))
+	for _, w := range m.workers {
+		workers = append(workers, w)
+	}
+	m.workers = make(map[string]*PLCWorker)
+	m.mu.Unlock()
+
+	// Stop workers outside of lock
+	for _, w := range workers {
+		w.Stop()
+	}
+
+	m.wg.Wait()
+
+	m.mu.Lock()
+	m.ctx = nil
+	m.cancel = nil
+	m.mu.Unlock()
+}
+
+// batchedUpdateLoop aggregates changes and triggers UI updates at a controlled rate.
+func (m *Manager) batchedUpdateLoop() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(m.batchInterval)
+	defer ticker.Stop()
+
+	var pendingChanges []ValueChange
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			// Flush any remaining changes
+			if len(pendingChanges) > 0 {
+				m.flushValueChanges(pendingChanges)
+			}
+			return
+
+		case changes := <-m.changeChan:
+			// Aggregate changes
+			pendingChanges = append(pendingChanges, changes...)
+
+		case <-ticker.C:
+			// Check if status update is needed
+			if atomic.CompareAndSwapInt32(&m.statusDirty, 1, 0) {
+				m.mu.RLock()
+				fn := m.onChange
+				m.mu.RUnlock()
+				if fn != nil {
+					fn()
+				}
+			}
+
+			// Flush pending value changes
+			if len(pendingChanges) > 0 {
+				m.flushValueChanges(pendingChanges)
+				pendingChanges = nil
+			}
+		}
+	}
+}
+
+// flushValueChanges calls the value change callback with accumulated changes.
+func (m *Manager) flushValueChanges(changes []ValueChange) {
+	m.mu.RLock()
+	fn := m.onValueChange
+	m.mu.RUnlock()
+	if fn != nil && len(changes) > 0 {
+		fn(changes)
+	}
+}
+
+// statsAggregatorLoop periodically aggregates stats from all workers.
+func (m *Manager) statsAggregatorLoop() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.aggregateStats()
+		}
+	}
+}
+
+func (m *Manager) aggregateStats() {
+	m.mu.RLock()
+	workers := make([]*PLCWorker, 0, len(m.workers))
+	for _, w := range m.workers {
+		workers = append(workers, w)
+	}
+	m.mu.RUnlock()
+
+	totalTags := 0
+	totalChanges := 0
+	var lastErr error
+
+	for _, w := range workers {
+		tags, changes, err := w.GetStats()
+		totalTags += tags
+		totalChanges += changes
+		if err != nil {
+			lastErr = err
+		}
+	}
+
+	m.statsMu.Lock()
+	m.lastPollStats = PollStats{
+		LastPollTime: time.Now(),
+		TagsPolled:   totalTags,
+		ChangesFound: totalChanges,
+		LastError:    lastErr,
+	}
+	m.statsMu.Unlock()
 }
 
 // ReadTag reads a single tag from a connected PLC.
@@ -533,7 +755,7 @@ func (m *Manager) ConnectEnabled() {
 	m.mu.RUnlock()
 
 	for _, plc := range plcs {
-		go m.Connect(plc.Config.Name)
+		go m.connectPLC(plc)
 	}
 }
 
@@ -551,10 +773,10 @@ func (m *Manager) DisconnectAll() {
 	}
 }
 
-// GetPollStats returns the stats from the last poll cycle.
+// GetPollStats returns the aggregated stats from all workers.
 func (m *Manager) GetPollStats() PollStats {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.statsMu.RLock()
+	defer m.statsMu.RUnlock()
 	return m.lastPollStats
 }
 

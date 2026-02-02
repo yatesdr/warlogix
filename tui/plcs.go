@@ -408,9 +408,18 @@ func (t *PLCsTab) showEditDialog() {
 			t.app.manager.RemovePLC(originalName)
 			if updatedCfg := t.app.config.FindPLC(name); updatedCfg != nil {
 				t.app.manager.AddPLC(updatedCfg)
+				// Update MQTT subscriptions if PLC name changed
+				if originalName != name {
+					t.app.UpdateMQTTPLCNames()
+				}
 				// Reconnect if auto-connect is enabled
 				if updatedCfg.Enabled {
-					t.app.manager.Connect(name)
+					if err := t.app.manager.Connect(name); err == nil {
+						// Log connection info
+						if plc := t.app.manager.GetPLC(name); plc != nil {
+							DebugLog("PLC %s connected: %s", name, plc.GetConnectionMode())
+						}
+					}
 				}
 			}
 			t.app.QueueUpdateDraw(func() {
@@ -504,9 +513,12 @@ func (t *PLCsTab) connectSelected() {
 		t.app.QueueUpdateDraw(func() {
 			if err != nil {
 				t.app.setStatus(fmt.Sprintf("Connection failed: %v", err))
+				DebugLogError("PLC %s connection failed: %v", name, err)
 			} else {
 				tags := plc.GetTags()
+				connMode := plc.GetConnectionMode()
 				t.app.setStatus(fmt.Sprintf("Connected to %s - %d tags discovered", name, len(tags)))
+				DebugLog("PLC %s connected: %s, %d tags discovered", name, connMode, len(tags))
 			}
 			t.Refresh()
 		})
@@ -562,6 +574,7 @@ func (t *PLCsTab) showInfoDialog() {
 	info += fmt.Sprintf("[yellow]Address:[white] %s\n", plc.Config.Address)
 	info += fmt.Sprintf("[yellow]Slot:[white] %d\n", plc.Config.Slot)
 	info += fmt.Sprintf("[yellow]Status:[white] %s\n", plc.GetStatus().String())
+	info += fmt.Sprintf("[yellow]Mode:[white] %s\n", plc.GetConnectionMode())
 
 	if err := plc.GetError(); err != nil {
 		info += fmt.Sprintf("[yellow]Error:[red] %s\n", err.Error())
@@ -604,8 +617,8 @@ func (t *PLCsTab) showInfoDialog() {
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(textView, 18, 1, true).
-			AddItem(nil, 0, 1, false), 50, 1, true).
+			AddItem(textView, 20, 1, true).
+			AddItem(nil, 0, 1, false), 55, 1, true).
 		AddItem(nil, 0, 1, false)
 
 	t.app.pages.AddPage("info", modal, true, true)

@@ -45,7 +45,7 @@ func (t *MQTTTab) setupUI() {
 	t.table.SetSelectedFunc(t.onSelect)
 
 	// Set up headers
-	headers := []string{"", "Name", "Broker", "Port", "Root Topic", "Status"}
+	headers := []string{"", "Name", "Broker", "Port", "TLS", "Root Topic", "Status"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
 			SetTextColor(tcell.ColorYellow).
@@ -148,12 +148,18 @@ func (t *MQTTTab) refreshTable() {
 			status = "Connected"
 		}
 
+		tlsIndicator := "[gray]No[-]"
+		if cfg.UseTLS {
+			tlsIndicator = "[green]Yes[-]"
+		}
+
 		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
 		t.table.SetCell(row, 1, tview.NewTableCell(cfg.Name).SetExpansion(1))
 		t.table.SetCell(row, 2, tview.NewTableCell(cfg.Broker).SetExpansion(1))
 		t.table.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("%d", cfg.Port)).SetExpansion(0))
-		t.table.SetCell(row, 4, tview.NewTableCell(cfg.RootTopic).SetExpansion(1))
-		t.table.SetCell(row, 5, tview.NewTableCell(status).SetExpansion(1))
+		t.table.SetCell(row, 4, tview.NewTableCell(tlsIndicator).SetExpansion(0))
+		t.table.SetCell(row, 5, tview.NewTableCell(cfg.RootTopic).SetExpansion(1))
+		t.table.SetCell(row, 6, tview.NewTableCell(status).SetExpansion(1))
 	}
 }
 
@@ -166,6 +172,9 @@ func (t *MQTTTab) showAddDialog() {
 	form.AddInputField("Port:", "1883", 8, acceptDigits, nil)
 	form.AddInputField("Root Topic:", "factory", 20, nil, nil)
 	form.AddInputField("Client ID:", "wargate", 20, nil, nil)
+	form.AddInputField("Username:", "", 20, nil, nil)
+	form.AddPasswordField("Password:", "", 20, '*', nil)
+	form.AddCheckbox("Use TLS:", false, nil)
 	form.AddCheckbox("Auto-connect:", false, nil)
 
 	form.AddButton("Add", func() {
@@ -174,6 +183,9 @@ func (t *MQTTTab) showAddDialog() {
 		portStr := form.GetFormItemByLabel("Port:").(*tview.InputField).GetText()
 		rootTopic := form.GetFormItemByLabel("Root Topic:").(*tview.InputField).GetText()
 		clientID := form.GetFormItemByLabel("Client ID:").(*tview.InputField).GetText()
+		username := form.GetFormItemByLabel("Username:").(*tview.InputField).GetText()
+		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
+		useTLS := form.GetFormItemByLabel("Use TLS:").(*tview.Checkbox).IsChecked()
 		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
 
 		if name == "" || broker == "" {
@@ -193,6 +205,9 @@ func (t *MQTTTab) showAddDialog() {
 			Port:      port,
 			RootTopic: rootTopic,
 			ClientID:  clientID,
+			Username:  username,
+			Password:  password,
+			UseTLS:    useTLS,
 		}
 
 		t.app.config.AddMQTT(cfg)
@@ -234,7 +249,7 @@ func (t *MQTTTab) showAddDialog() {
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(form, 15, 1, true).
+			AddItem(form, 19, 1, true).
 			AddItem(nil, 0, 1, false), 55, 1, true).
 		AddItem(nil, 0, 1, false)
 
@@ -265,6 +280,9 @@ func (t *MQTTTab) showEditDialog() {
 	form.AddInputField("Port:", fmt.Sprintf("%d", cfg.Port), 8, acceptDigits, nil)
 	form.AddInputField("Root Topic:", cfg.RootTopic, 20, nil, nil)
 	form.AddInputField("Client ID:", cfg.ClientID, 20, nil, nil)
+	form.AddInputField("Username:", cfg.Username, 20, nil, nil)
+	form.AddPasswordField("Password:", cfg.Password, 20, '*', nil)
+	form.AddCheckbox("Use TLS:", cfg.UseTLS, nil)
 	form.AddCheckbox("Auto-connect:", cfg.Enabled, nil)
 
 	form.AddButton("Save", func() {
@@ -273,6 +291,9 @@ func (t *MQTTTab) showEditDialog() {
 		portStr := form.GetFormItemByLabel("Port:").(*tview.InputField).GetText()
 		rootTopic := form.GetFormItemByLabel("Root Topic:").(*tview.InputField).GetText()
 		clientID := form.GetFormItemByLabel("Client ID:").(*tview.InputField).GetText()
+		username := form.GetFormItemByLabel("Username:").(*tview.InputField).GetText()
+		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
+		useTLS := form.GetFormItemByLabel("Use TLS:").(*tview.Checkbox).IsChecked()
 		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
 
 		if name == "" || broker == "" {
@@ -292,6 +313,9 @@ func (t *MQTTTab) showEditDialog() {
 			Port:      port,
 			RootTopic: rootTopic,
 			ClientID:  clientID,
+			Username:  username,
+			Password:  password,
+			UseTLS:    useTLS,
 		}
 
 		t.app.config.UpdateMQTT(originalName, updated)
@@ -305,6 +329,9 @@ func (t *MQTTTab) showEditDialog() {
 			go func() {
 				if err := newPub.Start(); err == nil {
 					t.app.ForcePublishAllValues()
+					DebugLogMQTT("Reconnected to %s after config update (topic: %s)", name, rootTopic)
+				} else {
+					DebugLogError("MQTT %s reconnect failed: %v", name, err)
 				}
 			}()
 		}
@@ -313,6 +340,7 @@ func (t *MQTTTab) showEditDialog() {
 		t.Refresh()
 		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Updated MQTT broker: %s", name))
+		DebugLogMQTT("MQTT broker %s updated (broker: %s, topic: %s)", name, broker, rootTopic)
 	})
 
 	form.AddButton("Cancel", func() {
@@ -333,7 +361,7 @@ func (t *MQTTTab) showEditDialog() {
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(form, 15, 1, true).
+			AddItem(form, 19, 1, true).
 			AddItem(nil, 0, 1, false), 55, 1, true).
 		AddItem(nil, 0, 1, false)
 
@@ -392,12 +420,14 @@ func (t *MQTTTab) connectSelected() {
 		t.app.QueueUpdateDraw(func() {
 			if err != nil {
 				t.app.setStatus(fmt.Sprintf("MQTT connect failed: %v", err))
+				DebugLogError("MQTT %s connection failed: %v", pub.Name(), err)
 			} else {
 				if cfg := t.app.config.FindMQTT(pub.Name()); cfg != nil {
 					cfg.Enabled = true
 					t.app.SaveConfig()
 				}
 				t.app.setStatus(fmt.Sprintf("MQTT connected to %s", pub.Address()))
+				DebugLogMQTT("Connected to %s (broker: %s, topic: %s)", pub.Name(), pub.Address(), pub.Config().RootTopic)
 			}
 			t.Refresh()
 		})

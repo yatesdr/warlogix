@@ -100,6 +100,30 @@ func (c *Client) IsConnected() bool {
 	return c.plc != nil && c.plc.IsConnected()
 }
 
+// ConnectionInfo returns information about the current connection.
+// Returns connected (CIP connection active), size (negotiated connection size in bytes).
+// If not using connected messaging, size is 0.
+func (c *Client) ConnectionInfo() (connected bool, size uint16) {
+	if c == nil || c.plc == nil {
+		return false, 0
+	}
+	return c.plc.IsConnected(), c.plc.connSize
+}
+
+// ConnectionMode returns a human-readable string describing the connection mode.
+func (c *Client) ConnectionMode() string {
+	if c == nil || c.plc == nil {
+		return "Not connected"
+	}
+	if c.plc.IsConnected() {
+		if c.plc.connSize == ConnectionSizeLarge {
+			return "Connected (Large Forward Open, 4002 bytes)"
+		}
+		return "Connected (Standard Forward Open, 504 bytes)"
+	}
+	return "Unconnected messaging"
+}
+
 // Programs returns the list of program names in the PLC.
 // Returns names like "MainProgram", "SafetyProgram", etc. (without "Program:" prefix).
 func (c *Client) Programs() ([]string, error) {

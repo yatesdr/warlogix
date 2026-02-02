@@ -2,6 +2,7 @@
 package mqtt
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -120,7 +121,18 @@ func (p *Publisher) Start() error {
 	}
 
 	opts := pahomqtt.NewClientOptions()
-	opts.AddBroker(fmt.Sprintf("tcp://%s:%d", p.config.Broker, p.config.Port))
+
+	// Configure broker URL based on TLS setting
+	if p.config.UseTLS {
+		opts.AddBroker(fmt.Sprintf("ssl://%s:%d", p.config.Broker, p.config.Port))
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+		opts.SetTLSConfig(tlsConfig)
+	} else {
+		opts.AddBroker(fmt.Sprintf("tcp://%s:%d", p.config.Broker, p.config.Port))
+	}
+
 	opts.SetClientID(p.config.ClientID)
 
 	if p.config.Username != "" {
@@ -229,7 +241,10 @@ func (p *Publisher) Publish(plcName, tagName, typeName string, value interface{}
 
 // Address returns the broker address string.
 func (p *Publisher) Address() string {
-	return fmt.Sprintf("%s:%d", p.config.Broker, p.config.Port)
+	if p.config.UseTLS {
+		return fmt.Sprintf("ssl://%s:%d", p.config.Broker, p.config.Port)
+	}
+	return fmt.Sprintf("tcp://%s:%d", p.config.Broker, p.config.Port)
 }
 
 // Config returns the publisher's configuration.
@@ -643,7 +658,8 @@ func (m *Manager) List() []*Publisher {
 }
 
 // StartAll starts all publishers that are configured as enabled.
-func (m *Manager) StartAll() {
+// Returns the number of publishers successfully started.
+func (m *Manager) StartAll() int {
 	m.mu.RLock()
 	pubs := make([]*Publisher, 0, len(m.publishers))
 	for _, pub := range m.publishers {
@@ -651,11 +667,19 @@ func (m *Manager) StartAll() {
 	}
 	m.mu.RUnlock()
 
+	started := 0
 	for _, pub := range pubs {
 		if pub.config.Enabled && !pub.IsRunning() {
-			pub.Start()
+			logMQTT("Auto-starting MQTT publisher: %s", pub.Name())
+			if err := pub.Start(); err != nil {
+				logMQTT("Failed to auto-start %s: %v", pub.Name(), err)
+			} else {
+				logMQTT("Successfully started %s (%s)", pub.Name(), pub.Address())
+				started++
+			}
 		}
 	}
+	return started
 }
 
 // StopAll stops all publishers.
