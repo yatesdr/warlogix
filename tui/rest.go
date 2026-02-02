@@ -3,16 +3,22 @@ package tui
 import (
 	"fmt"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
 // RESTTab handles the REST API configuration tab.
 type RESTTab struct {
-	app       *App
-	flex      *tview.Flex
-	form      *tview.Form
-	endpoints *tview.TextView
-	statusBar *tview.TextView
+	app        *App
+	flex       *tview.Flex
+	hostInput  *tview.InputField
+	portInput  *tview.InputField
+	startBtn   *tview.Button
+	stopBtn    *tview.Button
+	endpoints  *tview.TextView
+	statusBar  *tview.TextView
+	focusables []tview.Primitive
+	focusIndex int
 }
 
 // NewRESTTab creates a new REST tab.
@@ -24,28 +30,89 @@ func NewRESTTab(app *App) *RESTTab {
 }
 
 func (t *RESTTab) setupUI() {
-	// Form for REST configuration
-	t.form = tview.NewForm()
-	t.form.AddInputField("Host:", t.app.config.REST.Host, 20, nil, func(text string) {
-		t.app.config.REST.Host = text
-		t.app.SaveConfig()
-		t.updateEndpointsList()
-	})
-	t.form.AddInputField("Port:", fmt.Sprintf("%d", t.app.config.REST.Port), 10, acceptDigits, func(text string) {
-		var port int
-		fmt.Sscanf(text, "%d", &port)
-		if port > 0 && port < 65536 {
-			t.app.config.REST.Port = port
+	// Host input
+	t.hostInput = tview.NewInputField().
+		SetLabel("Host: ").
+		SetText(t.app.config.REST.Host).
+		SetFieldWidth(15).
+		SetChangedFunc(func(text string) {
+			t.app.config.REST.Host = text
 			t.app.SaveConfig()
 			t.updateEndpointsList()
-		}
-	})
-	t.form.AddButton("Start", t.startServer)
-	t.form.AddButton("Stop", t.stopServer)
+		})
 
+	// Port input
+	t.portInput = tview.NewInputField().
+		SetLabel("Port: ").
+		SetText(fmt.Sprintf("%d", t.app.config.REST.Port)).
+		SetFieldWidth(6).
+		SetAcceptanceFunc(tview.InputFieldInteger).
+		SetChangedFunc(func(text string) {
+			var port int
+			fmt.Sscanf(text, "%d", &port)
+			if port > 0 && port < 65536 {
+				t.app.config.REST.Port = port
+				t.app.SaveConfig()
+				t.updateEndpointsList()
+			}
+		})
+
+	// Buttons
+	t.startBtn = tview.NewButton("Start").SetSelectedFunc(t.startServer)
+	t.stopBtn = tview.NewButton("Stop").SetSelectedFunc(t.stopServer)
+
+	// Track focusable elements for Tab navigation
+	t.focusables = []tview.Primitive{t.hostInput, t.portInput, t.startBtn, t.stopBtn}
+	t.focusIndex = 0
+
+	// Set up Tab key navigation within the config area
+	for _, p := range t.focusables {
+		switch w := p.(type) {
+		case *tview.InputField:
+			w.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+				if event.Key() == tcell.KeyTab {
+					t.focusNext()
+					return nil
+				} else if event.Key() == tcell.KeyBacktab {
+					t.focusPrev()
+					return nil
+				}
+				return event
+			})
+		case *tview.Button:
+			w.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+				if event.Key() == tcell.KeyTab {
+					t.focusNext()
+					return nil
+				} else if event.Key() == tcell.KeyBacktab {
+					t.focusPrev()
+					return nil
+				}
+				return event
+			})
+		}
+	}
+
+	// Horizontal row with inputs and buttons (with spacing)
+	inputRow := tview.NewFlex().SetDirection(tview.FlexColumn).
+		AddItem(t.hostInput, 22, 0, true).
+		AddItem(nil, 2, 0, false). // spacer
+		AddItem(t.portInput, 14, 0, false).
+		AddItem(nil, 3, 0, false). // spacer
+		AddItem(t.startBtn, 9, 0, false).
+		AddItem(nil, 2, 0, false). // spacer
+		AddItem(t.stopBtn, 8, 0, false).
+		AddItem(nil, 0, 1, false)  // fill remaining space
+
+	// Status bar showing running state
+	t.statusBar = tview.NewTextView().
+		SetDynamicColors(true)
+
+	// Combine status and inputs in config box
 	formBox := tview.NewFlex().SetDirection(tview.FlexRow)
 	formBox.SetBorder(true).SetTitle(" REST API Configuration ")
-	formBox.AddItem(t.form, 5, 0, true)
+	formBox.AddItem(t.statusBar, 1, 0, false)
+	formBox.AddItem(inputRow, 1, 0, true)
 
 	// Endpoints display
 	t.endpoints = tview.NewTextView().
@@ -53,16 +120,21 @@ func (t *RESTTab) setupUI() {
 		SetScrollable(true)
 	t.endpoints.SetBorder(true).SetTitle(" Available Endpoints ")
 
-	// Status bar
-	t.statusBar = tview.NewTextView().
-		SetDynamicColors(true)
-
 	// Main layout
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(formBox, 7, 0, true).
-		AddItem(t.endpoints, 0, 1, false).
-		AddItem(t.statusBar, 1, 0, false)
+		AddItem(formBox, 5, 0, true).
+		AddItem(t.endpoints, 0, 1, false)
+}
+
+func (t *RESTTab) focusNext() {
+	t.focusIndex = (t.focusIndex + 1) % len(t.focusables)
+	t.app.app.SetFocus(t.focusables[t.focusIndex])
+}
+
+func (t *RESTTab) focusPrev() {
+	t.focusIndex = (t.focusIndex - 1 + len(t.focusables)) % len(t.focusables)
+	t.app.app.SetFocus(t.focusables[t.focusIndex])
 }
 
 func (t *RESTTab) updateEndpointsList() {
@@ -126,7 +198,8 @@ func (t *RESTTab) GetPrimitive() tview.Primitive {
 
 // GetFocusable returns the element that should receive focus.
 func (t *RESTTab) GetFocusable() tview.Primitive {
-	return t.form
+	t.focusIndex = 0
+	return t.hostInput
 }
 
 // Refresh updates the display.
@@ -135,11 +208,11 @@ func (t *RESTTab) Refresh() {
 
 	var status string
 	if running {
-		status = fmt.Sprintf("[green]● Running[white] on %s", t.app.apiServer.Address())
+		status = fmt.Sprintf(" [green]● Running[white] on %s", t.app.apiServer.Address())
 	} else {
-		status = "[gray]○ Stopped"
+		status = " [red]○ Stopped[white] - Press Tab to reach Start/Stop buttons"
 	}
 
-	t.statusBar.SetText(" Status: " + status)
+	t.statusBar.SetText(status)
 	t.updateEndpointsList()
 }
