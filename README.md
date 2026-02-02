@@ -21,6 +21,7 @@ WAR stands for "whispers across realms" - this application is intended to provid
 ## Limitations
 
 - Does not currently decode structs or UDT's.
+- Not tested for Strings and Arrays, but in theory they should work (?).
 - No auth for MQTT or configuring settings.
 - Only limited testing has been done on one ControlLogix PLC for the basic types.
 - This is a BETA release and will be improved as bugs are identified and remediated.
@@ -245,6 +246,14 @@ The following PLC data types are fully supported for reading and writing:
 | REAL   | 32-bit float          | IEEE 754 single precision      |
 | LREAL  | 64-bit float          | IEEE 754 double precision      |
 | STRING | String                | Up to 82 characters            |
+
+
+## Roadmap
+
+ - General stability (priority 1)
+ - Add Kafka pipeline for publishing
+ - Improve overall application speed
+ - Add more debugging and logging.
 
 ## License
 
