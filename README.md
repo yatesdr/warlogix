@@ -72,7 +72,7 @@ Download the binary, or build from source, and run the application.
   
 </pre>
 
-On the PLC tab, press 'a' to add a new PLC.
+
 ## Installation
 
 ### From Source
