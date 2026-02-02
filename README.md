@@ -78,7 +78,7 @@ On the PLC tab, press 'a' to add a new PLC.
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/warlogix.git
+git clone https://github.com/yatesdr/warlogix.git
 cd warlogix
 go build -o warlogix ./cmd/warlogix
 ```
@@ -144,7 +144,7 @@ make macos
 
 ## Configuration
 
-Configuration is stored in YAML format at `~/.warlogix/config.yaml`:
+Configuration is stored in YAML format at `~/.warlogix/config.yaml` - you do not generally need to manually edit this:
 
 ```yaml
 plcs:
