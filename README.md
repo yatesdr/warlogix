@@ -1,8 +1,12 @@
-# Warlogix
+# WarLogix
 
 A TUI (Text User Interface) gateway application for Allen-Bradley/Rockwell Automation ControlLogix and CompactLogix PLCs. Browse tags, monitor values in real-time, and republish data via REST API and MQTT.
 
 WarLogix Beta release is still a little buggy, but most issues can be resolved by restarting the application if something weird is found.
+
+## The name
+
+WAR stands for "whispers across realms" - this application is intended to provide a gateway between industrial and IT applications - specifically Logix PLC's and REST / MQTT formats.   Kafka is on the feature list for addition in the near future.
 
 ## Features
 
