@@ -1,0 +1,458 @@
+package tui
+
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
+
+	"warlogix/config"
+	"warlogix/mqtt"
+)
+
+// MQTTTab handles the MQTT configuration tab.
+type MQTTTab struct {
+	app       *App
+	flex      *tview.Flex
+	table     *tview.Table
+	info      *tview.TextView
+	statusBar *tview.TextView
+}
+
+// NewMQTTTab creates a new MQTT tab.
+func NewMQTTTab(app *App) *MQTTTab {
+	t := &MQTTTab{app: app}
+	t.setupUI()
+	t.Refresh()
+	return t
+}
+
+func (t *MQTTTab) setupUI() {
+	// Button bar
+	buttons := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter).
+		SetText(" [yellow]a[white]dd  [yellow]e[white]dit  [yellow]r[white]emove  [yellow]c[white]onnect  dis[yellow]C[white]onnect ")
+
+	// Broker table
+	t.table = tview.NewTable().
+		SetBorders(false).
+		SetSelectable(true, false).
+		SetFixed(1, 0)
+
+	t.table.SetInputCapture(t.handleKeys)
+	t.table.SetSelectedFunc(t.onSelect)
+
+	// Set up headers
+	headers := []string{"", "Name", "Broker", "Port", "Root Topic", "Status"}
+	for i, h := range headers {
+		t.table.SetCell(0, i, tview.NewTableCell(h).
+			SetTextColor(tcell.ColorYellow).
+			SetSelectable(false).
+			SetAttributes(tcell.AttrBold))
+	}
+
+	tableBox := tview.NewFlex().SetDirection(tview.FlexRow)
+	tableBox.SetBorder(true).SetTitle(" MQTT Brokers ")
+	tableBox.AddItem(buttons, 1, 0, false)
+	tableBox.AddItem(t.table, 0, 1, true)
+
+	// Info panel
+	t.info = tview.NewTextView().
+		SetDynamicColors(true)
+	t.info.SetBorder(true).SetTitle(" Topic Structure ")
+	t.updateInfo()
+
+	// Status bar
+	t.statusBar = tview.NewTextView().
+		SetDynamicColors(true)
+
+	// Main layout
+	t.flex = tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(tableBox, 0, 1, true).
+		AddItem(t.info, 8, 0, false).
+		AddItem(t.statusBar, 1, 0, false)
+}
+
+func (t *MQTTTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
+	switch event.Rune() {
+	case 'a':
+		t.showAddDialog()
+		return nil
+	case 'e':
+		t.showEditDialog()
+		return nil
+	case 'r':
+		t.removeSelected()
+		return nil
+	case 'c':
+		t.connectSelected()
+		return nil
+	case 'C':
+		t.disconnectSelected()
+		return nil
+	}
+	return event
+}
+
+func (t *MQTTTab) onSelect(row, col int) {
+	if row <= 0 {
+		return
+	}
+	// Toggle connection on Enter
+	pubs := t.app.mqttMgr.List()
+	if row-1 >= len(pubs) {
+		return
+	}
+	pub := pubs[row-1]
+	if pub.IsRunning() {
+		t.disconnectSelected()
+	} else {
+		t.connectSelected()
+	}
+}
+
+func (t *MQTTTab) updateInfo() {
+	text := "\n"
+	text += " [yellow]Topic Format:[white]\n"
+	text += "   {root_topic}/{plc_name}/tags/{tag_name}\n\n"
+	text += " [yellow]Message Format:[white]\n"
+	text += "   {\"value\": <value>, \"type\": \"<type>\", \"timestamp\": \"<iso8601>\"}\n\n"
+	text += " [gray]Messages are retained and only published on value change[-]\n"
+
+	t.info.SetText(text)
+}
+
+func (t *MQTTTab) refreshTable() {
+	// Clear existing rows (keep header)
+	for t.table.GetRowCount() > 1 {
+		t.table.RemoveRow(1)
+	}
+
+	pubs := t.app.mqttMgr.List()
+	for i, pub := range pubs {
+		row := i + 1
+		cfg := pub.Config()
+
+		var indicator string
+		if pub.IsRunning() {
+			indicator = "[green]●[-]"
+		} else {
+			indicator = "[gray]○[-]"
+		}
+
+		status := "Stopped"
+		if pub.IsRunning() {
+			status = "Connected"
+		}
+
+		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
+		t.table.SetCell(row, 1, tview.NewTableCell(cfg.Name).SetExpansion(1))
+		t.table.SetCell(row, 2, tview.NewTableCell(cfg.Broker).SetExpansion(1))
+		t.table.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("%d", cfg.Port)).SetExpansion(0))
+		t.table.SetCell(row, 4, tview.NewTableCell(cfg.RootTopic).SetExpansion(1))
+		t.table.SetCell(row, 5, tview.NewTableCell(status).SetExpansion(1))
+	}
+}
+
+func (t *MQTTTab) showAddDialog() {
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle(" Add MQTT Broker ")
+
+	form.AddInputField("Name:", "", 20, nil, nil)
+	form.AddInputField("Broker:", "localhost", 30, nil, nil)
+	form.AddInputField("Port:", "1883", 8, acceptDigits, nil)
+	form.AddInputField("Root Topic:", "factory", 20, nil, nil)
+	form.AddInputField("Client ID:", "wargate", 20, nil, nil)
+	form.AddCheckbox("Auto-connect:", false, nil)
+
+	form.AddButton("Add", func() {
+		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
+		broker := form.GetFormItemByLabel("Broker:").(*tview.InputField).GetText()
+		portStr := form.GetFormItemByLabel("Port:").(*tview.InputField).GetText()
+		rootTopic := form.GetFormItemByLabel("Root Topic:").(*tview.InputField).GetText()
+		clientID := form.GetFormItemByLabel("Client ID:").(*tview.InputField).GetText()
+		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
+
+		if name == "" || broker == "" {
+			t.app.showError("Error", "Name and broker are required")
+			return
+		}
+
+		port, _ := strconv.Atoi(portStr)
+		if port <= 0 {
+			port = 1883
+		}
+
+		cfg := config.MQTTConfig{
+			Name:      name,
+			Enabled:   autoConnect,
+			Broker:    broker,
+			Port:      port,
+			RootTopic: rootTopic,
+			ClientID:  clientID,
+		}
+
+		t.app.config.AddMQTT(cfg)
+		t.app.SaveConfig()
+
+		// Add to manager
+		pub := mqtt.NewPublisher(&t.app.config.MQTT[len(t.app.config.MQTT)-1])
+		t.app.mqttMgr.Add(pub)
+
+		if autoConnect {
+			go func() {
+				if err := pub.Start(); err == nil {
+					t.app.ForcePublishAllValues()
+				}
+			}()
+		}
+
+		t.app.pages.RemovePage("add-mqtt")
+		t.Refresh()
+		t.app.focusCurrentTab()
+		t.app.setStatus(fmt.Sprintf("Added MQTT broker: %s", name))
+	})
+
+	form.AddButton("Cancel", func() {
+		t.app.pages.RemovePage("add-mqtt")
+		t.app.focusCurrentTab()
+	})
+
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			t.app.pages.RemovePage("add-mqtt")
+			t.app.focusCurrentTab()
+			return nil
+		}
+		return event
+	})
+
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 15, 1, true).
+			AddItem(nil, 0, 1, false), 55, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	t.app.pages.AddPage("add-mqtt", modal, true, true)
+	t.app.app.SetFocus(form)
+}
+
+func (t *MQTTTab) showEditDialog() {
+	row, _ := t.table.GetSelection()
+	if row <= 0 {
+		return
+	}
+
+	pubs := t.app.mqttMgr.List()
+	if row-1 >= len(pubs) {
+		return
+	}
+
+	pub := pubs[row-1]
+	cfg := pub.Config()
+	originalName := cfg.Name
+
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle(" Edit MQTT Broker ")
+
+	form.AddInputField("Name:", cfg.Name, 20, nil, nil)
+	form.AddInputField("Broker:", cfg.Broker, 30, nil, nil)
+	form.AddInputField("Port:", fmt.Sprintf("%d", cfg.Port), 8, acceptDigits, nil)
+	form.AddInputField("Root Topic:", cfg.RootTopic, 20, nil, nil)
+	form.AddInputField("Client ID:", cfg.ClientID, 20, nil, nil)
+	form.AddCheckbox("Auto-connect:", cfg.Enabled, nil)
+
+	form.AddButton("Save", func() {
+		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
+		broker := form.GetFormItemByLabel("Broker:").(*tview.InputField).GetText()
+		portStr := form.GetFormItemByLabel("Port:").(*tview.InputField).GetText()
+		rootTopic := form.GetFormItemByLabel("Root Topic:").(*tview.InputField).GetText()
+		clientID := form.GetFormItemByLabel("Client ID:").(*tview.InputField).GetText()
+		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
+
+		if name == "" || broker == "" {
+			t.app.showError("Error", "Name and broker are required")
+			return
+		}
+
+		port, _ := strconv.Atoi(portStr)
+		if port <= 0 {
+			port = 1883
+		}
+
+		updated := config.MQTTConfig{
+			Name:      name,
+			Enabled:   autoConnect,
+			Broker:    broker,
+			Port:      port,
+			RootTopic: rootTopic,
+			ClientID:  clientID,
+		}
+
+		t.app.config.UpdateMQTT(originalName, updated)
+		t.app.SaveConfig()
+
+		// Update manager
+		t.app.mqttMgr.Remove(originalName)
+		newPub := mqtt.NewPublisher(t.app.config.FindMQTT(name))
+		t.app.mqttMgr.Add(newPub)
+		if autoConnect {
+			go func() {
+				if err := newPub.Start(); err == nil {
+					t.app.ForcePublishAllValues()
+				}
+			}()
+		}
+
+		t.app.pages.RemovePage("edit-mqtt")
+		t.Refresh()
+		t.app.focusCurrentTab()
+		t.app.setStatus(fmt.Sprintf("Updated MQTT broker: %s", name))
+	})
+
+	form.AddButton("Cancel", func() {
+		t.app.pages.RemovePage("edit-mqtt")
+		t.app.focusCurrentTab()
+	})
+
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			t.app.pages.RemovePage("edit-mqtt")
+			t.app.focusCurrentTab()
+			return nil
+		}
+		return event
+	})
+
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 15, 1, true).
+			AddItem(nil, 0, 1, false), 55, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	t.app.pages.AddPage("edit-mqtt", modal, true, true)
+	t.app.app.SetFocus(form)
+}
+
+func (t *MQTTTab) removeSelected() {
+	row, _ := t.table.GetSelection()
+	if row <= 0 {
+		return
+	}
+
+	pubs := t.app.mqttMgr.List()
+	if row-1 >= len(pubs) {
+		return
+	}
+
+	pub := pubs[row-1]
+	name := pub.Name()
+
+	t.app.showConfirm("Remove MQTT Broker", fmt.Sprintf("Remove %s?", name), func() {
+		t.app.mqttMgr.Remove(name)
+		t.app.config.RemoveMQTT(name)
+		t.app.SaveConfig()
+		t.Refresh()
+		t.app.setStatus(fmt.Sprintf("Removed MQTT broker: %s", name))
+	})
+}
+
+func (t *MQTTTab) connectSelected() {
+	row, _ := t.table.GetSelection()
+	if row <= 0 {
+		return
+	}
+
+	pubs := t.app.mqttMgr.List()
+	if row-1 >= len(pubs) {
+		return
+	}
+
+	pub := pubs[row-1]
+	if pub.IsRunning() {
+		t.app.setStatus(fmt.Sprintf("MQTT %s already connected", pub.Name()))
+		return
+	}
+
+	t.app.setStatus(fmt.Sprintf("Connecting to %s...", pub.Name()))
+
+	go func() {
+		err := pub.Start()
+		if err == nil {
+			// Force publish all current values for initial sync
+			t.app.ForcePublishAllValues()
+		}
+		t.app.QueueUpdateDraw(func() {
+			if err != nil {
+				t.app.setStatus(fmt.Sprintf("MQTT connect failed: %v", err))
+			} else {
+				if cfg := t.app.config.FindMQTT(pub.Name()); cfg != nil {
+					cfg.Enabled = true
+					t.app.SaveConfig()
+				}
+				t.app.setStatus(fmt.Sprintf("MQTT connected to %s", pub.Address()))
+			}
+			t.Refresh()
+		})
+	}()
+}
+
+func (t *MQTTTab) disconnectSelected() {
+	row, _ := t.table.GetSelection()
+	if row <= 0 {
+		return
+	}
+
+	pubs := t.app.mqttMgr.List()
+	if row-1 >= len(pubs) {
+		return
+	}
+
+	pub := pubs[row-1]
+	if !pub.IsRunning() {
+		t.app.setStatus(fmt.Sprintf("MQTT %s not connected", pub.Name()))
+		return
+	}
+
+	pub.Stop()
+
+	if cfg := t.app.config.FindMQTT(pub.Name()); cfg != nil {
+		cfg.Enabled = false
+		t.app.SaveConfig()
+	}
+
+	t.Refresh()
+	t.app.setStatus(fmt.Sprintf("MQTT disconnected from %s", pub.Name()))
+}
+
+// GetPrimitive returns the main primitive for this tab.
+func (t *MQTTTab) GetPrimitive() tview.Primitive {
+	return t.flex
+}
+
+// GetFocusable returns the element that should receive focus.
+func (t *MQTTTab) GetFocusable() tview.Primitive {
+	return t.table
+}
+
+// Refresh updates the display.
+func (t *MQTTTab) Refresh() {
+	pubs := t.app.mqttMgr.List()
+	connectedCount := 0
+	for _, pub := range pubs {
+		if pub.IsRunning() {
+			connectedCount++
+		}
+	}
+
+	t.statusBar.SetText(fmt.Sprintf(" %d brokers configured, %d connected", len(pubs), connectedCount))
+	t.refreshTable()
+}
+
