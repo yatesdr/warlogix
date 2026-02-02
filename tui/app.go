@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"time"
+
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
@@ -8,6 +10,7 @@ import (
 	"warlogix/config"
 	"warlogix/mqtt"
 	"warlogix/plcman"
+	"warlogix/valkey"
 )
 
 // App is the main TUI application.
@@ -21,20 +24,24 @@ type App struct {
 	browserTab *BrowserTab
 	restTab    *RESTTab
 	mqttTab    *MQTTTab
+	valkeyTab  *ValkeyTab
 	debugTab   *DebugTab
 
 	manager    *plcman.Manager
 	apiServer  *api.Server
 	mqttMgr    *mqtt.Manager
+	valkeyMgr  *valkey.Manager
 	config     *config.Config
 	configPath string
 
 	currentTab int
 	tabNames   []string
+
+	stopChan chan struct{}
 }
 
 // NewApp creates a new TUI application.
-func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager) *App {
+func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager) *App {
 	a := &App{
 		app:        tview.NewApplication(),
 		config:     cfg,
@@ -42,7 +49,9 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiS
 		manager:    manager,
 		apiServer:  apiServer,
 		mqttMgr:    mqttMgr,
-		tabNames:   []string{TabPLCs, TabBrowser, TabREST, TabMQTT, TabDebug},
+		valkeyMgr:  valkeyMgr,
+		tabNames:   []string{TabPLCs, TabBrowser, TabREST, TabMQTT, TabValkey, TabDebug},
+		stopChan:   make(chan struct{}),
 	}
 
 	a.setupUI()
@@ -68,6 +77,7 @@ func (a *App) setupUI() {
 	a.browserTab = NewBrowserTab(a)
 	a.restTab = NewRESTTab(a)
 	a.mqttTab = NewMQTTTab(a)
+	a.valkeyTab = NewValkeyTab(a)
 	a.debugTab = NewDebugTab(a)
 
 	// Add pages
@@ -75,6 +85,7 @@ func (a *App) setupUI() {
 	a.pages.AddPage(TabBrowser, a.browserTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabREST, a.restTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabMQTT, a.mqttTab.GetPrimitive(), true, false)
+	a.pages.AddPage(TabValkey, a.valkeyTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabDebug, a.debugTab.GetPrimitive(), true, false)
 
 	// Create main layout
@@ -97,31 +108,37 @@ func (a *App) setupUI() {
 }
 
 func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
-	// Check if a modal is showing - if so, let the modal handle keys
-	frontPage, _ := a.pages.GetFrontPage()
-	isModal := frontPage != TabPLCs && frontPage != TabBrowser && frontPage != TabREST && frontPage != TabMQTT && frontPage != TabDebug
-
-	// Don't intercept keys when a modal/form is open
-	if isModal {
-		// Only allow Escape to close modals via their own handlers
-		return event
+	if event == nil {
+		return nil
 	}
 
+	// Check if a modal is showing - if so, let the modal handle keys
+	frontPage, _ := a.pages.GetFrontPage()
+
+	// List of known tab pages - anything else is considered a modal
+	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabREST || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabDebug
+
+	// Handle quit and tab switching even if we're not sure about the page state
 	// Check for quit: Shift+Q (uppercase Q)
 	if event.Rune() == 'Q' {
 		a.Shutdown()
 		return nil
 	}
 
-	// Check for help
-	if event.Rune() == '?' {
-		a.showHelp()
+	// Tab switching with Shift+Tab only
+	if event.Key() == tcell.KeyBacktab {
+		a.nextTab()
 		return nil
 	}
 
-	// Tab switching with Shift+Tab only (let regular Tab work in forms)
-	if event.Key() == tcell.KeyBacktab {
-		a.nextTab()
+	// Don't intercept other keys when a modal/form is open
+	if !isMainTab {
+		return event
+	}
+
+	// Check for help
+	if event.Rune() == '?' {
+		a.showHelp()
 		return nil
 	}
 
@@ -160,6 +177,8 @@ func (a *App) focusCurrentTab() {
 	case 3:
 		a.app.SetFocus(a.mqttTab.GetFocusable())
 	case 4:
+		a.app.SetFocus(a.valkeyTab.GetFocusable())
+	case 5:
 		a.app.SetFocus(a.debugTab.GetFocusable())
 	}
 }
@@ -256,24 +275,74 @@ func (a *App) Run() error {
 	a.plcsTab.Refresh()
 	a.browserTab.Refresh()
 	a.mqttTab.Refresh()
+	a.valkeyTab.Refresh()
 	a.restTab.Refresh()
 
+	// Start periodic refresh goroutine for MQTT, Valkey, and Debug tabs
+	go a.periodicRefresh()
+
 	return a.app.Run()
+}
+
+// periodicRefresh periodically refreshes tabs that need updates from background goroutines.
+func (a *App) periodicRefresh() {
+	// Wait for the app to fully start
+	time.Sleep(500 * time.Millisecond)
+
+	for {
+		select {
+		case <-a.stopChan:
+			return
+		case <-time.After(1 * time.Second):
+			a.app.QueueUpdateDraw(func() {
+				// Only refresh if tabs are initialized
+				if a.debugTab != nil {
+					a.debugTab.Refresh()
+				}
+				if a.mqttTab != nil && a.currentTab == 3 {
+					a.mqttTab.Refresh()
+				}
+				if a.valkeyTab != nil && a.currentTab == 4 {
+					a.valkeyTab.Refresh()
+				}
+			})
+		}
+	}
 }
 
 // Shutdown performs a clean shutdown of all resources.
 func (a *App) Shutdown() {
 	a.setStatus("Shutting down...")
 
+	// Stop periodic refresh goroutine
+	select {
+	case <-a.stopChan:
+		// Already closed
+	default:
+		close(a.stopChan)
+	}
+
 	// Clear callbacks to prevent updates during shutdown
 	a.manager.SetOnChange(nil)
 	a.manager.SetOnValueChange(nil)
 
+	// Stop all MQTT and Valkey publishers in parallel with timeout
+	done := make(chan struct{})
+	go func() {
+		a.mqttMgr.StopAll()
+		a.valkeyMgr.StopAll()
+		close(done)
+	}()
+
+	// Wait with timeout
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		// Timeout - proceed anyway
+	}
+
 	// Stop the API server
 	a.apiServer.Stop()
-
-	// Stop all MQTT publishers
-	a.mqttMgr.StopAll()
 
 	// Stop the manager polling
 	a.manager.Stop()
@@ -299,8 +368,19 @@ func (a *App) QueueUpdateDraw(f func()) {
 // This is called when an MQTT broker connects to do an initial sync.
 func (a *App) ForcePublishAllValues() {
 	values := a.manager.GetAllCurrentValues()
+	DebugLogMQTT("ForcePublishAllValues: publishing %d values", len(values))
 	for _, v := range values {
 		a.mqttMgr.Publish(v.PLCName, v.TagName, v.TypeName, v.Value, true)
+	}
+}
+
+// ForcePublishAllValuesToValkey publishes all current tag values to Valkey servers.
+// This is called when a Valkey server connects to do an initial sync.
+func (a *App) ForcePublishAllValuesToValkey() {
+	values := a.manager.GetAllCurrentValues()
+	DebugLogValkey("ForcePublishAllValuesToValkey: publishing %d values", len(values))
+	for _, v := range values {
+		a.valkeyMgr.Publish(v.PLCName, v.TagName, v.TypeName, v.Value, v.Writable)
 	}
 }
 

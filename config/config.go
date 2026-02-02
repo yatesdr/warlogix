@@ -11,10 +11,11 @@ import (
 
 // Config holds the complete application configuration.
 type Config struct {
-	PLCs     []PLCConfig   `yaml:"plcs"`
-	REST     RESTConfig    `yaml:"rest"`
-	MQTT     []MQTTConfig  `yaml:"mqtt"`
-	PollRate time.Duration `yaml:"poll_rate"`
+	PLCs     []PLCConfig     `yaml:"plcs"`
+	REST     RESTConfig      `yaml:"rest"`
+	MQTT     []MQTTConfig    `yaml:"mqtt"`
+	Valkey   []ValkeyConfig  `yaml:"valkey,omitempty"`
+	PollRate time.Duration   `yaml:"poll_rate"`
 }
 
 // PLCConfig stores configuration for a single PLC connection.
@@ -54,6 +55,20 @@ type MQTTConfig struct {
 	UseTLS    bool   `yaml:"use_tls,omitempty"`
 }
 
+// ValkeyConfig holds Valkey/Redis publisher configuration.
+type ValkeyConfig struct {
+	Name            string        `yaml:"name"`
+	Enabled         bool          `yaml:"enabled"`
+	Address         string        `yaml:"address"`         // host:port format
+	Password        string        `yaml:"password,omitempty"`
+	Database        int           `yaml:"database"`        // Redis DB number (default 0)
+	Factory         string        `yaml:"factory"`         // Factory identifier (key prefix)
+	UseTLS          bool          `yaml:"use_tls,omitempty"`
+	KeyTTL          time.Duration `yaml:"key_ttl,omitempty"`          // TTL for keys (0 = no expiry)
+	PublishChanges  bool          `yaml:"publish_changes,omitempty"`  // Publish to Pub/Sub on changes
+	EnableWriteback bool          `yaml:"enable_writeback,omitempty"` // Enable write-back queue
+}
+
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -64,7 +79,8 @@ func DefaultConfig() *Config {
 			Port:    8080,
 			Host:    "0.0.0.0",
 		},
-		MQTT: []MQTTConfig{},
+		MQTT:   []MQTTConfig{},
+		Valkey: []ValkeyConfig{},
 	}
 }
 
@@ -77,6 +93,20 @@ func DefaultMQTTConfig(name string) MQTTConfig {
 		Port:      1883,
 		ClientID:  "warlogix-" + name,
 		RootTopic: "factory",
+	}
+}
+
+// DefaultValkeyConfig returns a default Valkey configuration.
+func DefaultValkeyConfig(name string) ValkeyConfig {
+	return ValkeyConfig{
+		Name:            name,
+		Enabled:         false,
+		Address:         "localhost:6379",
+		Database:        0,
+		Factory:         "factory",
+		KeyTTL:          0,
+		PublishChanges:  true,
+		EnableWriteback: false,
 	}
 }
 
@@ -111,6 +141,43 @@ func (c *Config) UpdateMQTT(name string, updated MQTTConfig) bool {
 	for i, m := range c.MQTT {
 		if m.Name == name {
 			c.MQTT[i] = updated
+			return true
+		}
+	}
+	return false
+}
+
+// FindValkey returns the Valkey config with the given name, or nil if not found.
+func (c *Config) FindValkey(name string) *ValkeyConfig {
+	for i := range c.Valkey {
+		if c.Valkey[i].Name == name {
+			return &c.Valkey[i]
+		}
+	}
+	return nil
+}
+
+// AddValkey adds a new Valkey configuration.
+func (c *Config) AddValkey(valkey ValkeyConfig) {
+	c.Valkey = append(c.Valkey, valkey)
+}
+
+// RemoveValkey removes a Valkey config by name.
+func (c *Config) RemoveValkey(name string) bool {
+	for i, v := range c.Valkey {
+		if v.Name == name {
+			c.Valkey = append(c.Valkey[:i], c.Valkey[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateValkey updates an existing Valkey configuration.
+func (c *Config) UpdateValkey(name string, updated ValkeyConfig) bool {
+	for i, v := range c.Valkey {
+		if v.Name == name {
+			c.Valkey[i] = updated
 			return true
 		}
 	}

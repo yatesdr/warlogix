@@ -1,12 +1,12 @@
 # WarLogix
 
-A TUI (Text User Interface) gateway application for Allen-Bradley/Rockwell Automation ControlLogix and CompactLogix PLCs. Browse tags, monitor values in real-time, and republish data via REST API and MQTT.
+A TUI (Text User Interface) gateway application for Allen-Bradley/Rockwell Automation ControlLogix and CompactLogix PLCs. Browse tags, monitor values in real-time, and republish data via REST API, MQTT brokers, and Redis or Valkey.
 
 WarLogix Beta release is still a little buggy, but most issues can be resolved by restarting the application if something weird is found.
 
 ## The name
 
-WAR stands for "whispers across realms" - this application is intended to provide a gateway between industrial and IT applications - specifically Logix PLC's and REST / MQTT formats.   Kafka is on the feature list for addition in the near future.
+WAR stands for "whispers across realms" - this application is intended to provide a gateway between industrial and IT applications - specifically Logix PLC's and REST / MQTT / Valkey (Redis) formats.
 
 ## Features
 
@@ -17,6 +17,9 @@ WAR stands for "whispers across realms" - this application is intended to provid
 - **MQTT Write-back**: Write to PLC tags via MQTT with proper type conversion and validation
 - **MQTT Authentication**: Username/password authentication for secured brokers
 - **MQTT TLS/SSL**: Encrypted connections to MQTT brokers
+- **Valkey/Redis Publishing**: Store tag values in Valkey/Redis with key-value storage and Pub/Sub notifications
+- **Valkey Write-back**: Write to PLC tags via Valkey LIST queue with response notifications
+- **Valkey TLS/SSL**: Encrypted connections to Valkey/Redis servers
 - **Multi-PLC Support**: Connect to and manage multiple PLCs simultaneously (12+ PLCs supported)
 - **Array Support**: Arrays of known types are published as native JSON arrays
 - **Configuration Persistence**: Save your PLC connections, tag selections, and settings to YAML
@@ -146,6 +149,13 @@ make macos
 - `c` - Connect
 - `C` - Disconnect
 
+### Valkey Tab
+- `a` - Add server
+- `e` - Edit selected
+- `r` - Remove selected
+- `c` - Connect
+- `C` - Disconnect
+
 ## Configuration
 
 Configuration is stored in YAML format at `~/.warlogix/config.yaml` - you do not generally need to manually edit this:
@@ -176,6 +186,18 @@ mqtt:
     use_tls: false         # set true for SSL/TLS
     client_id: warlogix-main
     root_topic: factory
+
+valkey:
+  - name: LocalValkey
+    enabled: true
+    address: localhost:6379
+    password: ""           # optional
+    database: 0            # Redis DB number
+    factory: factory       # Key prefix (like root_topic for MQTT)
+    use_tls: false         # set true for SSL/TLS
+    key_ttl: 0s            # TTL for keys (0 = no expiry)
+    publish_changes: true  # Publish to Pub/Sub on changes
+    enable_writeback: false # Enable write-back queue
 
 poll_rate: 1s
 ```
@@ -232,6 +254,59 @@ Response on: `{root_topic}/{plc_name}/write/response`
 }
 ```
 
+## Valkey/Redis Integration
+
+### Key Structure
+Tags are stored with the key pattern: `{factory}:{plc}:tags:{tag}`
+
+Value format (JSON):
+```json
+{
+  "factory": "factory",
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 42,
+  "type": "DINT",
+  "writable": true,
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+### Pub/Sub Channels
+When `publish_changes` is enabled, changes are published to:
+- `{factory}:{plc}:changes` - Per-PLC change notifications
+- `{factory}:_all:changes` - All changes across all PLCs
+
+### Write-back Queue
+When `enable_writeback` is enabled, write requests can be sent via a LIST queue:
+- Queue: `{factory}:writes` (use RPUSH to add requests)
+- Responses: `{factory}:write:responses` (Pub/Sub channel)
+
+Write request format:
+```json
+{
+  "factory": "factory",
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 100
+}
+```
+
+Write response format:
+```json
+{
+  "factory": "factory",
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 100,
+  "success": true,
+  "timestamp": "2024-01-15T10:30:05Z"
+}
+```
+
+### TTL for Stale Detection
+Set `key_ttl` to a duration (e.g., `30s`, `1m`) to automatically expire keys. This allows consumers to detect stale data when the gateway stops updating.
+
 ## Supported Data Types
 
 The following PLC data types are fully supported for reading and writing:
@@ -281,9 +356,8 @@ Each element represents one byte (0-255). Decode using the UDT's field layout (l
 ## Roadmap
 
  - General stability (priority 1)
- - Add Kafka pipeline for publishing
  - Improve overall application speed
- - Add more debugging and logging.
+ - Add more debugging and logging
 
 ## License
 

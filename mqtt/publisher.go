@@ -113,13 +113,15 @@ func (p *Publisher) IsRunning() bool {
 
 // Start connects to the MQTT broker.
 func (p *Publisher) Start() error {
-	p.mu.Lock()
-
+	// Quick check if already running
+	p.mu.RLock()
 	if p.running {
-		p.mu.Unlock()
+		p.mu.RUnlock()
 		return nil
 	}
+	p.mu.RUnlock()
 
+	// Build options WITHOUT holding the lock
 	opts := pahomqtt.NewClientOptions()
 
 	// Configure broker URL based on TLS setting
@@ -145,17 +147,33 @@ func (p *Publisher) Start() error {
 	opts.SetConnectRetryInterval(5 * time.Second)
 	opts.SetKeepAlive(30 * time.Second)
 
-	p.client = pahomqtt.NewClient(opts)
-	token := p.client.Connect()
-	if !token.WaitTimeout(10 * time.Second) {
-		p.mu.Unlock()
+	// Create client and connect WITHOUT holding the lock
+	client := pahomqtt.NewClient(opts)
+	logMQTT("Attempting to connect to MQTT broker %s:%d", p.config.Broker, p.config.Port)
+
+	token := client.Connect()
+	if !token.WaitTimeout(5 * time.Second) {
+		logMQTT("MQTT connection timeout")
 		return fmt.Errorf("connection timeout")
 	}
 	if token.Error() != nil {
-		p.mu.Unlock()
+		logMQTT("MQTT connection error: %v", token.Error())
 		return token.Error()
 	}
 
+	logMQTT("Successfully connected to MQTT broker %s:%d", p.config.Broker, p.config.Port)
+
+	// Now acquire lock to update state
+	p.mu.Lock()
+
+	// Double-check we're not already running (race condition check)
+	if p.running {
+		p.mu.Unlock()
+		client.Disconnect(100)
+		return nil
+	}
+
+	p.client = client
 	p.running = true
 	p.mu.Unlock()
 
@@ -173,14 +191,20 @@ func (p *Publisher) Start() error {
 // Stop disconnects from the MQTT broker.
 func (p *Publisher) Stop() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if !p.running || p.client == nil {
+		p.mu.Unlock()
 		return
 	}
 
-	p.client.Disconnect(1000)
 	p.running = false
+	client := p.client
+	p.client = nil
+	p.mu.Unlock()
+
+	// Disconnect OUTSIDE the lock to prevent blocking
+	if client != nil {
+		client.Disconnect(500)
+	}
 }
 
 // BuildTopic constructs the full topic path.
@@ -226,8 +250,11 @@ func (p *Publisher) Publish(plcName, tagName, typeName string, value interface{}
 
 	topic := p.BuildTopic(plcName, tagName)
 	token := client.Publish(topic, 1, true, payload)
-	token.Wait()
 
+	// Use timeout to prevent blocking
+	if !token.WaitTimeout(2 * time.Second) {
+		return false
+	}
 	if token.Error() != nil {
 		return false
 	}
@@ -301,8 +328,12 @@ func (p *Publisher) subscribeWriteTopics() {
 		topic := fmt.Sprintf("%s/%s/write", rootTopic, plcName)
 		logMQTT("Subscribing to write topic: %s", topic)
 		token := client.Subscribe(topic, 1, p.handleWriteMessage)
-		if token.Wait() && token.Error() != nil {
-			logMQTT("Subscribe error for %s: %v", topic, token.Error())
+		if !token.WaitTimeout(2*time.Second) || token.Error() != nil {
+			if token.Error() != nil {
+				logMQTT("Subscribe error for %s: %v", topic, token.Error())
+			} else {
+				logMQTT("Subscribe timeout for %s", topic)
+			}
 			continue
 		}
 		logMQTT("Subscribed to: %s", topic)
@@ -509,20 +540,20 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 	var req WriteRequest
 	if err := json.Unmarshal(msg.Payload(), &req); err != nil {
 		logMQTT("JSON parse error: %v", err)
-		p.publishWriteResponse(client, rootTopic, "", "", nil, fmt.Errorf("invalid JSON: %v", err))
+		go p.publishWriteResponse(client, rootTopic, "", "", nil, fmt.Errorf("invalid JSON: %v", err))
 		return
 	}
 
 	// Validate topic matches
 	if req.Topic != rootTopic {
-		p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
+		go p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
 			fmt.Errorf("topic mismatch: expected %s, got %s", rootTopic, req.Topic))
 		return
 	}
 
 	// Check if tag is writable
 	if validator != nil && !validator(req.PLC, req.Tag) {
-		p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
+		go p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
 			fmt.Errorf("tag not writable: %s/%s", req.PLC, req.Tag))
 		return
 	}
@@ -537,7 +568,7 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 			convertedValue, err = convertValueForType(req.Value, dataType)
 			if err != nil {
 				logMQTT("Value conversion error: %v", err)
-				p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value, err)
+				go p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value, err)
 				return
 			}
 			logMQTT("Converted value: %v (type: %T)", convertedValue, convertedValue)
@@ -546,15 +577,22 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 		}
 	}
 
-	// Execute the write
-	var writeErr error
-	if handler != nil {
-		writeErr = handler(req.PLC, req.Tag, convertedValue)
-	} else {
-		writeErr = fmt.Errorf("no write handler configured")
-	}
-
-	p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value, writeErr)
+	// Execute the write in a goroutine to avoid blocking the MQTT callback
+	go func() {
+		var writeErr error
+		if handler != nil {
+			logMQTT("Executing write: %s/%s = %v", req.PLC, req.Tag, convertedValue)
+			writeErr = handler(req.PLC, req.Tag, convertedValue)
+			if writeErr != nil {
+				logMQTT("Write error: %v", writeErr)
+			} else {
+				logMQTT("Write successful")
+			}
+		} else {
+			writeErr = fmt.Errorf("no write handler configured")
+		}
+		p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value, writeErr)
+	}()
 }
 
 // publishWriteResponse publishes a write response to MQTT.
@@ -579,7 +617,7 @@ func (p *Publisher) publishWriteResponse(client pahomqtt.Client, rootTopic, plcN
 		responseTopic = fmt.Sprintf("%s/write/response", rootTopic)
 	}
 	token := client.Publish(responseTopic, 1, false, payload)
-	token.Wait()
+	token.WaitTimeout(2 * time.Second)
 }
 
 // Manager manages multiple MQTT publishers.
@@ -706,16 +744,26 @@ func (m *Manager) Publish(plcName, tagName, typeName string, value interface{}, 
 	validator := m.writeValidator
 	m.mu.RUnlock()
 
+	if len(pubs) == 0 {
+		logMQTT("Manager.Publish: no publishers configured")
+		return
+	}
+
 	// Check if tag is writable using the validator
 	writable := false
 	if validator != nil {
 		writable = validator(plcName, tagName)
 	}
 
+	runningCount := 0
 	for _, pub := range pubs {
 		if pub.IsRunning() {
+			runningCount++
 			pub.Publish(plcName, tagName, typeName, value, writable, force)
 		}
+	}
+	if runningCount == 0 {
+		logMQTT("Manager.Publish: no publishers running")
 	}
 }
 

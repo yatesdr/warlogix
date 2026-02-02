@@ -14,6 +14,7 @@ import (
 	"warlogix/mqtt"
 	"warlogix/plcman"
 	"warlogix/tui"
+	"warlogix/valkey"
 )
 
 // Version is set at build time via -ldflags
@@ -24,6 +25,13 @@ type tuiDebugLogger struct{}
 
 func (t tuiDebugLogger) LogMQTT(format string, args ...interface{}) {
 	tui.DebugLogMQTT(format, args...)
+}
+
+// tuiValkeyDebugLogger adapts the TUI debug logging for Valkey.
+type tuiValkeyDebugLogger struct{}
+
+func (t tuiValkeyDebugLogger) LogValkey(format string, args ...interface{}) {
+	tui.DebugLogValkey(format, args...)
 }
 
 func main() {
@@ -57,14 +65,44 @@ func main() {
 	mqttMgr := mqtt.NewManager()
 	mqttMgr.LoadFromConfig(cfg.MQTT)
 
-	// Set up MQTT publishing on value changes
+	// Create Valkey manager
+	valkeyMgr := valkey.NewManager()
+	valkeyMgr.LoadFromConfig(cfg.Valkey)
+
+	// Set up publishing on value changes
+	// MQTT and Valkey run in separate goroutines to avoid blocking each other
 	manager.SetOnValueChange(func(changes []plcman.ValueChange) {
-		if !mqttMgr.AnyRunning() {
+		// Check running status without blocking
+		mqttRunning := mqttMgr.AnyRunning()
+		valkeyRunning := valkeyMgr.AnyRunning()
+
+		tui.DebugLog("OnValueChange: %d changes, MQTT running: %v, Valkey running: %v",
+			len(changes), mqttRunning, valkeyRunning)
+
+		if !mqttRunning && !valkeyRunning {
 			return
 		}
-		for _, c := range changes {
-			// Always publish when a change is detected (force=true to bypass publisher cache)
-			mqttMgr.Publish(c.PLCName, c.TagName, c.TypeName, c.Value, true)
+
+		// Copy changes for goroutines
+		changesCopy := make([]plcman.ValueChange, len(changes))
+		copy(changesCopy, changes)
+
+		// Publish to MQTT in its own goroutine
+		if mqttRunning {
+			go func() {
+				for _, c := range changesCopy {
+					mqttMgr.Publish(c.PLCName, c.TagName, c.TypeName, c.Value, true)
+				}
+			}()
+		}
+
+		// Publish to Valkey in its own goroutine
+		if valkeyRunning {
+			go func() {
+				for _, c := range changesCopy {
+					valkeyMgr.Publish(c.PLCName, c.TagName, c.TypeName, c.Value, c.Writable)
+				}
+			}()
 		}
 	})
 
@@ -98,12 +136,45 @@ func main() {
 		plcNames[i] = plc.Name
 	}
 	mqttMgr.SetPLCNames(plcNames)
+	valkeyMgr.SetPLCNames(plcNames)
+
+	// Set up Valkey write handling
+	valkeyMgr.SetWriteHandler(func(plcName, tagName string, value interface{}) error {
+		return manager.WriteTag(plcName, tagName, value)
+	})
+
+	// Set up Valkey write validation - check if tag is writable in config
+	valkeyMgr.SetWriteValidator(func(plcName, tagName string) bool {
+		plcCfg := cfg.FindPLC(plcName)
+		if plcCfg == nil {
+			return false
+		}
+		for _, tag := range plcCfg.Tags {
+			if tag.Name == tagName && tag.Writable {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Set up Valkey tag type lookup for proper value conversion
+	valkeyMgr.SetTagTypeLookup(func(plcName, tagName string) uint16 {
+		return manager.GetTagType(plcName, tagName)
+	})
 
 	// Create TUI app first (this sets up the debug logger)
-	app := tui.NewApp(cfg, *configPath, manager, apiServer, mqttMgr)
+	app := tui.NewApp(cfg, *configPath, manager, apiServer, mqttMgr, valkeyMgr)
 
 	// Set up MQTT debug logging to the TUI debug tab
 	mqtt.SetDebugLogger(tuiDebugLogger{})
+
+	// Set up Valkey debug logging to the TUI debug tab
+	valkey.SetDebugLogger(tuiValkeyDebugLogger{})
+
+	// Set up Valkey on-connect callback to publish all values
+	valkeyMgr.SetOnConnectCallback(func() {
+		app.ForcePublishAllValuesToValkey()
+	})
 
 	// Start manager polling
 	manager.Start()
@@ -118,11 +189,21 @@ func main() {
 	// Auto-connect enabled PLCs first (so we have values to publish)
 	manager.ConnectEnabled()
 
-	// Auto-start enabled MQTT publishers
-	if started := mqttMgr.StartAll(); started > 0 {
-		// Force publish all current values for initial sync
-		app.ForcePublishAllValues()
-	}
+	// Auto-start enabled MQTT publishers in background
+	go func() {
+		if started := mqttMgr.StartAll(); started > 0 {
+			// Force publish all current values for initial sync
+			app.ForcePublishAllValues()
+		}
+	}()
+
+	// Auto-start enabled Valkey publishers in background
+	go func() {
+		if started := valkeyMgr.StartAll(); started > 0 {
+			// Force publish all current values for initial sync
+			app.ForcePublishAllValuesToValkey()
+		}
+	}()
 
 	// Run TUI (Shutdown handles all cleanup)
 	if err := app.Run(); err != nil {

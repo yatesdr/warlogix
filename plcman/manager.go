@@ -58,6 +58,21 @@ func (m *ManagedPLC) GetStatus() ConnectionStatus {
 	return m.Status
 }
 
+// IsTagWritable returns whether a tag is configured as writable.
+func (m *ManagedPLC) IsTagWritable(tagName string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.Config == nil {
+		return false
+	}
+	for _, tag := range m.Config.Tags {
+		if tag.Name == tagName {
+			return tag.Writable
+		}
+	}
+	return false
+}
+
 // GetError returns the last error thread-safely.
 func (m *ManagedPLC) GetError() error {
 	m.mu.RLock()
@@ -113,6 +128,7 @@ type ValueChange struct {
 	TagName  string
 	TypeName string
 	Value    interface{}
+	Writable bool
 }
 
 // PollStats tracks polling statistics for debugging.
@@ -252,6 +268,13 @@ func (w *PLCWorker) poll() {
 	// Detect changes and update values
 	var changes []ValueChange
 	plc.mu.Lock()
+	// Build writable map inside the lock to avoid calling IsTagWritable (which also locks)
+	writableMap := make(map[string]bool)
+	if plc.Config != nil {
+		for _, tag := range plc.Config.Tags {
+			writableMap[tag.Name] = tag.Writable
+		}
+	}
 	for _, v := range values {
 		if v.Error == nil {
 			newVal := v.GoValue()
@@ -263,6 +286,7 @@ func (w *PLCWorker) poll() {
 					TagName:  v.Name,
 					TypeName: v.TypeName(),
 					Value:    newVal,
+					Writable: writableMap[v.Name],
 				})
 			}
 		}
@@ -794,6 +818,11 @@ func (m *Manager) GetAllCurrentValues() []ValueChange {
 	for _, plc := range plcs {
 		plc.mu.RLock()
 		plcName := plc.Config.Name
+		// Build writable lookup map from config
+		writableMap := make(map[string]bool)
+		for _, tag := range plc.Config.Tags {
+			writableMap[tag.Name] = tag.Writable
+		}
 		for tagName, val := range plc.Values {
 			if val != nil && val.Error == nil {
 				results = append(results, ValueChange{
@@ -801,6 +830,7 @@ func (m *Manager) GetAllCurrentValues() []ValueChange {
 					TagName:  tagName,
 					TypeName: val.TypeName(),
 					Value:    val.GoValue(),
+					Writable: writableMap[tagName],
 				})
 			}
 		}

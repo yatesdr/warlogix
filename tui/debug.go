@@ -76,6 +76,7 @@ func (t *DebugTab) setupUI() {
 }
 
 // Log adds a message to the debug log.
+// This is safe to call from any goroutine.
 func (t *DebugTab) Log(format string, args ...interface{}) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -89,9 +90,7 @@ func (t *DebugTab) Log(format string, args ...interface{}) {
 		t.messages = t.messages[len(t.messages)-t.maxLines:]
 	}
 
-	// Update view
-	t.logView.SetText(t.buildText())
-	t.logView.ScrollToEnd()
+	// Don't update UI here - let Refresh() handle it to avoid threading issues
 }
 
 // LogError adds an error message to the debug log.
@@ -107,6 +106,11 @@ func (t *DebugTab) LogInfo(format string, args ...interface{}) {
 // LogMQTT adds an MQTT-related message to the debug log.
 func (t *DebugTab) LogMQTT(format string, args ...interface{}) {
 	t.Log("[green]MQTT:[-] "+format, args...)
+}
+
+// LogValkey adds a Valkey-related message to the debug log.
+func (t *DebugTab) LogValkey(format string, args ...interface{}) {
+	t.Log("[yellow]VALKEY:[-] "+format, args...)
 }
 
 func (t *DebugTab) buildText() string {
@@ -137,7 +141,11 @@ func (t *DebugTab) GetFocusable() tview.Primitive {
 
 // Refresh updates the debug tab.
 func (t *DebugTab) Refresh() {
-	// Nothing to refresh
+	t.mu.Lock()
+	text := t.buildText()
+	t.mu.Unlock()
+	t.logView.SetText(text)
+	t.logView.ScrollToEnd()
 }
 
 // DebugLog logs a message to the debug tab if it exists.
@@ -158,5 +166,12 @@ func DebugLogMQTT(format string, args ...interface{}) {
 func DebugLogError(format string, args ...interface{}) {
 	if debugLogger != nil {
 		debugLogger.LogError(format, args...)
+	}
+}
+
+// DebugLogValkey logs a Valkey message to the debug tab if it exists.
+func DebugLogValkey(format string, args ...interface{}) {
+	if debugLogger != nil {
+		debugLogger.LogValkey(format, args...)
 	}
 }

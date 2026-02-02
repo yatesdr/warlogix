@@ -321,25 +321,31 @@ func (t *MQTTTab) showEditDialog() {
 		t.app.config.UpdateMQTT(originalName, updated)
 		t.app.SaveConfig()
 
-		// Update manager
-		t.app.mqttMgr.Remove(originalName)
-		newPub := mqtt.NewPublisher(t.app.config.FindMQTT(name))
-		t.app.mqttMgr.Add(newPub)
-		if autoConnect {
-			go func() {
+		// Close dialog immediately
+		t.app.pages.RemovePage("edit-mqtt")
+		t.app.focusCurrentTab()
+		t.app.setStatus(fmt.Sprintf("Updating MQTT broker: %s...", name))
+
+		// Update manager in background to avoid blocking UI
+		go func() {
+			t.app.mqttMgr.Remove(originalName)
+			newPub := mqtt.NewPublisher(t.app.config.FindMQTT(name))
+			t.app.mqttMgr.Add(newPub)
+
+			if autoConnect {
 				if err := newPub.Start(); err == nil {
 					t.app.ForcePublishAllValues()
 					DebugLogMQTT("Reconnected to %s after config update (topic: %s)", name, rootTopic)
 				} else {
 					DebugLogError("MQTT %s reconnect failed: %v", name, err)
 				}
-			}()
-		}
+			}
 
-		t.app.pages.RemovePage("edit-mqtt")
-		t.Refresh()
-		t.app.focusCurrentTab()
-		t.app.setStatus(fmt.Sprintf("Updated MQTT broker: %s", name))
+			t.app.QueueUpdateDraw(func() {
+				t.Refresh()
+				t.app.setStatus(fmt.Sprintf("Updated MQTT broker: %s", name))
+			})
+		}()
 		DebugLogMQTT("MQTT broker %s updated (broker: %s, topic: %s)", name, broker, rootTopic)
 	})
 
@@ -384,11 +390,17 @@ func (t *MQTTTab) removeSelected() {
 	name := pub.Name()
 
 	t.app.showConfirm("Remove MQTT Broker", fmt.Sprintf("Remove %s?", name), func() {
-		t.app.mqttMgr.Remove(name)
-		t.app.config.RemoveMQTT(name)
-		t.app.SaveConfig()
-		t.Refresh()
-		t.app.setStatus(fmt.Sprintf("Removed MQTT broker: %s", name))
+		// Run removal in background to avoid blocking UI (Stop() may block)
+		go func() {
+			t.app.mqttMgr.Remove(name)
+
+			t.app.QueueUpdateDraw(func() {
+				t.app.config.RemoveMQTT(name)
+				t.app.SaveConfig()
+				t.Refresh()
+				t.app.setStatus(fmt.Sprintf("Removed MQTT broker: %s", name))
+			})
+		}()
 	})
 }
 
@@ -412,25 +424,31 @@ func (t *MQTTTab) connectSelected() {
 	t.app.setStatus(fmt.Sprintf("Connecting to %s...", pub.Name()))
 
 	go func() {
+		pubName := pub.Name()
+		pubAddr := pub.Address()
+		pubTopic := pub.Config().RootTopic
 		err := pub.Start()
-		if err == nil {
-			// Force publish all current values for initial sync
-			t.app.ForcePublishAllValues()
-		}
+
+		// Update UI immediately after connection attempt
 		t.app.QueueUpdateDraw(func() {
 			if err != nil {
 				t.app.setStatus(fmt.Sprintf("MQTT connect failed: %v", err))
-				DebugLogError("MQTT %s connection failed: %v", pub.Name(), err)
+				DebugLogError("MQTT %s connection failed: %v", pubName, err)
 			} else {
-				if cfg := t.app.config.FindMQTT(pub.Name()); cfg != nil {
+				if cfg := t.app.config.FindMQTT(pubName); cfg != nil {
 					cfg.Enabled = true
 					t.app.SaveConfig()
 				}
-				t.app.setStatus(fmt.Sprintf("MQTT connected to %s", pub.Address()))
-				DebugLogMQTT("Connected to %s (broker: %s, topic: %s)", pub.Name(), pub.Address(), pub.Config().RootTopic)
+				t.app.setStatus(fmt.Sprintf("MQTT connected to %s", pubAddr))
+				DebugLogMQTT("Connected to %s (broker: %s, topic: %s)", pubName, pubAddr, pubTopic)
 			}
 			t.Refresh()
 		})
+
+		// Force publish in separate goroutine to not delay UI
+		if err == nil {
+			go t.app.ForcePublishAllValues()
+		}
 	}()
 }
 
@@ -451,15 +469,22 @@ func (t *MQTTTab) disconnectSelected() {
 		return
 	}
 
-	pub.Stop()
+	pubName := pub.Name()
+	t.app.setStatus(fmt.Sprintf("Disconnecting from %s...", pubName))
 
-	if cfg := t.app.config.FindMQTT(pub.Name()); cfg != nil {
-		cfg.Enabled = false
-		t.app.SaveConfig()
-	}
+	// Run disconnect in background to avoid blocking UI
+	go func() {
+		pub.Stop()
 
-	t.Refresh()
-	t.app.setStatus(fmt.Sprintf("MQTT disconnected from %s", pub.Name()))
+		t.app.QueueUpdateDraw(func() {
+			if cfg := t.app.config.FindMQTT(pubName); cfg != nil {
+				cfg.Enabled = false
+				t.app.SaveConfig()
+			}
+			t.Refresh()
+			t.app.setStatus(fmt.Sprintf("MQTT disconnected from %s", pubName))
+		})
+	}()
 }
 
 // GetPrimitive returns the main primitive for this tab.

@@ -370,9 +370,8 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 		return
 	}
 
+	// Show immediate feedback
 	var sb strings.Builder
-
-	// Basic tag info from TagInfo
 	sb.WriteString("[yellow::b]Tag Information[-::-]\n")
 	sb.WriteString("─────────────────────────────\n")
 	sb.WriteString(fmt.Sprintf("[yellow]Name:[-] %s\n", tagInfo.Name))
@@ -390,87 +389,120 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 		sb.WriteString("[yellow]Dimensions:[-] scalar\n")
 	}
 
-	// Read current value from PLC
-	plc := t.app.manager.GetPLC(t.selectedPLC)
-	if plc == nil {
-		sb.WriteString("\n[red]PLC not available[-]\n")
-		t.details.SetText(sb.String())
-		return
-	}
-
 	sb.WriteString("\n[yellow::b]Live Value[-::-]\n")
 	sb.WriteString("─────────────────────────────\n")
-
-	// Try to read the tag directly
-	val, err := t.app.manager.ReadTag(t.selectedPLC, tagInfo.Name)
-	if err != nil {
-		sb.WriteString(fmt.Sprintf("[red]Read error:[-] %v\n", err))
-		t.details.SetText(sb.String())
-		return
-	}
-
-	if val == nil {
-		sb.WriteString("[gray]No value returned[-]\n")
-		t.details.SetText(sb.String())
-		return
-	}
-
-	if val.Error != nil {
-		sb.WriteString(fmt.Sprintf("[red]Tag error:[-] %v\n", val.Error))
-		t.details.SetText(sb.String())
-		return
-	}
-
-	// Display value
-	sb.WriteString(fmt.Sprintf("[yellow]Value:[-] %v\n", val.GoValue()))
-	sb.WriteString(fmt.Sprintf("[yellow]Data Type:[-] %s (0x%04X)\n", val.TypeName(), val.DataType))
-	sb.WriteString(fmt.Sprintf("[yellow]Size:[-] %d bytes\n", len(val.Bytes)))
-
-	// Raw bytes hex dump
-	sb.WriteString("\n[yellow::b]Raw Bytes[-::-]\n")
-	sb.WriteString("─────────────────────────────\n")
-
-	if len(val.Bytes) > 0 {
-		// Hex dump with offset
-		for i := 0; i < len(val.Bytes); i += 16 {
-			// Offset
-			sb.WriteString(fmt.Sprintf("[gray]%04X:[-] ", i))
-
-			// Hex bytes
-			for j := 0; j < 16; j++ {
-				if i+j < len(val.Bytes) {
-					sb.WriteString(fmt.Sprintf("%02X ", val.Bytes[i+j]))
-				} else {
-					sb.WriteString("   ")
-				}
-				if j == 7 {
-					sb.WriteString(" ")
-				}
-			}
-
-			// ASCII representation
-			sb.WriteString(" [gray]|")
-			for j := 0; j < 16 && i+j < len(val.Bytes); j++ {
-				b := val.Bytes[i+j]
-				if b >= 32 && b < 127 {
-					sb.WriteString(string(b))
-				} else {
-					sb.WriteString(".")
-				}
-			}
-			sb.WriteString("|[-]\n")
-
-			// Limit display to prevent huge outputs
-			if i >= 256 {
-				sb.WriteString(fmt.Sprintf("[gray]... (%d more bytes)[-]\n", len(val.Bytes)-i-16))
-				break
-			}
-		}
-	} else {
-		sb.WriteString("[gray]No data[-]\n")
-	}
-
+	sb.WriteString("[gray]Reading from PLC...[-]\n")
 	t.details.SetText(sb.String())
+
+	// Read from PLC in background goroutine
+	plcName := t.selectedPLC
+	tagName := tagInfo.Name
+
+	go func() {
+		plc := t.app.manager.GetPLC(plcName)
+		if plc == nil {
+			t.app.QueueUpdateDraw(func() {
+				t.details.SetText(sb.String() + "\n[red]PLC not available[-]\n")
+			})
+			return
+		}
+
+		// Try to read the tag directly
+		val, err := t.app.manager.ReadTag(plcName, tagName)
+
+		t.app.QueueUpdateDraw(func() {
+			var result strings.Builder
+
+			// Rebuild header
+			result.WriteString("[yellow::b]Tag Information[-::-]\n")
+			result.WriteString("─────────────────────────────\n")
+			result.WriteString(fmt.Sprintf("[yellow]Name:[-] %s\n", tagName))
+			result.WriteString(fmt.Sprintf("[yellow]Type:[-] %s (0x%04X)\n", tagInfo.TypeName(), tagInfo.TypeCode))
+			result.WriteString(fmt.Sprintf("[yellow]Instance:[-] %d\n", tagInfo.Instance))
+
+			if len(tagInfo.Dimensions) > 0 {
+				dims := make([]string, len(tagInfo.Dimensions))
+				for i, d := range tagInfo.Dimensions {
+					dims[i] = fmt.Sprintf("%d", d)
+				}
+				result.WriteString(fmt.Sprintf("[yellow]Dimensions:[-] [%s]\n", strings.Join(dims, ", ")))
+			} else {
+				result.WriteString("[yellow]Dimensions:[-] scalar\n")
+			}
+
+			result.WriteString("\n[yellow::b]Live Value[-::-]\n")
+			result.WriteString("─────────────────────────────\n")
+
+			if err != nil {
+				result.WriteString(fmt.Sprintf("[red]Read error:[-] %v\n", err))
+				t.details.SetText(result.String())
+				return
+			}
+
+			if val == nil {
+				result.WriteString("[gray]No value returned[-]\n")
+				t.details.SetText(result.String())
+				return
+			}
+
+			if val.Error != nil {
+				result.WriteString(fmt.Sprintf("[red]Tag error:[-] %v\n", val.Error))
+				t.details.SetText(result.String())
+				return
+			}
+
+			// Display value
+			result.WriteString(fmt.Sprintf("[yellow]Value:[-] %v\n", val.GoValue()))
+			result.WriteString(fmt.Sprintf("[yellow]Data Type:[-] %s (0x%04X)\n", val.TypeName(), val.DataType))
+			result.WriteString(fmt.Sprintf("[yellow]Size:[-] %d bytes\n", len(val.Bytes)))
+
+			// Raw bytes hex dump
+			result.WriteString("\n[yellow::b]Raw Bytes[-::-]\n")
+			result.WriteString("─────────────────────────────\n")
+
+			if len(val.Bytes) > 0 {
+				// Hex dump with offset
+				for i := 0; i < len(val.Bytes); i += 16 {
+					// Offset
+					result.WriteString(fmt.Sprintf("[gray]%04X:[-] ", i))
+
+					// Hex bytes
+					for j := 0; j < 16; j++ {
+						if i+j < len(val.Bytes) {
+							result.WriteString(fmt.Sprintf("%02X ", val.Bytes[i+j]))
+						} else {
+							result.WriteString("   ")
+						}
+						if j == 7 {
+							result.WriteString(" ")
+						}
+					}
+
+					// ASCII representation
+					result.WriteString(" [gray]|")
+					for j := 0; j < 16 && i+j < len(val.Bytes); j++ {
+						b := val.Bytes[i+j]
+						if b >= 32 && b < 127 {
+							result.WriteString(string(b))
+						} else {
+							result.WriteString(".")
+						}
+					}
+					result.WriteString("|[-]\n")
+
+					// Limit display to prevent huge outputs
+					if i >= 256 {
+						result.WriteString(fmt.Sprintf("[gray]... (%d more bytes)[-]\n", len(val.Bytes)-i-16))
+						break
+					}
+				}
+			} else {
+				result.WriteString("[gray]No data[-]\n")
+			}
+
+			t.details.SetText(result.String())
+		})
+	}()
 }
 
 func (t *BrowserTab) updateStatus() {

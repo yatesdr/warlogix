@@ -62,6 +62,7 @@ const (
 	TabBrowser = "Tag Browser"
 	TabREST    = "REST"
 	TabMQTT    = "MQTT"
+	TabValkey  = "Valkey"
 	TabDebug   = "Debug"
 )
 
@@ -111,6 +112,13 @@ const HelpText = `
 
  MQTT Tab
    a            Add broker
+   e            Edit selected
+   r            Remove selected
+   c            Connect
+   C            Disconnect
+
+ Valkey Tab
+   a            Add server
    e            Edit selected
    r            Remove selected
    c            Connect
