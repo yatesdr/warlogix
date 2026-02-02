@@ -18,6 +18,16 @@ WAR stands for "whispers across realms" - this application is intended to provid
 - **Multi-PLC Support**: Connect to and manage multiple PLCs simultaneously
 - **Configuration Persistence**: Save your PLC connections, tag selections, and settings to YAML
 
+## Limitations
+
+- Does not currently decode structs or UDT's
+- No auth for MQTT or configuring settings.
+
+## Warnings
+
+- This software allows reading and writing to industrial PLC's, which can present hazards if done poorly.
+- No warranty or liability is assumed - use at your own risk.
+
 ## Supported PLCs
 
 - Allen-Bradley ControlLogix (1756 series)
@@ -54,7 +64,7 @@ Download the binary, or build from source, and run the application.
   
 </pre>
 
-- The MQTT re-publisher can republish to any accessible MQTT broker, but does not currently support auth.
+- The MQTT re-publisher can republish to any accessible MQTT broker, but does not currently support auth.  This is the primary way to move data into the IT world as it can punch out of the typical machine network onto the IT side with a proper firewall config.
 - MQTT protocol offers write-back for write-enabled tags with a properly formatted write request (see more below).  This is only tested on basic types and should not be used as part of a control system.   It is intended for ack / clear requests to the PLC.
 <img width="887" height="579" alt="image" src="https://github.com/user-attachments/assets/20bbab85-bf11-4d58-a352-058acab28197" />
 <pre>
