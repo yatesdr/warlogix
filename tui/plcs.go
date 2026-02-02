@@ -312,6 +312,7 @@ func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 		t.app.config.AddPLC(cfg)
 		t.app.manager.AddPLC(&t.app.config.PLCs[len(t.app.config.PLCs)-1])
 		t.app.SaveConfig()
+		t.app.UpdateMQTTPLCNames()
 
 		t.app.pages.RemovePage("add")
 		t.Refresh()
@@ -462,6 +463,7 @@ func (t *PLCsTab) removeSelected() {
 	t.app.showConfirm("Remove PLC", fmt.Sprintf("Remove %s?", name), func() {
 		t.app.config.RemovePLC(name)
 		t.app.SaveConfig()
+		t.app.UpdateMQTTPLCNames()
 		t.app.setStatus(fmt.Sprintf("Removing PLC: %s...", name))
 
 		// Update manager in background to avoid blocking UI

@@ -297,3 +297,14 @@ func (a *App) ForcePublishAllValues() {
 		a.mqttMgr.Publish(v.PLCName, v.TagName, v.TypeName, v.Value, true)
 	}
 }
+
+// UpdateMQTTPLCNames updates the MQTT manager with current PLC names.
+// Call this when PLCs are added or removed.
+func (a *App) UpdateMQTTPLCNames() {
+	plcNames := make([]string, len(a.config.PLCs))
+	for i, plc := range a.config.PLCs {
+		plcNames[i] = plc.Name
+	}
+	a.mqttMgr.SetPLCNames(plcNames)
+	a.mqttMgr.UpdateWriteSubscriptions()
+}
