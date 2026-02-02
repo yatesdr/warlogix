@@ -204,10 +204,10 @@ poll_rate: 1s
 
 When enabled, the REST API provides the following endpoints:
 
-- `GET /plcs` - List all PLCs with status
-- `GET /plcs/{name}` - PLC details and identity
-- `GET /plcs/{name}/tags` - All tags with current values
-- `GET /plcs/{name}/tags/{tagname}` - Single tag value
+- `GET /` - List all PLCs with status
+- `GET /{plc_name}` - PLC details and identity
+- `GET /{plc_name}/tags` - All tags with current values
+- `GET /{plc_name}/tags/{tagname}` - Single tag value
 
 ## MQTT Topics
 
