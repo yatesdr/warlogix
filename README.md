@@ -20,8 +20,10 @@ WAR stands for "whispers across realms" - this application is intended to provid
 
 ## Limitations
 
-- Does not currently decode structs or UDT's
+- Does not currently decode structs or UDT's.
 - No auth for MQTT or configuring settings.
+- Only limited testing has been done on one ControlLogix PLC for the basic types.
+- This is a BETA release and will be improved as bugs are identified and remediated.
 
 ## Warnings
 
@@ -247,6 +249,10 @@ The following PLC data types are fully supported for reading and writing:
 ## License
 
 MIT License - see LICENSE file for details.
+
+## Acknowledgements
+
+ - Pylogix / dmroeder - reference code was used to help identify and troubleshoot throughout the development process.
 
 ## Contributing
 
