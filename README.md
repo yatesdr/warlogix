@@ -2,6 +2,8 @@
 
 A TUI (Text User Interface) gateway application for Allen-Bradley/Rockwell Automation ControlLogix and CompactLogix PLCs. Browse tags, monitor values in real-time, and republish data via REST API and MQTT.
 
+WarLogix Beta release is still a little buggy, but most issues can be resolved by restarting the application if something weird is found.
+
 ## Features
 
 - **PLC Discovery**: Automatically discover PLCs on your network via UDP broadcast or direct TCP connection
@@ -18,6 +20,31 @@ A TUI (Text User Interface) gateway application for Allen-Bradley/Rockwell Autom
 - Allen-Bradley CompactLogix (1769 series)
 - Other PLCs supporting EtherNet/IP and CIP protocols
 
+## Basic Usage
+
+Download the binary, or build from source, and run the application.
+
+- Navigate between tabs by pressing Shift-Tab.
+- Use the hot-keys to generate add one or more PLC's, browse tags, and configure REST and MQTT re-publishing.
+- By default, no tags will be synced.   Use the Tag Browser tab to select tags to publish and set the status.
+- If you are on the same switch as the PLC you may be able to discover available PLC's by pressing 'd', but in many situations the UDP discovery is limited by broadcast domain and you will need to add the PLC by the IP Address.
+
+<img width="885" height="582" alt="image" src="https://github.com/user-attachments/assets/660d1c0f-bce3-47b8-aa2f-5451f403ae70" />
+<img width="364" height="220" alt="image" src="https://github.com/user-attachments/assets/9063a2a5-4aa6-4646-abbc-9ca39d90e958" />
+
+- To add tags for read / republish you can select them in the tag browser (Shift-Tab to tab to it)
+<img width="882" height="576" alt="image" src="https://github.com/user-attachments/assets/9cf6c677-0a4b-43f7-85a0-9e24bd3131b5" />
+
+- The REST endpoint is read-only, but useful for polling state.
+<img width="885" height="578" alt="image" src="https://github.com/user-attachments/assets/f016aa2b-af67-42c1-a0b9-42949fbb99d8" />
+
+- The MQTT re-publisher can republish to any accessible MQTT broker, but does not currently support auth.
+- MQTT protocol offers write-back for write-enabled tags with a properly formatted write request (see more below).  This is only tested on basic types and should not be used as part of a control system.   It is intended for ack / clear requests to the PLC.
+
+<img width="887" height="579" alt="image" src="https://github.com/user-attachments/assets/20bbab85-bf11-4d58-a352-058acab28197" />
+
+
+On the PLC tab, press 'a' to add a new PLC.
 ## Installation
 
 ### From Source
