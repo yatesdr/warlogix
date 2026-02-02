@@ -18,18 +18,23 @@ jobs:
           - goos: linux
             goarch: amd64
             suffix: linux-amd64
+            archive: tar.gz
           - goos: linux
             goarch: arm64
             suffix: linux-arm64
+            archive: tar.gz
           - goos: windows
             goarch: amd64
-            suffix: windows-amd64.exe
+            suffix: windows-amd64
+            archive: zip
           - goos: darwin
             goarch: amd64
             suffix: darwin-amd64
+            archive: tar.gz
           - goos: darwin
             goarch: arm64
             suffix: darwin-arm64
+            archive: tar.gz
 
     steps:
       - name: Checkout
@@ -45,14 +50,29 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
+          BINARY_NAME=warlogix
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME=warlogix.exe
+          fi
           go build -ldflags "-s -w -X main.Version=${{ github.ref_name }}" \
-            -o warlogix-${{ matrix.suffix }} ./cmd/warlogix
+            -o ${BINARY_NAME} ./cmd/warlogix
+          chmod +x ${BINARY_NAME} 2>/dev/null || true
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          tar -czvf warlogix-${{ matrix.suffix }}.tar.gz warlogix README.md LICENSE
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        run: |
+          zip warlogix-${{ matrix.suffix }}.zip warlogix.exe README.md LICENSE
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: warlogix-${{ matrix.suffix }}
-          path: warlogix-${{ matrix.suffix }}
+          path: warlogix-${{ matrix.suffix }}.${{ matrix.archive }}
 
   release:
     name: Release
@@ -74,7 +94,6 @@ jobs:
             cp "$dir"* release/
           done
           cd release
-          # Create checksums
           sha256sum * > checksums.txt
 
       - name: Create Release
