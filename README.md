@@ -29,7 +29,7 @@ WAR stands for "whispers across realms" - this application is intended to provid
 Download the binary, or build from source, and run the application.
 
 - Navigate between tabs by pressing Shift-Tab.
-- Use the hot-keys to generate add one or more PLC's, browse tags, and configure REST and MQTT re-publishing.
+- Use the hot-keys to add one or more PLC's, edit settings, browse tags, and configure REST and MQTT re-publishing.
 - By default, no tags will be synced.   Use the Tag Browser tab to select tags to publish and set the status.
 - If you are on the same switch as the PLC you may be able to discover available PLC's by pressing 'd', but in many situations the UDP discovery is limited by broadcast domain and you will need to add the PLC by the IP Address.
 
