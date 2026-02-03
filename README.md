@@ -552,7 +552,7 @@ Each element represents one byte (0-255). Decode using the UDT's field layout (l
 
 ## License
 
-MIT License - see LICENSE file for details.
+Apache License 2.0 - see LICENSE file for details.
 
 ## Acknowledgements
 
