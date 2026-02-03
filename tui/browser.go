@@ -32,6 +32,7 @@ type BrowserTab struct {
 	tagNodes          map[string]*tview.TreeNode // Tag name -> tree node for quick lookup
 	enabledTags       map[string]bool            // Tag name -> enabled for current PLC
 	writableTags      map[string]bool            // Tag name -> writable for current PLC
+	filterText        string                     // Current filter text (lowercase)
 }
 
 // NewBrowserTab creates a new browser tab.
@@ -106,6 +107,13 @@ func (t *BrowserTab) setupUI() {
 		SetDynamicColors(true).
 		SetScrollable(true)
 	t.details.SetBorder(true).SetTitle(" Tag Details ")
+	t.details.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyTab {
+			t.app.app.SetFocus(t.tree)
+			return nil
+		}
+		return event
+	})
 
 	// Content area
 	content := tview.NewFlex().
@@ -131,6 +139,10 @@ func (t *BrowserTab) handleTreeKeys(event *tcell.EventKey) *tcell.EventKey {
 		if node != nil {
 			t.onNodeSelected(node)
 		}
+		return nil
+	case tcell.KeyTab:
+		// Tab to details panel for scrolling
+		t.app.app.SetFocus(t.details)
 		return nil
 	case tcell.KeyEscape:
 		// Return focus to tree from filter/dropdown
@@ -434,6 +446,7 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 		sb.WriteString("[yellow]Dimensions:[-] scalar\n")
 	}
 
+
 	sb.WriteString("\n[yellow::b]Live Value[-::-]\n")
 	sb.WriteString("─────────────────────────────\n")
 	sb.WriteString("[gray]Reading from PLC...[-]\n")
@@ -442,6 +455,9 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 	// Read from PLC in background goroutine
 	plcName := t.selectedPLC
 	tagName := tagInfo.Name
+	tagTypeCode := tagInfo.TypeCode
+	tagInstance := tagInfo.Instance
+	tagDimensions := tagInfo.Dimensions
 
 	go func() {
 		plc := t.app.manager.GetPLC(plcName)
@@ -450,6 +466,20 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 				t.details.SetText(sb.String() + "\n[red]PLC not available[-]\n")
 			})
 			return
+		}
+
+		// For array types, show array info (dimensions come from tag list discovery)
+		var arrayDebugInfo string
+		isArrayType := logix.IsArrayType(tagTypeCode)
+		if isArrayType {
+			var debugSb strings.Builder
+			debugSb.WriteString("\n[yellow::b]Array Info[-::-]\n")
+			debugSb.WriteString("─────────────────────────────\n")
+			baseType := logix.BaseType(tagTypeCode)
+			debugSb.WriteString(fmt.Sprintf("[yellow]Base Type:[-] %s\n", logix.TypeName(baseType)))
+			elemSize := logix.TypeSize(baseType)
+			debugSb.WriteString(fmt.Sprintf("[yellow]Element Size:[-] %d bytes\n", elemSize))
+			arrayDebugInfo = debugSb.String()
 		}
 
 		// Try to read the tag directly
@@ -462,17 +492,22 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 			result.WriteString("[yellow::b]Tag Information[-::-]\n")
 			result.WriteString("─────────────────────────────\n")
 			result.WriteString(fmt.Sprintf("[yellow]Name:[-] %s\n", tagName))
-			result.WriteString(fmt.Sprintf("[yellow]Type:[-] %s (0x%04X)\n", t.getTypeName(tagInfo.TypeCode), tagInfo.TypeCode))
-			result.WriteString(fmt.Sprintf("[yellow]Instance:[-] %d\n", tagInfo.Instance))
+			result.WriteString(fmt.Sprintf("[yellow]Type:[-] %s (0x%04X)\n", t.getTypeName(tagTypeCode), tagTypeCode))
+			result.WriteString(fmt.Sprintf("[yellow]Instance:[-] %d\n", tagInstance))
 
-			if len(tagInfo.Dimensions) > 0 {
-				dims := make([]string, len(tagInfo.Dimensions))
-				for i, d := range tagInfo.Dimensions {
+			if len(tagDimensions) > 0 {
+				dims := make([]string, len(tagDimensions))
+				for i, d := range tagDimensions {
 					dims[i] = fmt.Sprintf("%d", d)
 				}
 				result.WriteString(fmt.Sprintf("[yellow]Dimensions:[-] [%s]\n", strings.Join(dims, ", ")))
 			} else {
 				result.WriteString("[yellow]Dimensions:[-] scalar\n")
+			}
+
+			// Add array debug info if available
+			if arrayDebugInfo != "" {
+				result.WriteString(arrayDebugInfo)
 			}
 
 			result.WriteString("\n[yellow::b]Live Value[-::-]\n")
@@ -720,7 +755,6 @@ func (t *BrowserTab) loadTags() {
 		sectionNode := tview.NewTreeNode(sectionName).
 			SetColor(tcell.ColorBlue).
 			SetExpanded(true)
-		t.treeRoot.AddChild(sectionNode)
 
 		// Sort tags by name
 		sort.Slice(tags, func(i, j int) bool {
@@ -729,6 +763,10 @@ func (t *BrowserTab) loadTags() {
 
 		for i := range tags {
 			tag := &tags[i]
+			// Skip tags that don't match filter
+			if !t.matchesFilter(tag.Name) {
+				continue
+			}
 			enabled := t.enabledTags[tag.Name]
 			writable := t.writableTags[tag.Name]
 			// Check for error
@@ -739,6 +777,11 @@ func (t *BrowserTab) loadTags() {
 			node := t.createTagNodeWithError(tag, enabled, writable, hasError)
 			sectionNode.AddChild(node)
 			t.tagNodes[tag.Name] = node
+		}
+
+		// Only add section node if it has matching tags
+		if len(sectionNode.GetChildren()) > 0 {
+			t.treeRoot.AddChild(sectionNode)
 		}
 
 		t.updateStatus()
@@ -772,15 +815,23 @@ func (t *BrowserTab) loadTags() {
 		controllerNode := tview.NewTreeNode("Controller").
 			SetColor(tcell.ColorBlue).
 			SetExpanded(true)
-		t.treeRoot.AddChild(controllerNode)
 
 		for i := range controllerTags {
 			tag := &controllerTags[i]
+			// Skip tags that don't match filter
+			if !t.matchesFilter(tag.Name) {
+				continue
+			}
 			enabled := t.enabledTags[tag.Name]
 			writable := t.writableTags[tag.Name]
 			node := t.createTagNode(tag, enabled, writable)
 			controllerNode.AddChild(node)
 			t.tagNodes[tag.Name] = node
+		}
+
+		// Only add section node if it has matching tags
+		if len(controllerNode.GetChildren()) > 0 {
+			t.treeRoot.AddChild(controllerNode)
 		}
 	}
 
@@ -801,15 +852,23 @@ func (t *BrowserTab) loadTags() {
 		progNode := tview.NewTreeNode(prog).
 			SetColor(tcell.ColorBlue).
 			SetExpanded(true)
-		t.treeRoot.AddChild(progNode)
 
 		for i := range tags {
 			tag := &tags[i]
+			// Skip tags that don't match filter
+			if !t.matchesFilter(tag.Name) {
+				continue
+			}
 			enabled := t.enabledTags[tag.Name]
 			writable := t.writableTags[tag.Name]
 			node := t.createTagNode(tag, enabled, writable)
 			progNode.AddChild(node)
 			t.tagNodes[tag.Name] = node
+		}
+
+		// Only add section node if it has matching tags
+		if len(progNode.GetChildren()) > 0 {
+			t.treeRoot.AddChild(progNode)
 		}
 	}
 
@@ -879,16 +938,16 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 }
 
 func (t *BrowserTab) applyFilter(filterText string) {
-	filterText = strings.ToLower(filterText)
+	t.filterText = strings.ToLower(filterText)
+	t.loadTags() // Rebuild tree with filter applied
+}
 
-	// Walk through all nodes and show/hide based on filter
-	for name, node := range t.tagNodes {
-		if filterText == "" || strings.Contains(strings.ToLower(name), filterText) {
-			node.SetColor(tcell.ColorWhite)
-		} else {
-			node.SetColor(tcell.ColorGray)
-		}
+// matchesFilter returns true if the tag name matches the current filter.
+func (t *BrowserTab) matchesFilter(tagName string) bool {
+	if t.filterText == "" {
+		return true
 	}
+	return strings.Contains(strings.ToLower(tagName), t.filterText)
 }
 
 // isManualPLC returns true if the currently selected PLC is a non-discovery type.

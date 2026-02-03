@@ -178,6 +178,28 @@ func (v *TagValue) GoValue() interface{} {
 	baseType := v.DataType & 0x0FFF
 	isArray := IsArray(v.DataType)
 
+	// Also detect arrays by checking if we have more data than a single element.
+	// Some PLCs (like Micro800) return the base type without the array flag,
+	// but the data contains multiple elements.
+	if !isArray {
+		elemSize := TypeSize(baseType)
+		if elemSize > 0 && len(v.Bytes) > elemSize {
+			isArray = true
+		} else if baseType == TypeShortSTRING && len(v.Bytes) > 0 {
+			// For short strings, check if there's more data after the first string
+			firstStrLen := int(v.Bytes[0])
+			if len(v.Bytes) > 1+firstStrLen {
+				isArray = true
+			}
+		} else if baseType == TypeSTRING && len(v.Bytes) >= 4 {
+			// For Logix strings, check if there's more data after the first string
+			firstStrLen := int(binary.LittleEndian.Uint32(v.Bytes[:4]))
+			if len(v.Bytes) > 4+firstStrLen {
+				isArray = true
+			}
+		}
+	}
+
 	// Handle arrays of known types
 	if isArray {
 		return v.parseArray(baseType)
@@ -328,6 +350,36 @@ func (v *TagValue) parseArray(baseType uint16) interface{} {
 			offset := i * elemSize
 			bits := binary.LittleEndian.Uint64(v.Bytes[offset:])
 			result[i] = math.Float64frombits(bits)
+		}
+		return result
+
+	case TypeShortSTRING:
+		// SHORT_STRING array: each element is 1-byte length + string data
+		var result []string
+		data := v.Bytes
+		for len(data) > 0 {
+			strLen := int(data[0])
+			data = data[1:]
+			if strLen > len(data) {
+				strLen = len(data)
+			}
+			result = append(result, string(data[:strLen]))
+			data = data[strLen:]
+		}
+		return result
+
+	case TypeSTRING:
+		// STRING array: each element is 4-byte length + string data (up to 82 chars typically)
+		var result []string
+		data := v.Bytes
+		for len(data) >= 4 {
+			strLen := int(binary.LittleEndian.Uint32(data[:4]))
+			data = data[4:]
+			if strLen > len(data) {
+				strLen = len(data)
+			}
+			result = append(result, string(data[:strLen]))
+			data = data[strLen:]
 		}
 		return result
 

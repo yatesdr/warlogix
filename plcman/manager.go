@@ -465,6 +465,7 @@ type Manager struct {
 	// Callbacks
 	onChange      func()
 	onValueChange func(changes []ValueChange)
+	onLog         func(format string, args ...interface{}) // Log callback for TUI integration
 
 	// Batched update channels
 	changeChan  chan []ValueChange // Aggregates value changes from workers
@@ -506,6 +507,23 @@ func (m *Manager) SetOnValueChange(fn func(changes []ValueChange)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onValueChange = fn
+}
+
+// SetOnLog sets a callback for logging messages (for TUI integration).
+func (m *Manager) SetOnLog(fn func(format string, args ...interface{})) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onLog = fn
+}
+
+// log calls the logging callback if set.
+func (m *Manager) log(format string, args ...interface{}) {
+	m.mu.RLock()
+	fn := m.onLog
+	m.mu.RUnlock()
+	if fn != nil {
+		fn(format, args...)
+	}
 }
 
 // markStatusDirty signals that the UI needs to be refreshed.
@@ -611,7 +629,10 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 
 	// Logix/Micro800 connection
 	opts := []logix.Option{}
-	if slot > 0 {
+	if family == config.FamilyMicro800 {
+		// Micro800 PLCs don't use backplane routing and need unconnected messaging
+		opts = append(opts, logix.WithMicro800())
+	} else if slot > 0 {
 		opts = append(opts, logix.WithSlot(slot))
 	}
 
@@ -627,8 +648,11 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 			plc.Status = StatusError
 			plc.LastError = err
 		}
+		name := plc.Config.Name
+		lastErr := plc.LastError
 		plc.mu.Unlock()
 		m.markStatusDirty()
+		m.log("[red]PLC %s connection failed:[-] %v", name, lastErr)
 		return err
 	}
 
@@ -642,6 +666,9 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	if family.SupportsDiscovery() {
 		programs, _ = client.Programs()
 		tags, _ = client.AllTags()
+		// Store tags in client for element count lookup during reads
+		// For Micro800, this also probes array sizes and returns updated tags
+		tags = client.SetTags(tags)
 	}
 
 	plc.mu.Lock()
@@ -652,6 +679,7 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	plc.Status = StatusConnected
 	plc.ConnRetries = 0     // Reset on successful connection
 	plc.RetryLimited = false // Clear retry limit on success
+	name := plc.Config.Name
 	plc.mu.Unlock()
 
 	// For non-discovery PLCs, build manual tags from config
@@ -660,6 +688,7 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	}
 
 	m.markStatusDirty()
+	m.log("[green]PLC %s connected:[-] %s, %d tags", name, client.ConnectionMode(), len(tags))
 
 	return nil
 }
@@ -686,8 +715,11 @@ func (m *Manager) connectS7PLC(plc *ManagedPLC, address string, slot int) error 
 			plc.Status = StatusError
 			plc.LastError = err
 		}
+		name := plc.Config.Name
+		lastErr := plc.LastError
 		plc.mu.Unlock()
 		m.markStatusDirty()
+		m.log("[red]PLC %s (S7) connection failed:[-] %v", name, lastErr)
 		return err
 	}
 
@@ -700,12 +732,14 @@ func (m *Manager) connectS7PLC(plc *ManagedPLC, address string, slot int) error 
 	plc.Status = StatusConnected
 	plc.ConnRetries = 0
 	plc.RetryLimited = false
+	name := plc.Config.Name
 	plc.mu.Unlock()
 
 	// Build manual tags from config (S7 doesn't support discovery)
 	plc.BuildManualTags()
 
 	m.markStatusDirty()
+	m.log("[green]PLC %s (S7) connected:[-] %s", name, s7Client.ConnectionMode())
 
 	return nil
 }
@@ -732,8 +766,11 @@ func (m *Manager) connectBeckhoffPLC(plc *ManagedPLC, address, amsNetId string, 
 			plc.Status = StatusError
 			plc.LastError = err
 		}
+		name := plc.Config.Name
+		lastErr := plc.LastError
 		plc.mu.Unlock()
 		m.markStatusDirty()
+		m.log("[red]PLC %s (Beckhoff) connection failed:[-] %v", name, lastErr)
 		return err
 	}
 
@@ -765,9 +802,11 @@ func (m *Manager) connectBeckhoffPLC(plc *ManagedPLC, address, amsNetId string, 
 	plc.Status = StatusConnected
 	plc.ConnRetries = 0
 	plc.RetryLimited = false
+	name := plc.Config.Name
 	plc.mu.Unlock()
 
 	m.markStatusDirty()
+	m.log("[green]PLC %s (Beckhoff) connected:[-] %s, %d tags", name, adsClient.ConnectionMode(), len(tags))
 
 	return nil
 }

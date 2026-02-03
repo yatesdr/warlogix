@@ -66,6 +66,184 @@ func (t TagInfo) TypeName() string {
 	return TypeName(t.TypeCode)
 }
 
+// ElementCount returns the total number of elements for this tag.
+// For scalars, returns 1. For arrays, returns the product of all dimensions.
+func (t TagInfo) ElementCount() int {
+	if len(t.Dimensions) == 0 {
+		return 1
+	}
+	count := 1
+	for _, d := range t.Dimensions {
+		if d > 0 {
+			count *= d
+		}
+	}
+	if count < 1 {
+		return 1
+	}
+	return count
+}
+
+// IsArray returns true if this tag is an array.
+func (t TagInfo) IsArray() bool {
+	return len(t.Dimensions) > 0 || IsArrayType(t.TypeCode)
+}
+
+// GetArrayDimensions fetches the array dimensions for a tag using Get Attribute Single.
+// First tries attribute 8 (byte count), then falls back to attribute 3 (dimensions).
+// Returns nil for scalars. The instance ID must be from the tag's discovery.
+func (p *PLC) GetArrayDimensions(instance uint32, typeCode uint16) ([]int, error) {
+	// Check if this is an array type
+	if !IsArrayType(typeCode) {
+		return nil, nil // Not an array
+	}
+
+	var attr8Err, attr3Err error
+
+	// Try attribute 8 (byte count) - more widely supported
+	byteCount, err := p.getSymbolByteCount(instance)
+	if err != nil {
+		attr8Err = err
+	} else if byteCount > 0 {
+		baseType := BaseType(typeCode)
+		elemSize := TypeSize(baseType)
+		if elemSize > 0 {
+			elementCount := int(byteCount) / elemSize
+			if elementCount > 1 {
+				return []int{elementCount}, nil
+			}
+		}
+	}
+
+	// Fall back to attribute 3 (dimensions) for ControlLogix
+	numDims := ArrayDimensions(typeCode)
+	if numDims == 0 {
+		// Can't try attribute 3 - return attribute 8 error if we had one
+		if attr8Err != nil {
+			return nil, fmt.Errorf("attr8: %w", attr8Err)
+		}
+		return nil, nil
+	}
+
+	dims, err := p.getSymbolDimensions(instance, numDims)
+	if err != nil {
+		attr3Err = err
+	} else if len(dims) > 0 {
+		return dims, nil
+	}
+
+	// Both failed - return combined error
+	if attr8Err != nil && attr3Err != nil {
+		return nil, fmt.Errorf("attr8: %v; attr3: %v", attr8Err, attr3Err)
+	}
+	if attr3Err != nil {
+		return nil, fmt.Errorf("attr3: %w", attr3Err)
+	}
+	if attr8Err != nil {
+		return nil, fmt.Errorf("attr8: %w", attr8Err)
+	}
+	return nil, nil
+}
+
+// getSymbolByteCount fetches attribute 8 (byte count) from a Symbol Object instance.
+func (p *PLC) getSymbolByteCount(instance uint32) (uint32, error) {
+	// Build path to Symbol Object, specific instance, attribute 8
+	builder := cip.EPath().Class(0x6B)
+	if instance <= 0xFF {
+		builder = builder.Instance(byte(instance))
+	} else if instance <= 0xFFFF {
+		builder = builder.Instance16(uint16(instance))
+	} else {
+		builder = builder.Instance32(instance)
+	}
+	path, err := builder.Attribute(8).Build()
+	if err != nil {
+		return 0, err
+	}
+
+	// Build Get Attribute Single request
+	reqData := make([]byte, 0, 2+len(path))
+	reqData = append(reqData, SvcGetAttributeSingle)
+	reqData = append(reqData, path.WordLen())
+	reqData = append(reqData, path...)
+
+	cipResp, err := p.sendCipRequest(reqData)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(cipResp) < 4 {
+		return 0, fmt.Errorf("response too short")
+	}
+
+	status := cipResp[2]
+	addlStatusSize := cipResp[3]
+
+	if status != StatusSuccess {
+		return 0, parseCipError(status, addlStatusSize, cipResp[4:])
+	}
+
+	// Parse byte count (UDINT - 4 bytes)
+	dataStart := 4 + int(addlStatusSize)*2
+	if len(cipResp) < dataStart+4 {
+		return 0, fmt.Errorf("insufficient data for byte count")
+	}
+
+	byteCount := binary.LittleEndian.Uint32(cipResp[dataStart : dataStart+4])
+	return byteCount, nil
+}
+
+// getSymbolDimensions fetches attribute 3 (dimensions) from a Symbol Object instance.
+func (p *PLC) getSymbolDimensions(instance uint32, numDims int) ([]int, error) {
+	builder := cip.EPath().Class(0x6B)
+	if instance <= 0xFF {
+		builder = builder.Instance(byte(instance))
+	} else if instance <= 0xFFFF {
+		builder = builder.Instance16(uint16(instance))
+	} else {
+		builder = builder.Instance32(instance)
+	}
+	path, err := builder.Attribute(3).Build()
+	if err != nil {
+		return nil, err
+	}
+
+	reqData := make([]byte, 0, 2+len(path))
+	reqData = append(reqData, SvcGetAttributeSingle)
+	reqData = append(reqData, path.WordLen())
+	reqData = append(reqData, path...)
+
+	cipResp, err := p.sendCipRequest(reqData)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(cipResp) < 4 {
+		return nil, fmt.Errorf("response too short")
+	}
+
+	status := cipResp[2]
+	addlStatusSize := cipResp[3]
+
+	if status != StatusSuccess {
+		return nil, parseCipError(status, addlStatusSize, cipResp[4:])
+	}
+
+	dataStart := 4 + int(addlStatusSize)*2
+	data := cipResp[dataStart:]
+
+	if len(data) < numDims*4 {
+		return nil, fmt.Errorf("insufficient data for %d dimensions", numDims)
+	}
+
+	dimensions := make([]int, numDims)
+	for i := 0; i < numDims; i++ {
+		dimensions[i] = int(binary.LittleEndian.Uint32(data[i*4 : i*4+4]))
+	}
+
+	return dimensions, nil
+}
+
 // ListTags returns all controller-scope tags and program entries.
 // Use ListProgramTags to get tags within a specific program.
 func (p *PLC) ListTags() ([]TagInfo, error) {
@@ -204,12 +382,13 @@ func (p *PLC) listSymbolsPage(scope string, startInstance uint32) (tags []TagInf
 		return nil, 0, false, fmt.Errorf("buildSymbolPath: %w", err)
 	}
 
-	// Request attributes: name (1), type (2)
-	// Attribute 8 (byte count) is also useful but optional
+	// Request attributes: name (1), type (2), byte count (8)
+	// This matches pylogix's approach for getting array sizes during tag discovery.
 	attrData := []byte{
-		0x02, 0x00, // Attribute count: 2
+		0x03, 0x00, // Attribute count: 3
 		0x01, 0x00, // Attribute 1: Symbol Name
 		0x02, 0x00, // Attribute 2: Symbol Type
+		0x08, 0x00, // Attribute 8: Byte Count
 	}
 
 	// Build the CIP request
@@ -282,49 +461,66 @@ func (p *PLC) buildSymbolPath(scope string, startInstance uint32) (cip.EPath_t, 
 }
 
 // parseSymbolListResponse parses the tag list data from Get Instance Attribute List response.
-// Response format per tag:
-// - Instance ID (4 bytes, UDINT)
-// - Attribute 1 data: Name length (2 bytes) + Name (n bytes)
-// - Attribute 2 data: Symbol type (2 bytes)
+// Response format per tag (pylogix-compatible, each entry is nameLen + 20 bytes):
+// - Offset 0: Instance ID (2 bytes, UINT) - used for pagination
+// - Offset 2: Unknown (2 bytes)
+// - Offset 4: Name length (2 bytes, UINT)
+// - Offset 6: Tag name (nameLen bytes)
+// - Offset 6+nameLen: Symbol type (2 bytes, UINT)
+// - Offset 8+nameLen: Array size (2 bytes, UINT) - element count for arrays
+// - Remaining bytes up to nameLen+20: additional metadata
 func parseSymbolListResponse(data []byte) (tags []TagInfo, lastInstance uint32) {
 	i := 0
 
 	for i < len(data) {
-		// Need at least: instance(4) + nameLen(2) + type(2) = 8 bytes minimum
+		// Need at least 8 bytes to read the header (instance + unknown + nameLen)
 		if i+8 > len(data) {
 			break
 		}
 
-		// Instance ID (UDINT - 4 bytes)
-		instance := binary.LittleEndian.Uint32(data[i : i+4])
-		i += 4
+		// Instance ID at offset 0 (UINT - 2 bytes, used for pagination)
+		instance := uint32(binary.LittleEndian.Uint16(data[i : i+2]))
 
-		// Name length (UINT - 2 bytes)
-		nameLen := int(binary.LittleEndian.Uint16(data[i : i+2]))
-		i += 2
+		// Name length at offset 4 (UINT - 2 bytes)
+		nameLen := int(binary.LittleEndian.Uint16(data[i+4 : i+6]))
 
-		// Check if we have enough data for name + type
-		if i+nameLen+2 > len(data) {
+		// Each entry is nameLen + 20 bytes total
+		entrySize := nameLen + 20
+		if i+entrySize > len(data) {
 			break
 		}
 
-		// Name (ASCII string)
-		name := string(data[i : i+nameLen])
-		i += nameLen
+		// Extract the entry
+		entry := data[i : i+entrySize]
 
-		// Symbol type (UINT - 2 bytes)
-		typeCode := binary.LittleEndian.Uint16(data[i : i+2])
-		i += 2
+		// Tag name at offset 6
+		name := string(entry[6 : 6+nameLen])
+
+		// Symbol type at offset 6+nameLen (UINT - 2 bytes)
+		typeCode := binary.LittleEndian.Uint16(entry[6+nameLen : 8+nameLen])
+
+		// Array size at offset 8+nameLen (UINT - 2 bytes) - element count for arrays
+		arraySize := binary.LittleEndian.Uint16(entry[8+nameLen : 10+nameLen])
+
+		// Move to next entry
+		i += entrySize
 
 		// Skip if this looks like a partial/invalid entry
 		if name == "" || instance == 0 {
 			continue
 		}
 
+		// Calculate dimensions from array size for array types
+		var dimensions []int
+		if IsArrayType(typeCode) && arraySize > 0 {
+			dimensions = []int{int(arraySize)}
+		}
+
 		tags = append(tags, TagInfo{
-			Name:     name,
-			TypeCode: typeCode,
-			Instance: instance,
+			Name:       name,
+			TypeCode:   typeCode,
+			Instance:   instance,
+			Dimensions: dimensions,
 		})
 
 		lastInstance = instance

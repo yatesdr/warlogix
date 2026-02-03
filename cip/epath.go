@@ -79,6 +79,10 @@ func (b *PathBuilder) Instance16(id uint16) *PathBuilder {
 	return b.add(logicalSegment(CipLogicalTypeInstanceId, CipLogicalFormat16bit, binary.LittleEndian.AppendUint16(nil, id), b.padded))
 }
 
+func (b *PathBuilder) Instance32(id uint32) *PathBuilder {
+	return b.add(logicalSegment(CipLogicalTypeInstanceId, CipLogicalFormat32bit, binary.LittleEndian.AppendUint32(nil, id), b.padded))
+}
+
 func (b *PathBuilder) Attribute(id byte) *PathBuilder {
 	return b.add(logicalSegment(CipLogicalTypeAttributeId, CipLogicalFormat8bit, []byte{id}, b.padded))
 }

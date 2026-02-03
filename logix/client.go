@@ -10,7 +10,9 @@ import (
 // Client is a high-level wrapper that manages connection lifecycle
 // and provides simplified methods for common PLC operations.
 type Client struct {
-	plc *PLC // Low-level access preserved
+	plc      *PLC              // Low-level access preserved
+	micro800 bool              // True for Micro800 series (no batch reads)
+	tagInfo  map[string]TagInfo // Discovered tags for element count lookup
 }
 
 // options holds configuration options for Connect.
@@ -18,6 +20,7 @@ type options struct {
 	slot            byte
 	routePath       []byte
 	skipForwardOpen bool
+	micro800        bool
 }
 
 // Option is a functional option for Connect.
@@ -45,6 +48,17 @@ func WithRoutePath(path []byte) Option {
 func WithoutConnection() Option {
 	return func(o *options) {
 		o.skipForwardOpen = true
+	}
+}
+
+// WithMicro800 configures options appropriate for Micro800 series PLCs.
+// Micro800 PLCs don't use backplane routing (empty route path) and
+// don't support Forward Open, so this uses unconnected messaging only.
+func WithMicro800() Option {
+	return func(o *options) {
+		o.micro800 = true
+		o.skipForwardOpen = true
+		o.routePath = []byte{} // Empty route - no backplane routing for Micro800
 	}
 }
 
@@ -79,7 +93,7 @@ func Connect(address string, opts ...Option) (*Client, error) {
 		}
 	}
 
-	return &Client{plc: &plc}, nil
+	return &Client{plc: &plc, micro800: cfg.micro800}, nil
 }
 
 // Close releases all resources associated with the client.
@@ -122,6 +136,79 @@ func (c *Client) ConnectionMode() string {
 		return "Connected (Standard Forward Open, 504 bytes)"
 	}
 	return "Unconnected messaging"
+}
+
+// SetTags stores discovered tag information for element count lookup during reads.
+// For array tags without dimensions, queries attribute 8 (byte count) to calculate size.
+// Returns the tags with updated dimensions (for display purposes).
+func (c *Client) SetTags(tags []TagInfo) []TagInfo {
+	if c == nil {
+		return tags
+	}
+	c.tagInfo = make(map[string]TagInfo, len(tags))
+
+	// Make a copy to avoid modifying the original slice
+	result := make([]TagInfo, len(tags))
+	copy(result, tags)
+
+	for i := range result {
+		// For array tags without dimensions, query to get the size
+		if IsArrayType(result[i].TypeCode) && len(result[i].Dimensions) == 0 && result[i].Instance > 0 {
+			dims, err := c.plc.GetArrayDimensions(result[i].Instance, result[i].TypeCode)
+			if err == nil && len(dims) > 0 {
+				result[i].Dimensions = dims
+			}
+		}
+		c.tagInfo[result[i].Name] = result[i]
+	}
+
+	return result
+}
+
+// getElementCount returns the element count to request for a tag.
+// Returns the product of dimensions for arrays, 1 for scalars or unknown tags.
+func (c *Client) getElementCount(tagName string) uint16 {
+	if c == nil || c.tagInfo == nil {
+		return 1
+	}
+	if info, ok := c.tagInfo[tagName]; ok {
+		count := info.ElementCount()
+		if count > 65535 {
+			return 65535 // Max uint16
+		}
+		if count > 1 {
+			return uint16(count)
+		}
+	}
+	return 1
+}
+
+// isArrayTag returns true if the tag is known to be an array with dimensions.
+func (c *Client) isArrayTag(tagName string) bool {
+	if c == nil || c.tagInfo == nil {
+		return false
+	}
+	if info, ok := c.tagInfo[tagName]; ok {
+		return len(info.Dimensions) > 0
+	}
+	return false
+}
+
+// GetTagInfo returns the stored tag info for a tag name, if available.
+// Returns (tagInfo, true) if found, (TagInfo{}, false) if not.
+// Used for debugging to verify tag info is stored correctly.
+func (c *Client) GetTagInfo(tagName string) (TagInfo, bool) {
+	if c == nil || c.tagInfo == nil {
+		return TagInfo{}, false
+	}
+	info, ok := c.tagInfo[tagName]
+	return info, ok
+}
+
+// GetElementCount returns the element count that would be used when reading a tag.
+// Exported for debugging purposes.
+func (c *Client) GetElementCount(tagName string) uint16 {
+	return c.getElementCount(tagName)
 }
 
 // Programs returns the list of program names in the PLC.
@@ -209,9 +296,11 @@ func (c *Client) AllTags() ([]TagInfo, error) {
 	return tags, nil
 }
 
+
 // Read reads one or more tags by name and returns their values.
 // Each tag in the result includes its own error status (nil if successful).
 // The method returns an error only for transport-level failures.
+// Arrays are read individually with proper element counts; scalars are batched for efficiency.
 func (c *Client) Read(tagNames ...string) ([]*TagValue, error) {
 	if c == nil || c.plc == nil {
 		return nil, fmt.Errorf("Read: nil client")
@@ -220,49 +309,114 @@ func (c *Client) Read(tagNames ...string) ([]*TagValue, error) {
 		return nil, nil
 	}
 
-	// Determine batch size based on connection mode
-	batchSize := 5 // Conservative for unconnected messaging
-	if c.plc.IsConnected() {
-		batchSize = 50
+	// Micro800 doesn't support Multiple Service Packet - read tags individually
+	if c.micro800 {
+		return c.readIndividual(tagNames)
+	}
+
+	// Separate arrays from scalars for proper handling
+	// Arrays need individual reads to get all elements
+	// Scalars can be batched efficiently
+	var scalars []string
+	var arrays []string
+	for _, name := range tagNames {
+		if c.isArrayTag(name) {
+			arrays = append(arrays, name)
+		} else {
+			scalars = append(scalars, name)
+		}
 	}
 
 	results := make([]*TagValue, 0, len(tagNames))
 
-	// Process in batches
-	for i := 0; i < len(tagNames); i += batchSize {
-		end := i + batchSize
-		if end > len(tagNames) {
-			end = len(tagNames)
-		}
-		batch := tagNames[i:end]
-
-		tags, err := c.plc.ReadMultiple(batch)
+	// Read arrays individually with proper element counts
+	for _, name := range arrays {
+		count := c.getElementCount(name)
+		tag, err := c.plc.ReadTagCount(name, count)
 		if err != nil {
-			// Transport-level failure - mark all tags in batch as failed
-			for _, name := range batch {
-				results = append(results, &TagValue{
-					Name:  name,
-					Error: err,
-				})
-			}
-			continue
+			results = append(results, &TagValue{
+				Name:  name,
+				Error: err,
+			})
+		} else {
+			results = append(results, &TagValue{
+				Name:     tag.Name,
+				DataType: tag.DataType,
+				Bytes:    tag.Bytes,
+				Error:    nil,
+			})
+		}
+	}
+
+	// Batch read scalars
+	if len(scalars) > 0 {
+		// Determine batch size based on connection mode
+		batchSize := 5 // Conservative for unconnected messaging
+		if c.plc.IsConnected() {
+			batchSize = 50
 		}
 
-		// Convert results
-		for j, tag := range tags {
-			if tag == nil {
-				results = append(results, &TagValue{
-					Name:  batch[j],
-					Error: fmt.Errorf("tag read failed"),
-				})
-			} else {
-				results = append(results, &TagValue{
-					Name:     tag.Name,
-					DataType: tag.DataType,
-					Bytes:    tag.Bytes,
-					Error:    nil,
-				})
+		for i := 0; i < len(scalars); i += batchSize {
+			end := i + batchSize
+			if end > len(scalars) {
+				end = len(scalars)
 			}
+			batch := scalars[i:end]
+
+			tags, err := c.plc.ReadMultiple(batch)
+			if err != nil {
+				// Transport-level failure - mark all tags in batch as failed
+				for _, name := range batch {
+					results = append(results, &TagValue{
+						Name:  name,
+						Error: err,
+					})
+				}
+				continue
+			}
+
+			// Convert results
+			for j, tag := range tags {
+				if tag == nil {
+					results = append(results, &TagValue{
+						Name:  batch[j],
+						Error: fmt.Errorf("tag read failed"),
+					})
+				} else {
+					results = append(results, &TagValue{
+						Name:     tag.Name,
+						DataType: tag.DataType,
+						Bytes:    tag.Bytes,
+						Error:    nil,
+					})
+				}
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// readIndividual reads tags one at a time (for Micro800 which doesn't support batch reads).
+func (c *Client) readIndividual(tagNames []string) ([]*TagValue, error) {
+	results := make([]*TagValue, 0, len(tagNames))
+
+	for _, name := range tagNames {
+		// Look up element count for arrays
+		count := c.getElementCount(name)
+		tag, err := c.plc.ReadTagCount(name, count)
+		if err != nil {
+			results = append(results, &TagValue{
+				Name:  name,
+				Error: err,
+			})
+		} else {
+			results = append(results, &TagValue{
+				Name:     tag.Name,
+				DataType: tag.DataType,
+				Bytes:    tag.Bytes,
+				Error:    nil,
+			})
 		}
 	}
 

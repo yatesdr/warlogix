@@ -1,5 +1,11 @@
 package logix
 
+// CIP common services
+const (
+	// Get Attribute Single - read single attribute from object instance
+	SvcGetAttributeSingle byte = 0x0E
+)
+
 // Logix-specific CIP services (Allen-Bradley extensions to CIP).
 // These are not part of the standard CIP specification.
 const (

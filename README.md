@@ -41,7 +41,7 @@ WAR stands for "whispers across realms" - this application is intended to provid
 ### Allen-Bradley (Rockwell Automation)
 - ControlLogix (1756 series) - Full support with automatic tag discovery
 - CompactLogix (1769 series) - Full support with automatic tag discovery
-- Micro800 series - Manual tag configuration required
+- Micro800 series (Micro820, Micro830, Micro850) - Full support with automatic tag discovery, tested on Micro820
 
 ### Siemens
 - S7-300/400 - Manual tag configuration with S7 addressing (DB, I, Q, M areas)
