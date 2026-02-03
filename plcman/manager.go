@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"warlogix/ads"
 	"warlogix/config"
 	"warlogix/logix"
 	"warlogix/s7"
@@ -46,8 +47,10 @@ type ManagedPLC struct {
 	Config       *config.PLCConfig
 	Client       *logix.Client    // For Logix/Micro800 PLCs
 	S7Client     *s7.Client       // For Siemens S7 PLCs
+	AdsClient    *ads.Client      // For Beckhoff TwinCAT PLCs
 	Identity     *logix.DeviceInfo
 	S7Info       *s7.CPUInfo
+	AdsInfo      *ads.DeviceInfo  // Beckhoff device info
 	Programs     []string
 	Tags         []logix.TagInfo  // Discovered tags (for discovery-capable PLCs)
 	ManualTags   []logix.TagInfo  // Tags from config (for non-discovery PLCs)
@@ -145,16 +148,20 @@ func (m *ManagedPLC) BuildManualTags() {
 		var ok bool
 
 		// Use appropriate type lookup based on family
-		if family == config.FamilyS7 {
+		switch family {
+		case config.FamilyS7:
 			typeCode, ok = s7.TypeCodeFromName(sel.DataType)
 			if !ok {
-				// Default to DINT for S7
 				typeCode = s7.TypeDInt
 			}
-		} else {
+		case config.FamilyBeckhoff:
+			typeCode, ok = ads.TypeCodeFromName(sel.DataType)
+			if !ok {
+				typeCode = ads.TypeInt32
+			}
+		default:
 			typeCode, ok = logix.TypeCodeFromName(sel.DataType)
 			if !ok {
-				// Default to DINT for Logix
 				typeCode = logix.TypeDINT
 			}
 		}
@@ -186,6 +193,9 @@ func (m *ManagedPLC) GetIdentity() *logix.DeviceInfo {
 func (m *ManagedPLC) GetConnectionMode() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.AdsClient != nil {
+		return m.AdsClient.ConnectionMode()
+	}
 	if m.S7Client != nil {
 		return m.S7Client.ConnectionMode()
 	}
@@ -281,6 +291,7 @@ func (w *PLCWorker) poll() {
 	plc.mu.RLock()
 	client := plc.Client
 	s7Client := plc.S7Client
+	adsClient := plc.AdsClient
 	status := plc.Status
 	cfg := plc.Config
 	plcName := cfg.Name
@@ -302,8 +313,17 @@ func (w *PLCWorker) poll() {
 	}
 	plc.mu.RUnlock()
 
-	// Check if we have a valid connection
-	hasConnection := (family == config.FamilyS7 && s7Client != nil) || (family != config.FamilyS7 && client != nil)
+	// Check if we have a valid connection based on family
+	var hasConnection bool
+	switch family {
+	case config.FamilyS7:
+		hasConnection = s7Client != nil
+	case config.FamilyBeckhoff:
+		hasConnection = adsClient != nil
+	default:
+		hasConnection = client != nil
+	}
+
 	if status != StatusConnected || !hasConnection {
 		w.statsMu.Lock()
 		w.tagsPolled = 0
@@ -326,9 +346,12 @@ func (w *PLCWorker) poll() {
 	var values []*logix.TagValue
 	var err error
 
-	if family == config.FamilyS7 {
+	switch family {
+	case config.FamilyS7:
 		values, err = w.pollS7(s7Client, tagsToRead)
-	} else {
+	case config.FamilyBeckhoff:
+		values, err = w.pollAds(adsClient, tagsToRead)
+	default:
 		values, err = client.Read(tagsToRead...)
 	}
 
@@ -400,6 +423,26 @@ func (w *PLCWorker) pollS7(client *s7.Client, addresses []string) ([]*logix.TagV
 			DataType: sv.DataType,
 			Bytes:    sv.Bytes,
 			Error:    sv.Error,
+		}
+	}
+	return results, nil
+}
+
+// pollAds reads tags from a Beckhoff TwinCAT PLC and converts them to logix.TagValue format.
+func (w *PLCWorker) pollAds(client *ads.Client, symbols []string) ([]*logix.TagValue, error) {
+	adsValues, err := client.Read(symbols...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert ADS TagValues to logix TagValues for compatibility
+	results := make([]*logix.TagValue, len(adsValues))
+	for i, av := range adsValues {
+		results[i] = &logix.TagValue{
+			Name:     av.Name,
+			DataType: av.DataType,
+			Bytes:    av.Bytes,
+			Error:    av.Error,
 		}
 	}
 	return results, nil
@@ -536,6 +579,9 @@ func (m *Manager) RemovePLC(name string) error {
 		if plc.S7Client != nil {
 			plc.S7Client.Close()
 		}
+		if plc.AdsClient != nil {
+			plc.AdsClient.Close()
+		}
 	}
 
 	m.markStatusDirty()
@@ -550,12 +596,17 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	family := plc.Config.GetFamily()
 	address := plc.Config.Address
 	slot := plc.Config.Slot
+	amsNetId := plc.Config.AmsNetId
+	amsPort := plc.Config.AmsPort
 	plc.mu.Unlock()
 	m.markStatusDirty()
 
-	// Handle S7 family separately
-	if family == config.FamilyS7 {
+	// Handle family-specific connections
+	switch family {
+	case config.FamilyS7:
 		return m.connectS7PLC(plc, address, int(slot))
+	case config.FamilyBeckhoff:
+		return m.connectBeckhoffPLC(plc, address, amsNetId, amsPort)
 	}
 
 	// Logix/Micro800 connection
@@ -659,6 +710,68 @@ func (m *Manager) connectS7PLC(plc *ManagedPLC, address string, slot int) error 
 	return nil
 }
 
+// connectBeckhoffPLC handles Beckhoff TwinCAT PLC connections via ADS protocol.
+func (m *Manager) connectBeckhoffPLC(plc *ManagedPLC, address, amsNetId string, amsPort uint16) error {
+	opts := []ads.Option{}
+	if amsNetId != "" {
+		opts = append(opts, ads.WithAmsNetId(amsNetId))
+	}
+	if amsPort > 0 {
+		opts = append(opts, ads.WithAmsPort(amsPort))
+	}
+
+	adsClient, err := ads.Connect(address, opts...)
+	if err != nil {
+		plc.mu.Lock()
+		plc.ConnRetries++
+		if plc.ConnRetries >= MaxConnectRetries {
+			plc.RetryLimited = true
+			plc.Status = StatusDisconnected
+			plc.LastError = fmt.Errorf("retry limit reached (%d attempts): %w", MaxConnectRetries, err)
+		} else {
+			plc.Status = StatusError
+			plc.LastError = err
+		}
+		plc.mu.Unlock()
+		m.markStatusDirty()
+		return err
+	}
+
+	// Get device info
+	deviceInfo, _ := adsClient.GetDeviceInfo()
+
+	// Discover all tags (Beckhoff supports symbol discovery)
+	var tags []logix.TagInfo
+	adsTags, err := adsClient.AllTags()
+	if err == nil {
+		// Convert ADS TagInfo to logix TagInfo for compatibility
+		for _, at := range adsTags {
+			tags = append(tags, logix.TagInfo{
+				Name:     at.Name,
+				TypeCode: at.TypeCode,
+				Instance: 0,
+			})
+		}
+	}
+
+	// Get program names (POU prefixes)
+	programs, _ := adsClient.Programs()
+
+	plc.mu.Lock()
+	plc.AdsClient = adsClient
+	plc.AdsInfo = deviceInfo
+	plc.Programs = programs
+	plc.Tags = tags
+	plc.Status = StatusConnected
+	plc.ConnRetries = 0
+	plc.RetryLimited = false
+	plc.mu.Unlock()
+
+	m.markStatusDirty()
+
+	return nil
+}
+
 // Connect establishes a connection to the named PLC.
 // This can be called from UI thread - runs connection in background.
 func (m *Manager) Connect(name string) error {
@@ -700,10 +813,15 @@ func (m *Manager) Disconnect(name string) error {
 		plc.S7Client.Close()
 		plc.S7Client = nil
 	}
+	if plc.AdsClient != nil {
+		plc.AdsClient.Close()
+		plc.AdsClient = nil
+	}
 	plc.Status = StatusDisconnected
 	plc.LastError = nil
 	plc.Identity = nil
 	plc.S7Info = nil
+	plc.AdsInfo = nil
 	plc.mu.Unlock()
 	m.markStatusDirty()
 
@@ -972,11 +1090,12 @@ func (m *Manager) ReadTag(plcName, tagName string) (*logix.TagValue, error) {
 	plc.mu.RLock()
 	client := plc.Client
 	s7Client := plc.S7Client
+	adsClient := plc.AdsClient
 	family := plc.Config.GetFamily()
 	plc.mu.RUnlock()
 
-	// Handle S7 PLCs
-	if family == config.FamilyS7 {
+	switch family {
+	case config.FamilyS7:
 		if s7Client == nil {
 			return nil, nil
 		}
@@ -993,21 +1112,39 @@ func (m *Manager) ReadTag(plcName, tagName string) (*logix.TagValue, error) {
 			}, nil
 		}
 		return nil, nil
-	}
 
-	// Handle Logix/Micro800 PLCs
-	if client == nil {
+	case config.FamilyBeckhoff:
+		if adsClient == nil {
+			return nil, nil
+		}
+		adsValues, err := adsClient.Read(tagName)
+		if err != nil {
+			return nil, err
+		}
+		if len(adsValues) > 0 {
+			return &logix.TagValue{
+				Name:     adsValues[0].Name,
+				DataType: adsValues[0].DataType,
+				Bytes:    adsValues[0].Bytes,
+				Error:    adsValues[0].Error,
+			}, nil
+		}
+		return nil, nil
+
+	default:
+		// Handle Logix/Micro800 PLCs
+		if client == nil {
+			return nil, nil
+		}
+		values, err := client.Read(tagName)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) > 0 {
+			return values[0], nil
+		}
 		return nil, nil
 	}
-
-	values, err := client.Read(tagName)
-	if err != nil {
-		return nil, err
-	}
-	if len(values) > 0 {
-		return values[0], nil
-	}
-	return nil, nil
 }
 
 // WriteTag writes a value to a tag on a connected PLC.
@@ -1023,6 +1160,7 @@ func (m *Manager) WriteTag(plcName, tagName string, value interface{}) error {
 	plc.mu.RLock()
 	client := plc.Client
 	s7Client := plc.S7Client
+	adsClient := plc.AdsClient
 	status := plc.Status
 	family := plc.Config.GetFamily()
 	plc.mu.RUnlock()
@@ -1031,20 +1169,26 @@ func (m *Manager) WriteTag(plcName, tagName string, value interface{}) error {
 		return fmt.Errorf("PLC not connected: %s", plcName)
 	}
 
-	// Handle S7 PLCs
-	if family == config.FamilyS7 {
+	switch family {
+	case config.FamilyS7:
 		if s7Client == nil {
 			return fmt.Errorf("S7 PLC not connected: %s", plcName)
 		}
 		return s7Client.Write(tagName, value)
-	}
 
-	// Handle Logix/Micro800 PLCs
-	if client == nil {
-		return fmt.Errorf("PLC not connected: %s", plcName)
-	}
+	case config.FamilyBeckhoff:
+		if adsClient == nil {
+			return fmt.Errorf("Beckhoff PLC not connected: %s", plcName)
+		}
+		return adsClient.Write(tagName, value)
 
-	return client.Write(tagName, value)
+	default:
+		// Handle Logix/Micro800 PLCs
+		if client == nil {
+			return fmt.Errorf("PLC not connected: %s", plcName)
+		}
+		return client.Write(tagName, value)
+	}
 }
 
 // LoadFromConfig adds all PLCs from configuration.
@@ -1209,6 +1353,7 @@ func (m *Manager) ReadTagValues(plcName string, tagNames []string) (map[string]i
 	plc.mu.RLock()
 	client := plc.Client
 	s7Client := plc.S7Client
+	adsClient := plc.AdsClient
 	status := plc.Status
 	family := plc.Config.GetFamily()
 	plc.mu.RUnlock()
@@ -1219,8 +1364,8 @@ func (m *Manager) ReadTagValues(plcName string, tagNames []string) (map[string]i
 
 	result := make(map[string]interface{})
 
-	// Handle S7 PLCs
-	if family == config.FamilyS7 {
+	switch family {
+	case config.FamilyS7:
 		if s7Client == nil {
 			return nil, fmt.Errorf("S7 client not available")
 		}
@@ -1236,24 +1381,42 @@ func (m *Manager) ReadTagValues(plcName string, tagNames []string) (map[string]i
 			}
 		}
 		return result, nil
-	}
 
-	// Handle Logix/Micro800 PLCs
-	if client == nil {
-		return nil, fmt.Errorf("client not available")
-	}
-	values, err := client.Read(tagNames...)
-	if err != nil {
-		return nil, err
-	}
-	for _, v := range values {
-		if v.Error == nil {
-			result[v.Name] = v.GoValue()
-		} else {
-			result[v.Name] = nil
+	case config.FamilyBeckhoff:
+		if adsClient == nil {
+			return nil, fmt.Errorf("ADS client not available")
 		}
+		adsValues, err := adsClient.Read(tagNames...)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range adsValues {
+			if v.Error == nil {
+				result[v.Name] = v.GoValue()
+			} else {
+				result[v.Name] = nil
+			}
+		}
+		return result, nil
+
+	default:
+		// Handle Logix/Micro800 PLCs
+		if client == nil {
+			return nil, fmt.Errorf("client not available")
+		}
+		values, err := client.Read(tagNames...)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range values {
+			if v.Error == nil {
+				result[v.Name] = v.GoValue()
+			} else {
+				result[v.Name] = nil
+			}
+		}
+		return result, nil
 	}
-	return result, nil
 }
 
 // TriggerTagReader wraps the Manager to implement the trigger.TagReader interface.

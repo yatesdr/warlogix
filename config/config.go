@@ -15,13 +15,14 @@ type PLCFamily string
 const (
 	FamilyLogix    PLCFamily = "logix"    // Allen-Bradley ControlLogix/CompactLogix
 	FamilyMicro800 PLCFamily = "micro800" // Allen-Bradley Micro800 series
-	FamilyS7       PLCFamily = "s7"       // Siemens S7 (future)
+	FamilyS7       PLCFamily = "s7"       // Siemens S7
 	FamilyOmron    PLCFamily = "omron"    // Omron (future)
+	FamilyBeckhoff PLCFamily = "beckhoff" // Beckhoff TwinCAT (ADS protocol)
 )
 
 // SupportsDiscovery returns true if the PLC family supports tag discovery.
 func (f PLCFamily) SupportsDiscovery() bool {
-	return f == FamilyLogix || f == ""
+	return f == FamilyLogix || f == "" || f == FamilyBeckhoff
 }
 
 // String returns the string representation of the PLC family.
@@ -51,6 +52,10 @@ type PLCConfig struct {
 	Family  PLCFamily      `yaml:"family,omitempty"`
 	Enabled bool           `yaml:"enabled"`
 	Tags    []TagSelection `yaml:"tags,omitempty"`
+
+	// Beckhoff/TwinCAT-specific settings
+	AmsNetId string `yaml:"ams_net_id,omitempty"` // AMS Net ID (e.g., "192.168.1.100.1.1")
+	AmsPort  uint16 `yaml:"ams_port,omitempty"`   // AMS Port (default: 851 for TwinCAT 3)
 }
 
 // GetFamily returns the PLC family, defaulting to logix if not set.

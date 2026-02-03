@@ -8,6 +8,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
+	"warlogix/ads"
 	"warlogix/config"
 	"warlogix/logix"
 	"warlogix/plcman"
@@ -204,8 +205,13 @@ func (t *BrowserTab) handleTreeKeys(event *tcell.EventKey) *tcell.EventKey {
 // getTypeName returns the appropriate type name for a type code based on the current PLC family.
 func (t *BrowserTab) getTypeName(typeCode uint16) string {
 	cfg := t.app.config.FindPLC(t.selectedPLC)
-	if cfg != nil && cfg.GetFamily() == config.FamilyS7 {
-		return s7.TypeName(typeCode)
+	if cfg != nil {
+		switch cfg.GetFamily() {
+		case config.FamilyS7:
+			return s7.TypeName(typeCode)
+		case config.FamilyBeckhoff:
+			return ads.TypeName(typeCode)
+		}
 	}
 	return logix.TypeName(typeCode)
 }

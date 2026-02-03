@@ -1,11 +1,11 @@
 # WarLogix
 
-A TUI (Text User Interface) gateway application for Allen-Bradley/Rockwell Automation ControlLogix and CompactLogix PLCs. Browse tags, monitor values in real-time, and republish data via REST API, MQTT brokers, and Redis or Valkey.
+A TUI (Text User Interface) gateway application for industrial PLCs including Allen-Bradley ControlLogix/CompactLogix, Siemens S7, and Beckhoff TwinCAT. Browse tags, monitor values in real-time, and republish data via REST API, MQTT brokers, Kafka, and Redis/Valkey.
 
 
 ## The name
 
-WAR stands for "whispers across realms" - this application is intended to provide a gateway between industrial and IT applications - specifically Logix PLC's and REST / MQTT / Valkey (Redis) formats.
+WAR stands for "whispers across realms" - this application is intended to provide a gateway between industrial and IT applications - connecting PLCs from multiple vendors to REST / MQTT / Kafka / Valkey (Redis) formats.
 
 ## Features
 
@@ -38,9 +38,18 @@ WAR stands for "whispers across realms" - this application is intended to provid
 
 ## Supported PLCs
 
-- Allen-Bradley ControlLogix (1756 series)
-- Allen-Bradley CompactLogix (1769 series)
-- Other PLCs supporting EtherNet/IP and CIP protocols
+### Allen-Bradley (Rockwell Automation)
+- ControlLogix (1756 series) - Full support with automatic tag discovery
+- CompactLogix (1769 series) - Full support with automatic tag discovery
+- Micro800 series - Manual tag configuration required
+
+### Siemens
+- S7-300/400 - Manual tag configuration with S7 addressing (DB, I, Q, M areas)
+- S7-1200/1500 - Manual tag configuration with S7 addressing
+
+### Beckhoff
+- TwinCAT 2/3 PLCs - Full support with automatic symbol discovery via ADS protocol
+- Requires AMS Net ID and port configuration (default port 851 for TwinCAT 3)
 
 ## Basic Usage
 
@@ -180,12 +189,42 @@ Configuration is stored in YAML format at `~/.warlogix/config.yaml` - you do not
 
 ```yaml
 plcs:
+  # Allen-Bradley Logix PLC (automatic tag discovery)
   - name: MainPLC
     address: 192.168.1.100
+    family: logix          # or omit for default
     slot: 0
     enabled: true
     tags:
       - name: Program:MainProgram.Counter
+        enabled: true
+        writable: true
+
+  # Siemens S7 PLC (manual tag configuration)
+  - name: SiemensPLC
+    address: 192.168.1.101
+    family: s7
+    slot: 1                # S7 slot (typically 1 for S7-300/400)
+    enabled: true
+    tags:
+      - name: DB1.DBD0
+        data_type: DINT
+        enabled: true
+      - name: DB1.DBX4.0
+        data_type: BOOL
+        enabled: true
+
+  # Beckhoff TwinCAT PLC (automatic symbol discovery)
+  - name: TwinCAT
+    address: 192.168.1.102
+    family: beckhoff
+    ams_net_id: 192.168.1.102.1.1  # AMS Net ID (IP.1.1 is common)
+    ams_port: 851                   # TwinCAT 3 PLC runtime 1
+    enabled: true
+    tags:
+      - name: MAIN.Temperature
+        enabled: true
+      - name: GVL.ProductCounter
         enabled: true
         writable: true
 
@@ -543,6 +582,44 @@ Structs and UDTs are published as byte arrays for manual decoding:
 
 Each element represents one byte (0-255). Decode using the UDT's field layout (little-endian byte order).
 
+## Beckhoff TwinCAT Configuration
+
+### AMS Net ID
+
+The AMS Net ID is a unique identifier for each TwinCAT device on the network. It typically follows the pattern `IP.1.1` where IP is the device's IP address split into four parts.
+
+Example: For IP `192.168.1.100`, the AMS Net ID would be `192.168.1.100.1.1`
+
+If not specified, WarLogix will attempt to derive the AMS Net ID from the IP address.
+
+### AMS Ports
+
+Common TwinCAT AMS ports:
+
+| Port | Description |
+|------|-------------|
+| 851  | TwinCAT 3 PLC Runtime 1 (default) |
+| 852  | TwinCAT 3 PLC Runtime 2 |
+| 801  | TwinCAT 2 PLC Runtime 1 |
+| 811  | TwinCAT 2 PLC Runtime 2 |
+
+### Symbol Names
+
+Beckhoff symbols use dot notation to reference variables:
+
+- `MAIN.Variable` - Variable in MAIN program
+- `GVL.GlobalVar` - Variable in Global Variable List
+- `FB_Instance.Member` - Member of a function block instance
+
+### Automatic Discovery
+
+When connecting to a Beckhoff PLC, WarLogix automatically discovers all available symbols from the TwinCAT symbol table. This includes:
+
+- Global variables (GVL)
+- Program variables (MAIN, etc.)
+- Function block instances and their members
+
+Primitive types (BOOL, INT, DINT, REAL, etc.) are automatically recognized. Complex types like structures show their type name but may require manual interpretation.
 
 ## Roadmap
 

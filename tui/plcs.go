@@ -291,58 +291,108 @@ func (t *PLCsTab) showAddDialog() {
 	t.showAddDialogWithDevice(nil)
 }
 
+// plcFormState holds the current state of the PLC form for rebuilding
+type plcFormState struct {
+	family      int
+	name        string
+	address     string
+	slot        string
+	amsNetId    string
+	amsPort     string
+	autoConnect bool
+}
+
+var familyOptions = []string{"logix", "micro800", "s7", "beckhoff", "omron"}
+
 func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
+	state := &plcFormState{
+		family:   0, // Default to logix
+		slot:     "0",
+		amsPort:  "851",
+	}
+
+	if dev != nil {
+		state.address = dev.IP.String()
+		state.name = dev.ProductName
+	}
+
+	t.buildAddForm(state)
+}
+
+func (t *PLCsTab) buildAddForm(state *plcFormState) {
+	// Remove existing form if present
+	t.app.pages.RemovePage("add")
+
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(" Add PLC ")
 
-	defaultName := ""
-	defaultAddr := ""
-	defaultSlot := "0"
+	family := config.PLCFamily(familyOptions[state.family])
 
-	if dev != nil {
-		defaultAddr = dev.IP.String()
-		defaultName = dev.ProductName
+	// Guard to prevent callback during initial setup
+	initialized := false
+
+	// Family is always first
+	form.AddDropDown("Family:", familyOptions, state.family, func(option string, index int) {
+		if !initialized {
+			return
+		}
+		// Save current values before rebuilding
+		t.saveAddFormState(form, state, family)
+		state.family = index
+		// Rebuild form with new family
+		t.buildAddForm(state)
+	})
+
+	// Common fields
+	form.AddInputField("Name:", state.name, 30, nil, nil)
+	form.AddInputField("Address:", state.address, 30, nil, nil)
+
+	// Family-specific fields
+	switch family {
+	case config.FamilyLogix, config.FamilyMicro800, config.FamilyOmron:
+		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+			_, err := strconv.Atoi(text)
+			return err == nil || text == ""
+		}, nil)
+	case config.FamilyS7:
+		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+			_, err := strconv.Atoi(text)
+			return err == nil || text == ""
+		}, nil)
+	case config.FamilyBeckhoff:
+		form.AddInputField("AMS Net ID:", state.amsNetId, 25, nil, nil)
+		form.AddInputField("AMS Port:", state.amsPort, 8, func(text string, lastChar rune) bool {
+			_, err := strconv.Atoi(text)
+			return err == nil || text == ""
+		}, nil)
 	}
 
-	familyOptions := []string{"logix", "micro800", "s7", "omron"}
-	selectedFamily := 0 // Default to logix
-
-	form.AddInputField("Name:", defaultName, 30, nil, nil)
-	form.AddInputField("Address:", defaultAddr, 30, nil, nil)
-	form.AddInputField("Slot:", defaultSlot, 5, func(text string, lastChar rune) bool {
-		_, err := strconv.Atoi(text)
-		return err == nil || text == ""
-	}, nil)
-	form.AddDropDown("Family:", familyOptions, selectedFamily, nil)
-	form.AddCheckbox("Auto-connect:", false, nil)
+	form.AddCheckbox("Auto-connect:", state.autoConnect, nil)
 
 	form.AddButton("Add", func() {
-		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
-		addr := form.GetFormItemByLabel("Address:").(*tview.InputField).GetText()
-		slotStr := form.GetFormItemByLabel("Slot:").(*tview.InputField).GetText()
-		familyIdx, _ := form.GetFormItemByLabel("Family:").(*tview.DropDown).GetCurrentOption()
-		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
+		t.saveAddFormState(form, state, family)
 
-		if name == "" || addr == "" {
+		if state.name == "" || state.address == "" {
 			t.app.showError("Error", "Name and address are required")
 			return
 		}
 
-		slot, _ := strconv.Atoi(slotStr)
-		family := config.PLCFamily(familyOptions[familyIdx])
+		slot, _ := strconv.Atoi(state.slot)
+		amsPort, _ := strconv.Atoi(state.amsPort)
 
 		cfg := config.PLCConfig{
-			Name:    name,
-			Address: addr,
-			Slot:    byte(slot),
-			Family:  family,
-			Enabled: autoConnect,
+			Name:     state.name,
+			Address:  state.address,
+			Slot:     byte(slot),
+			Family:   family,
+			Enabled:  state.autoConnect,
+			AmsNetId: state.amsNetId,
+			AmsPort:  uint16(amsPort),
 		}
 
 		t.app.config.AddPLC(cfg)
 		t.app.SaveConfig()
-		// Get the pointer from config after it's been added
-		if addedCfg := t.app.config.FindPLC(name); addedCfg != nil {
+		if addedCfg := t.app.config.FindPLC(state.name); addedCfg != nil {
 			t.app.manager.AddPLC(addedCfg)
 		}
 		t.app.UpdateMQTTPLCNames()
@@ -350,7 +400,7 @@ func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 		t.app.pages.RemovePage("add")
 		t.Refresh()
 		t.app.focusCurrentTab()
-		t.app.setStatus(fmt.Sprintf("Added PLC: %s", name))
+		t.app.setStatus(fmt.Sprintf("Added PLC: %s", state.name))
 	})
 
 	form.AddButton("Cancel", func() {
@@ -367,16 +417,53 @@ func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 		return event
 	})
 
+	// Calculate form height based on number of fields
+	formHeight := 15 // Base height for common fields + buttons
+	if family == config.FamilyBeckhoff {
+		formHeight = 17 // Extra fields for Beckhoff
+	}
+
 	modal := tview.NewFlex().
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(form, 15, 1, true).
-			AddItem(nil, 0, 1, false), 50, 1, true).
+			AddItem(form, formHeight, 1, true).
+			AddItem(nil, 0, 1, false), 55, 1, true).
 		AddItem(nil, 0, 1, false)
 
 	t.app.pages.AddPage("add", modal, true, true)
 	t.app.app.SetFocus(form)
+
+	// Enable dropdown callback after form is displayed
+	initialized = true
+}
+
+func (t *PLCsTab) saveAddFormState(form *tview.Form, state *plcFormState, family config.PLCFamily) {
+	if item := form.GetFormItemByLabel("Name:"); item != nil {
+		state.name = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Address:"); item != nil {
+		state.address = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Slot:"); item != nil {
+		state.slot = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("AMS Net ID:"); item != nil {
+		state.amsNetId = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("AMS Port:"); item != nil {
+		state.amsPort = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Auto-connect:"); item != nil {
+		state.autoConnect = item.(*tview.Checkbox).IsChecked()
+	}
+}
+
+// editFormState extends plcFormState with edit-specific fields
+type editFormState struct {
+	plcFormState
+	originalName string
+	tags         []config.TagSelection
 }
 
 func (t *PLCsTab) showEditDialog() {
@@ -391,10 +478,7 @@ func (t *PLCsTab) showEditDialog() {
 	}
 	cfg := plc.Config
 
-	form := tview.NewForm()
-	form.SetBorder(true).SetTitle(" Edit PLC ")
-
-	familyOptions := []string{"logix", "micro800", "s7", "omron"}
+	// Find family index
 	selectedFamily := 0
 	for i, opt := range familyOptions {
 		if config.PLCFamily(opt) == cfg.Family || (cfg.Family == "" && opt == "logix") {
@@ -403,72 +487,131 @@ func (t *PLCsTab) showEditDialog() {
 		}
 	}
 
-	form.AddInputField("Name:", cfg.Name, 30, nil, nil)
-	form.AddInputField("Address:", cfg.Address, 30, nil, nil)
-	form.AddInputField("Slot:", strconv.Itoa(int(cfg.Slot)), 5, func(text string, lastChar rune) bool {
-		_, err := strconv.Atoi(text)
-		return err == nil || text == ""
-	}, nil)
-	form.AddDropDown("Family:", familyOptions, selectedFamily, nil)
-	form.AddCheckbox("Auto-connect:", cfg.Enabled, nil)
+	// Set default AMS port if not configured
+	amsPort := "851"
+	if cfg.AmsPort > 0 {
+		amsPort = strconv.Itoa(int(cfg.AmsPort))
+	}
 
-	originalName := cfg.Name
+	state := &editFormState{
+		plcFormState: plcFormState{
+			family:      selectedFamily,
+			name:        cfg.Name,
+			address:     cfg.Address,
+			slot:        strconv.Itoa(int(cfg.Slot)),
+			amsNetId:    cfg.AmsNetId,
+			amsPort:     amsPort,
+			autoConnect: cfg.Enabled,
+		},
+		originalName: cfg.Name,
+		tags:         cfg.Tags,
+	}
+
+	t.buildEditForm(state)
+}
+
+func (t *PLCsTab) buildEditForm(state *editFormState) {
+	// Remove existing form if present
+	t.app.pages.RemovePage("edit")
+
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle(" Edit PLC ")
+
+	family := config.PLCFamily(familyOptions[state.family])
+
+	// Guard to prevent callback during initial setup
+	initialized := false
+
+	// Family is always first
+	form.AddDropDown("Family:", familyOptions, state.family, func(option string, index int) {
+		if !initialized {
+			return
+		}
+		// Save current values before rebuilding
+		t.saveEditFormState(form, state, family)
+		state.family = index
+		// Rebuild form with new family
+		t.buildEditForm(state)
+	})
+
+	// Common fields
+	form.AddInputField("Name:", state.name, 30, nil, nil)
+	form.AddInputField("Address:", state.address, 30, nil, nil)
+
+	// Family-specific fields
+	switch family {
+	case config.FamilyLogix, config.FamilyMicro800, config.FamilyOmron:
+		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+			_, err := strconv.Atoi(text)
+			return err == nil || text == ""
+		}, nil)
+	case config.FamilyS7:
+		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+			_, err := strconv.Atoi(text)
+			return err == nil || text == ""
+		}, nil)
+	case config.FamilyBeckhoff:
+		form.AddInputField("AMS Net ID:", state.amsNetId, 25, nil, nil)
+		form.AddInputField("AMS Port:", state.amsPort, 8, func(text string, lastChar rune) bool {
+			_, err := strconv.Atoi(text)
+			return err == nil || text == ""
+		}, nil)
+	}
+
+	form.AddCheckbox("Auto-connect:", state.autoConnect, nil)
 
 	form.AddButton("Save", func() {
-		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
-		addr := form.GetFormItemByLabel("Address:").(*tview.InputField).GetText()
-		slotStr := form.GetFormItemByLabel("Slot:").(*tview.InputField).GetText()
-		familyIdx, _ := form.GetFormItemByLabel("Family:").(*tview.DropDown).GetCurrentOption()
-		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
+		t.saveEditFormState(form, state, family)
 
-		if name == "" || addr == "" {
+		if state.name == "" || state.address == "" {
 			t.app.showError("Error", "Name and address are required")
 			return
 		}
 
-		slot, _ := strconv.Atoi(slotStr)
-		family := config.PLCFamily(familyOptions[familyIdx])
+		slot, _ := strconv.Atoi(state.slot)
+		amsPort, _ := strconv.Atoi(state.amsPort)
 
 		updated := config.PLCConfig{
-			Name:    name,
-			Address: addr,
-			Slot:    byte(slot),
-			Family:  family,
-			Enabled: autoConnect,
-			Tags:    cfg.Tags,
+			Name:     state.name,
+			Address:  state.address,
+			Slot:     byte(slot),
+			Family:   family,
+			Enabled:  state.autoConnect,
+			Tags:     state.tags,
+			AmsNetId: state.amsNetId,
+			AmsPort:  uint16(amsPort),
 		}
 
-		t.app.config.UpdatePLC(originalName, updated)
+		t.app.config.UpdatePLC(state.originalName, updated)
 		t.app.SaveConfig()
 
 		// Close dialog first
 		t.app.pages.RemovePage("edit")
 		t.app.focusCurrentTab()
-		t.app.setStatus(fmt.Sprintf("Updating PLC: %s...", name))
+		t.app.setStatus(fmt.Sprintf("Updating PLC: %s...", state.name))
 
 		// Update manager in background to avoid blocking UI
+		originalName := state.originalName
+		newName := state.name
 		go func() {
 			t.app.manager.Disconnect(originalName)
 			t.app.manager.RemovePLC(originalName)
-			if updatedCfg := t.app.config.FindPLC(name); updatedCfg != nil {
+			if updatedCfg := t.app.config.FindPLC(newName); updatedCfg != nil {
 				t.app.manager.AddPLC(updatedCfg)
-				// Update MQTT subscriptions if PLC name changed
-				if originalName != name {
+				if originalName != newName {
 					t.app.UpdateMQTTPLCNames()
 				}
-				// Reconnect if auto-connect is enabled
 				if updatedCfg.Enabled {
-					if err := t.app.manager.Connect(name); err == nil {
-						// Log connection info
-						if plc := t.app.manager.GetPLC(name); plc != nil {
-							DebugLog("PLC %s connected: %s", name, plc.GetConnectionMode())
+					if err := t.app.manager.Connect(newName); err == nil {
+						if plc := t.app.manager.GetPLC(newName); plc != nil {
+							DebugLog("PLC %s connected: %s", newName, plc.GetConnectionMode())
 						}
 					}
 				}
 			}
 			t.app.QueueUpdateDraw(func() {
 				t.Refresh()
-				t.app.setStatus(fmt.Sprintf("Updated PLC: %s", name))
+				t.app.setStatus(fmt.Sprintf("Updated PLC: %s", newName))
 			})
 		}()
 	})
@@ -487,16 +630,46 @@ func (t *PLCsTab) showEditDialog() {
 		return event
 	})
 
+	// Calculate form height based on number of fields
+	formHeight := 15 // Base height for common fields + buttons
+	if family == config.FamilyBeckhoff {
+		formHeight = 17 // Extra fields for Beckhoff
+	}
+
 	modal := tview.NewFlex().
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(form, 15, 1, true).
-			AddItem(nil, 0, 1, false), 50, 1, true).
+			AddItem(form, formHeight, 1, true).
+			AddItem(nil, 0, 1, false), 55, 1, true).
 		AddItem(nil, 0, 1, false)
 
 	t.app.pages.AddPage("edit", modal, true, true)
 	t.app.app.SetFocus(form)
+
+	// Enable dropdown callback after form is displayed
+	initialized = true
+}
+
+func (t *PLCsTab) saveEditFormState(form *tview.Form, state *editFormState, family config.PLCFamily) {
+	if item := form.GetFormItemByLabel("Name:"); item != nil {
+		state.name = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Address:"); item != nil {
+		state.address = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Slot:"); item != nil {
+		state.slot = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("AMS Net ID:"); item != nil {
+		state.amsNetId = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("AMS Port:"); item != nil {
+		state.amsPort = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Auto-connect:"); item != nil {
+		state.autoConnect = item.(*tview.Checkbox).IsChecked()
+	}
 }
 
 func (t *PLCsTab) removeSelected() {
