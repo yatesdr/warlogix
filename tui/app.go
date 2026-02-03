@@ -8,8 +8,10 @@ import (
 
 	"warlogix/api"
 	"warlogix/config"
+	"warlogix/kafka"
 	"warlogix/mqtt"
 	"warlogix/plcman"
+	"warlogix/trigger"
 	"warlogix/valkey"
 )
 
@@ -20,17 +22,21 @@ type App struct {
 	tabs      *tview.TextView
 	statusBar *tview.TextView
 
-	plcsTab    *PLCsTab
-	browserTab *BrowserTab
-	restTab    *RESTTab
-	mqttTab    *MQTTTab
-	valkeyTab  *ValkeyTab
-	debugTab   *DebugTab
+	plcsTab     *PLCsTab
+	browserTab  *BrowserTab
+	restTab     *RESTTab
+	mqttTab     *MQTTTab
+	valkeyTab   *ValkeyTab
+	kafkaTab    *KafkaTab
+	triggersTab *TriggersTab
+	debugTab    *DebugTab
 
 	manager    *plcman.Manager
 	apiServer  *api.Server
 	mqttMgr    *mqtt.Manager
 	valkeyMgr  *valkey.Manager
+	kafkaMgr   *kafka.Manager
+	triggerMgr *trigger.Manager
 	config     *config.Config
 	configPath string
 
@@ -41,7 +47,7 @@ type App struct {
 }
 
 // NewApp creates a new TUI application.
-func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager) *App {
+func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager) *App {
 	a := &App{
 		app:        tview.NewApplication(),
 		config:     cfg,
@@ -50,7 +56,9 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiS
 		apiServer:  apiServer,
 		mqttMgr:    mqttMgr,
 		valkeyMgr:  valkeyMgr,
-		tabNames:   []string{TabPLCs, TabBrowser, TabREST, TabMQTT, TabValkey, TabDebug},
+		kafkaMgr:   kafkaMgr,
+		triggerMgr: triggerMgr,
+		tabNames:   []string{TabPLCs, TabBrowser, TabREST, TabMQTT, TabValkey, TabKafka, TabTriggers, TabDebug},
 		stopChan:   make(chan struct{}),
 	}
 
@@ -78,6 +86,8 @@ func (a *App) setupUI() {
 	a.restTab = NewRESTTab(a)
 	a.mqttTab = NewMQTTTab(a)
 	a.valkeyTab = NewValkeyTab(a)
+	a.kafkaTab = NewKafkaTab(a)
+	a.triggersTab = NewTriggersTab(a)
 	a.debugTab = NewDebugTab(a)
 
 	// Add pages
@@ -86,6 +96,8 @@ func (a *App) setupUI() {
 	a.pages.AddPage(TabREST, a.restTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabMQTT, a.mqttTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabValkey, a.valkeyTab.GetPrimitive(), true, false)
+	a.pages.AddPage(TabKafka, a.kafkaTab.GetPrimitive(), true, false)
+	a.pages.AddPage(TabTriggers, a.triggersTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabDebug, a.debugTab.GetPrimitive(), true, false)
 
 	// Create main layout
@@ -116,7 +128,7 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	frontPage, _ := a.pages.GetFrontPage()
 
 	// List of known tab pages - anything else is considered a modal
-	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabREST || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabDebug
+	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabREST || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabKafka || frontPage == TabTriggers || frontPage == TabDebug
 
 	// Handle quit and tab switching even if we're not sure about the page state
 	// Check for quit: Shift+Q (uppercase Q)
@@ -179,6 +191,10 @@ func (a *App) focusCurrentTab() {
 	case 4:
 		a.app.SetFocus(a.valkeyTab.GetFocusable())
 	case 5:
+		a.app.SetFocus(a.kafkaTab.GetFocusable())
+	case 6:
+		a.app.SetFocus(a.triggersTab.GetFocusable())
+	case 7:
 		a.app.SetFocus(a.debugTab.GetFocusable())
 	}
 }
@@ -230,12 +246,22 @@ func (a *App) showHelp() {
 }
 
 func (a *App) showError(title, message string) {
+	a.showErrorWithFocus(title, message, nil)
+}
+
+// showErrorWithFocus shows an error dialog and restores focus to the given primitive when dismissed.
+// If focusTarget is nil, it focuses the current tab.
+func (a *App) showErrorWithFocus(title, message string, focusTarget tview.Primitive) {
 	modal := tview.NewModal().
 		SetText(title + "\n\n" + message).
 		AddButtons([]string{"OK"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			a.pages.RemovePage("error")
-			a.focusCurrentTab()
+			if focusTarget != nil {
+				a.app.SetFocus(focusTarget)
+			} else {
+				a.focusCurrentTab()
+			}
 		})
 
 	a.pages.AddPage("error", modal, true, true)
@@ -276,6 +302,8 @@ func (a *App) Run() error {
 	a.browserTab.Refresh()
 	a.mqttTab.Refresh()
 	a.valkeyTab.Refresh()
+	a.kafkaTab.Refresh()
+	a.triggersTab.Refresh()
 	a.restTab.Refresh()
 
 	// Start periodic refresh goroutine for MQTT, Valkey, and Debug tabs
@@ -305,6 +333,12 @@ func (a *App) periodicRefresh() {
 				if a.valkeyTab != nil && a.currentTab == 4 {
 					a.valkeyTab.Refresh()
 				}
+				if a.kafkaTab != nil && a.currentTab == 5 {
+					a.kafkaTab.Refresh()
+				}
+				if a.triggersTab != nil && a.currentTab == 6 {
+					a.triggersTab.Refresh()
+				}
 			})
 		}
 	}
@@ -326,11 +360,19 @@ func (a *App) Shutdown() {
 	a.manager.SetOnChange(nil)
 	a.manager.SetOnValueChange(nil)
 
-	// Stop all MQTT and Valkey publishers in parallel with timeout
+	// Stop all triggers first
+	if a.triggerMgr != nil {
+		a.triggerMgr.Stop()
+	}
+
+	// Stop all MQTT, Valkey, and Kafka in parallel with timeout
 	done := make(chan struct{})
 	go func() {
 		a.mqttMgr.StopAll()
 		a.valkeyMgr.StopAll()
+		if a.kafkaMgr != nil {
+			a.kafkaMgr.StopAll()
+		}
 		close(done)
 	}()
 
@@ -381,6 +423,16 @@ func (a *App) ForcePublishAllValuesToValkey() {
 	DebugLogValkey("ForcePublishAllValuesToValkey: publishing %d values", len(values))
 	for _, v := range values {
 		a.valkeyMgr.Publish(v.PLCName, v.TagName, v.TypeName, v.Value, v.Writable)
+	}
+}
+
+// ForcePublishAllValuesToKafka publishes all current tag values to Kafka clusters.
+// This is called when a Kafka cluster connects with PublishChanges enabled.
+func (a *App) ForcePublishAllValuesToKafka() {
+	values := a.manager.GetAllCurrentValues()
+	DebugLog("ForcePublishAllValuesToKafka: publishing %d values", len(values))
+	for _, v := range values {
+		a.kafkaMgr.Publish(v.PLCName, v.TagName, v.TypeName, v.Value, v.Writable, true)
 	}
 }
 

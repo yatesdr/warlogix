@@ -94,7 +94,7 @@ func (s *Server) Address() string {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		if r.Method == "OPTIONS" {
@@ -115,6 +115,15 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// getTagWriteInfo safely retrieves tag write information under the PLC's lock.
+// Returns: connection status, whether tag was found, whether tag is writable.
+func (s *Server) getTagWriteInfo(plc *plcman.ManagedPLC, tagName string) (plcman.ConnectionStatus, bool, bool) {
+	// Use the ManagedPLC's exported methods which handle locking internally
+	status := plc.GetStatus()
+	tagFound, tagWritable := plc.GetTagInfo(tagName)
+	return status, tagFound, tagWritable
 }
 
 // PLCResponse is the JSON response for a PLC.
@@ -139,15 +148,15 @@ type TagResponse struct {
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
 	// Parse path: /, /{name}, /{name}/programs, /{name}/tags, /{name}/tags/{tagname}
 	path := strings.TrimPrefix(r.URL.Path, "/")
+
+	// Handle root path
 	if path == "" {
-		// GET / - List all PLCs
+		if r.Method != http.MethodGet {
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		s.handleListPLCs(w)
 		return
 	}
@@ -161,31 +170,44 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(parts) == 1 {
-		// GET /{name} - PLC details
+		if r.Method != http.MethodGet {
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		s.handlePLCDetails(w, plc)
 		return
 	}
 
 	switch parts[1] {
 	case "programs":
+		if r.Method != http.MethodGet {
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		if len(parts) == 2 {
-			// GET /{name}/programs - List programs
 			s.handlePrograms(w, plc)
 		} else if len(parts) >= 4 && parts[3] == "tags" {
-			// GET /{name}/programs/{program}/tags
 			s.handleProgramTags(w, plc, parts[2])
 		} else {
 			s.writeError(w, http.StatusNotFound, "not found")
 		}
 	case "tags":
+		if r.Method != http.MethodGet {
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		if len(parts) == 2 {
-			// GET /{name}/tags - All tags
 			s.handleAllTags(w, plc)
 		} else {
-			// GET /{name}/tags/{tagname} - Single tag
 			tagName := strings.Join(parts[2:], "/")
 			s.handleSingleTag(w, plc, tagName)
 		}
+	case "write":
+		if r.Method != http.MethodPost {
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed, use POST")
+			return
+		}
+		s.handleWrite(w, r, plc)
 	default:
 		s.writeError(w, http.StatusNotFound, "not found")
 	}
@@ -358,5 +380,123 @@ func (s *Server) handleSingleTag(w http.ResponseWriter, plc *plcman.ManagedPLC, 
 	if v.Error != nil {
 		resp.Error = v.Error.Error()
 	}
+	s.writeJSON(w, resp)
+}
+
+// WriteRequest is the JSON request for writing a tag value.
+// This matches the MQTT write request format for consistency.
+type WriteRequest struct {
+	PLC   string      `json:"plc"`
+	Tag   string      `json:"tag"`
+	Value interface{} `json:"value"`
+}
+
+// WriteResponse is the JSON response after writing a tag value.
+// This matches the MQTT write response format for consistency.
+type WriteResponse struct {
+	PLC       string      `json:"plc"`
+	Tag       string      `json:"tag"`
+	Value     interface{} `json:"value"`
+	Success   bool        `json:"success"`
+	Error     string      `json:"error,omitempty"`
+	Timestamp string      `json:"timestamp"`
+}
+
+func (s *Server) handleWrite(w http.ResponseWriter, r *http.Request, plc *plcman.ManagedPLC) {
+	// Parse request body
+	var req WriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	// Validate PLC name matches URL
+	if req.PLC != plc.Config.Name {
+		resp := WriteResponse{
+			PLC:       req.PLC,
+			Tag:       req.Tag,
+			Value:     req.Value,
+			Success:   false,
+			Error:     fmt.Sprintf("PLC name mismatch: URL has '%s', request has '%s'", plc.Config.Name, req.PLC),
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		s.writeJSON(w, resp)
+		return
+	}
+
+	// Check if PLC is connected and find the tag (under lock to avoid races with UI)
+	status, tagFound, tagWritable := s.getTagWriteInfo(plc, req.Tag)
+
+	if status != plcman.StatusConnected {
+		resp := WriteResponse{
+			PLC:       req.PLC,
+			Tag:       req.Tag,
+			Value:     req.Value,
+			Success:   false,
+			Error:     "PLC not connected",
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		s.writeJSON(w, resp)
+		return
+	}
+
+	if !tagFound {
+		resp := WriteResponse{
+			PLC:       req.PLC,
+			Tag:       req.Tag,
+			Value:     req.Value,
+			Success:   false,
+			Error:     "tag not found",
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
+		w.WriteHeader(http.StatusNotFound)
+		s.writeJSON(w, resp)
+		return
+	}
+
+	if !tagWritable {
+		resp := WriteResponse{
+			PLC:       req.PLC,
+			Tag:       req.Tag,
+			Value:     req.Value,
+			Success:   false,
+			Error:     "tag is not writable",
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
+		w.WriteHeader(http.StatusForbidden)
+		s.writeJSON(w, resp)
+		return
+	}
+
+	// Write to PLC in a goroutine with timeout to prevent blocking
+	resultChan := make(chan error, 1)
+	go func() {
+		resultChan <- s.manager.WriteTag(plc.Config.Name, req.Tag, req.Value)
+	}()
+
+	// Wait for result or timeout
+	var writeErr error
+	select {
+	case writeErr = <-resultChan:
+		// Write completed (success or error)
+	case <-time.After(3 * time.Second):
+		// Timeout
+		writeErr = fmt.Errorf("write timeout: PLC did not respond within 3 seconds")
+	}
+
+	resp := WriteResponse{
+		PLC:       req.PLC,
+		Tag:       req.Tag,
+		Value:     req.Value,
+		Success:   writeErr == nil,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	if writeErr != nil {
+		resp.Error = writeErr.Error()
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
 	s.writeJSON(w, resp)
 }

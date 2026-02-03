@@ -1,5 +1,7 @@
 package logix
 
+import "strings"
+
 // Logix CIP data type codes.
 // These are returned in the DataType field of Tag after a ReadTag operation.
 // The caller uses these to interpret the raw bytes.
@@ -111,4 +113,42 @@ func TypeName(dataType uint16) string {
 		return name + "[]"
 	}
 	return name
+}
+
+// TypeCodeFromName returns the type code for a given type name.
+// Returns (typeCode, true) if found, (0, false) otherwise.
+func TypeCodeFromName(name string) (uint16, bool) {
+	switch strings.ToUpper(name) {
+	case "BOOL":
+		return TypeBOOL, true
+	case "SINT":
+		return TypeSINT, true
+	case "INT":
+		return TypeINT, true
+	case "DINT":
+		return TypeDINT, true
+	case "LINT":
+		return TypeLINT, true
+	case "USINT":
+		return TypeUSINT, true
+	case "UINT":
+		return TypeUINT, true
+	case "UDINT":
+		return TypeUDINT, true
+	case "ULINT":
+		return TypeULINT, true
+	case "REAL":
+		return TypeREAL, true
+	case "LREAL":
+		return TypeLREAL, true
+	case "STRING":
+		return TypeSTRING, true
+	default:
+		return 0, false
+	}
+}
+
+// SupportedTypeNames returns a list of supported type names for manual tag entry.
+func SupportedTypeNames() []string {
+	return []string{"BOOL", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "REAL", "LREAL", "STRING"}
 }

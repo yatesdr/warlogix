@@ -58,12 +58,14 @@ const (
 
 // Tab labels
 const (
-	TabPLCs    = "PLCs"
-	TabBrowser = "Tag Browser"
-	TabREST    = "REST"
-	TabMQTT    = "MQTT"
-	TabValkey  = "Valkey"
-	TabDebug   = "Debug"
+	TabPLCs     = "PLCs"
+	TabBrowser  = "Tag Browser"
+	TabREST     = "REST"
+	TabMQTT     = "MQTT"
+	TabValkey   = "Valkey"
+	TabKafka    = "Kafka"
+	TabTriggers = "Triggers"
+	TabDebug    = "Debug"
 )
 
 // acceptDigits is a validation function for numeric input fields.
@@ -108,21 +110,26 @@ const HelpText = `
    Space        Toggle tag publishing
    w            Toggle tag writable
    d            Show tag details
+   a            Add manual tag (Micro800/S7/Omron)
+   e            Edit manual tag (Micro800/S7/Omron)
+   x            Delete manual tag (Micro800/S7/Omron)
    Escape       Return to tree
 
- MQTT Tab
-   a            Add broker
+ MQTT / Valkey / Kafka Tabs
+   a            Add broker/server/cluster
    e            Edit selected
    r            Remove selected
    c            Connect
    C            Disconnect
 
- Valkey Tab
-   a            Add server
+ Triggers Tab
+   a            Add trigger
    e            Edit selected
    r            Remove selected
-   c            Connect
-   C            Disconnect
+   s            Start trigger
+   S            Stop trigger
+   T            Test fire trigger
+   R            Reset trigger from error
 
  Application
    Q            Quit

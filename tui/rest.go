@@ -141,16 +141,19 @@ func (t *RESTTab) updateEndpointsList() {
 	baseURL := fmt.Sprintf("http://%s:%d", t.app.config.REST.Host, t.app.config.REST.Port)
 
 	text := "\n"
-	text += fmt.Sprintf(" [yellow]GET[white]  %s/\n", baseURL)
-	text += "       List all configured PLCs\n\n"
-	text += fmt.Sprintf(" [yellow]GET[white]  %s/{plc}\n", baseURL)
-	text += "       Get PLC details\n\n"
-	text += fmt.Sprintf(" [yellow]GET[white]  %s/{plc}/programs\n", baseURL)
-	text += "       List programs on PLC\n\n"
-	text += fmt.Sprintf(" [yellow]GET[white]  %s/{plc}/tags\n", baseURL)
-	text += "       Get all published tags\n\n"
-	text += fmt.Sprintf(" [yellow]GET[white]  %s/{plc}/tags/{tag}\n", baseURL)
-	text += "       Get specific tag value\n"
+	text += fmt.Sprintf(" [yellow]GET[white]   %s/\n", baseURL)
+	text += "        List all configured PLCs\n\n"
+	text += fmt.Sprintf(" [yellow]GET[white]   %s/{plc}\n", baseURL)
+	text += "        Get PLC details\n\n"
+	text += fmt.Sprintf(" [yellow]GET[white]   %s/{plc}/programs\n", baseURL)
+	text += "        List programs on PLC\n\n"
+	text += fmt.Sprintf(" [yellow]GET[white]   %s/{plc}/tags\n", baseURL)
+	text += "        Get all published tags\n\n"
+	text += fmt.Sprintf(" [yellow]GET[white]   %s/{plc}/tags/{tag}\n", baseURL)
+	text += "        Get specific tag value\n\n"
+	text += fmt.Sprintf(" [green]POST[white]  %s/{plc}/write\n", baseURL)
+	text += "        Write tag value (writable tags only)\n"
+	text += "        Body: {\"plc\": \"name\", \"tag\": \"tagname\", \"value\": <value>}\n"
 
 	t.endpoints.SetText(text)
 }
@@ -208,9 +211,9 @@ func (t *RESTTab) Refresh() {
 
 	var status string
 	if running {
-		status = fmt.Sprintf(" [green]● Running[white] on %s", t.app.apiServer.Address())
+		status = fmt.Sprintf(" [green]● Running[white] on %s  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab", t.app.apiServer.Address())
 	} else {
-		status = " [red]○ Stopped[white] - Press Tab to reach Start/Stop buttons"
+		status = " [red]○ Stopped[white] - Press Tab to reach Start/Stop  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab"
 	}
 
 	t.statusBar.SetText(status)

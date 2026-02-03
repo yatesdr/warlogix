@@ -39,10 +39,7 @@ func (t *DebugTab) setupUI() {
 	// Log view
 	t.logView = tview.NewTextView().
 		SetDynamicColors(true).
-		SetScrollable(true).
-		SetChangedFunc(func() {
-			t.app.app.Draw()
-		})
+		SetScrollable(true)
 	t.logView.SetBorder(true).SetTitle(" Debug Log ")
 
 	// Auto-scroll to bottom
@@ -66,7 +63,7 @@ func (t *DebugTab) setupUI() {
 	// Status bar
 	t.statusBar = tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [yellow]c[white] clear  [yellow]g[white] top  [yellow]G[white] bottom  [yellow]↑↓[white] scroll")
+		SetText(" [yellow]c[white] clear  [yellow]g[white] top  [yellow]G[white] bottom  [yellow]↑↓[white] scroll  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab")
 
 	// Main layout
 	t.flex = tview.NewFlex().
@@ -77,8 +74,12 @@ func (t *DebugTab) setupUI() {
 
 // Log adds a message to the debug log.
 // This is safe to call from any goroutine.
+// Uses TryLock to avoid blocking - messages may be dropped if contended.
 func (t *DebugTab) Log(format string, args ...interface{}) {
-	t.mu.Lock()
+	// Use TryLock to avoid blocking callers (especially fire() which can block UI)
+	if !t.mu.TryLock() {
+		return // Drop the message rather than block
+	}
 	defer t.mu.Unlock()
 
 	timestamp := time.Now().Format("15:04:05.000")
@@ -140,12 +141,22 @@ func (t *DebugTab) GetFocusable() tview.Primitive {
 }
 
 // Refresh updates the debug tab.
+// Must be called from QueueUpdateDraw or main goroutine.
+// Uses TryLock to avoid blocking the UI thread.
 func (t *DebugTab) Refresh() {
-	t.mu.Lock()
+	// Use TryLock to avoid blocking UI if Log() is being called
+	if !t.mu.TryLock() {
+		return // Skip this refresh cycle
+	}
 	text := t.buildText()
+	msgCount := len(t.messages)
 	t.mu.Unlock()
-	t.logView.SetText(text)
-	t.logView.ScrollToEnd()
+
+	// Only update if there are messages (avoid unnecessary redraws)
+	if msgCount > 0 {
+		t.logView.SetText(text)
+		t.logView.ScrollToEnd()
+	}
 }
 
 // DebugLog logs a message to the debug tab if it exists.
@@ -173,5 +184,17 @@ func DebugLogError(format string, args ...interface{}) {
 func DebugLogValkey(format string, args ...interface{}) {
 	if debugLogger != nil {
 		debugLogger.LogValkey(format, args...)
+	}
+}
+
+// LogKafka adds a Kafka-related message to the debug log.
+func (t *DebugTab) LogKafka(format string, args ...interface{}) {
+	t.Log("[cyan]KAFKA:[-] "+format, args...)
+}
+
+// DebugLogKafka logs a Kafka message to the debug tab if it exists.
+func DebugLogKafka(format string, args ...interface{}) {
+	if debugLogger != nil {
+		debugLogger.LogKafka(format, args...)
 	}
 }

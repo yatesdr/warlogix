@@ -31,6 +31,23 @@ func logMQTT(format string, args ...interface{}) {
 	}
 }
 
+// writeJob represents a pending write operation.
+type writeJob struct {
+	client         pahomqtt.Client
+	rootTopic      string
+	plcName        string
+	tagName        string
+	value          interface{}
+	convertedValue interface{}
+	handler        WriteHandler
+}
+
+// MaxWriteWorkers is the maximum number of concurrent write goroutines per publisher.
+const MaxWriteWorkers = 5
+
+// MaxWriteQueueSize is the maximum number of pending write jobs per publisher.
+const MaxWriteQueueSize = 100
+
 // Publisher handles MQTT connection and publishes tag values to a single broker.
 type Publisher struct {
 	config  *config.MQTTConfig
@@ -47,6 +64,11 @@ type Publisher struct {
 	writeValidator WriteValidator
 	tagTypeLookup  TagTypeLookup
 	plcNames       []string // PLCs to subscribe for writes
+
+	// Worker pool for bounded write goroutines
+	writeQueue chan writeJob
+	wg         sync.WaitGroup
+	stopChan   chan struct{}
 }
 
 // TagMessage is the JSON structure published to MQTT.
@@ -96,6 +118,8 @@ func NewPublisher(cfg *config.MQTTConfig) *Publisher {
 	return &Publisher{
 		config:     cfg,
 		lastValues: make(map[string]interface{}),
+		writeQueue: make(chan writeJob, MaxWriteQueueSize),
+		stopChan:   make(chan struct{}),
 	}
 }
 
@@ -182,10 +206,54 @@ func (p *Publisher) Start() error {
 	p.lastValues = make(map[string]interface{})
 	p.lastMu.Unlock()
 
+	// Start write workers
+	p.startWriteWorkers()
+
 	// Subscribe to write topics (must be outside p.mu lock to avoid deadlock)
 	p.subscribeWriteTopics()
 
 	return nil
+}
+
+// startWriteWorkers starts the write worker goroutines.
+func (p *Publisher) startWriteWorkers() {
+	for i := 0; i < MaxWriteWorkers; i++ {
+		p.wg.Add(1)
+		go p.writeWorker()
+	}
+}
+
+// writeWorker processes write jobs from the queue.
+func (p *Publisher) writeWorker() {
+	defer p.wg.Done()
+
+	for {
+		select {
+		case <-p.stopChan:
+			return
+		case job, ok := <-p.writeQueue:
+			if !ok {
+				return
+			}
+			var writeErr error
+
+			// Check if this is an error-only response (queued via queueErrorResponse)
+			if errVal, isErr := job.convertedValue.(error); isErr && job.handler == nil {
+				writeErr = errVal
+			} else if job.handler != nil {
+				logMQTT("Executing write: %s/%s = %v", job.plcName, job.tagName, job.convertedValue)
+				writeErr = job.handler(job.plcName, job.tagName, job.convertedValue)
+				if writeErr != nil {
+					logMQTT("Write error: %v", writeErr)
+				} else {
+					logMQTT("Write successful")
+				}
+			} else {
+				writeErr = fmt.Errorf("no write handler configured")
+			}
+			p.publishWriteResponse(job.client, job.rootTopic, job.plcName, job.tagName, job.value, writeErr)
+		}
+	}
 }
 
 // Stop disconnects from the MQTT broker.
@@ -199,7 +267,27 @@ func (p *Publisher) Stop() {
 	p.running = false
 	client := p.client
 	p.client = nil
+
+	// Save old channels and create new ones while holding lock
+	oldStopChan := p.stopChan
+	p.stopChan = make(chan struct{})
+	p.writeQueue = make(chan writeJob, MaxWriteQueueSize)
 	p.mu.Unlock()
+
+	// Stop write workers by closing old channel
+	close(oldStopChan)
+
+	// Wait for workers to finish (with timeout)
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		logMQTT("Timeout waiting for write workers to stop")
+	}
 
 	// Disconnect OUTSIDE the lock to prevent blocking
 	if client != nil {
@@ -540,20 +628,20 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 	var req WriteRequest
 	if err := json.Unmarshal(msg.Payload(), &req); err != nil {
 		logMQTT("JSON parse error: %v", err)
-		go p.publishWriteResponse(client, rootTopic, "", "", nil, fmt.Errorf("invalid JSON: %v", err))
+		p.queueErrorResponse(client, rootTopic, "", "", nil, fmt.Errorf("invalid JSON: %v", err))
 		return
 	}
 
 	// Validate topic matches
 	if req.Topic != rootTopic {
-		go p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
+		p.queueErrorResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
 			fmt.Errorf("topic mismatch: expected %s, got %s", rootTopic, req.Topic))
 		return
 	}
 
 	// Check if tag is writable
 	if validator != nil && !validator(req.PLC, req.Tag) {
-		go p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
+		p.queueErrorResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
 			fmt.Errorf("tag not writable: %s/%s", req.PLC, req.Tag))
 		return
 	}
@@ -568,7 +656,7 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 			convertedValue, err = convertValueForType(req.Value, dataType)
 			if err != nil {
 				logMQTT("Value conversion error: %v", err)
-				go p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value, err)
+				p.queueErrorResponse(client, rootTopic, req.PLC, req.Tag, req.Value, err)
 				return
 			}
 			logMQTT("Converted value: %v (type: %T)", convertedValue, convertedValue)
@@ -577,22 +665,48 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 		}
 	}
 
-	// Execute the write in a goroutine to avoid blocking the MQTT callback
-	go func() {
-		var writeErr error
-		if handler != nil {
-			logMQTT("Executing write: %s/%s = %v", req.PLC, req.Tag, convertedValue)
-			writeErr = handler(req.PLC, req.Tag, convertedValue)
-			if writeErr != nil {
-				logMQTT("Write error: %v", writeErr)
-			} else {
-				logMQTT("Write successful")
-			}
-		} else {
-			writeErr = fmt.Errorf("no write handler configured")
-		}
-		p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value, writeErr)
-	}()
+	// Queue the write job (non-blocking with drop on overflow)
+	job := writeJob{
+		client:         client,
+		rootTopic:      rootTopic,
+		plcName:        req.PLC,
+		tagName:        req.Tag,
+		value:          req.Value,
+		convertedValue: convertedValue,
+		handler:        handler,
+	}
+	select {
+	case p.writeQueue <- job:
+		// Job queued successfully
+	default:
+		// Queue full, respond with error
+		logMQTT("Write queue full, rejecting write for %s/%s", req.PLC, req.Tag)
+		go p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
+			fmt.Errorf("write queue full, try again later"))
+	}
+}
+
+// queueErrorResponse queues an error response through the worker pool.
+func (p *Publisher) queueErrorResponse(client pahomqtt.Client, rootTopic, plcName, tagName string, value interface{}, err error) {
+	// For error responses, we use a nil handler which will trigger the error path
+	job := writeJob{
+		client:    client,
+		rootTopic: rootTopic,
+		plcName:   plcName,
+		tagName:   tagName,
+		value:     value,
+		handler:   nil, // nil handler means we just send the error response
+	}
+	// Store the error message in convertedValue as a signal
+	job.convertedValue = err
+
+	select {
+	case p.writeQueue <- job:
+		// Job queued
+	default:
+		// Queue full, log and drop
+		logMQTT("Write queue full, dropping error response for %s/%s", plcName, tagName)
+	}
 }
 
 // publishWriteResponse publishes a write response to MQTT.

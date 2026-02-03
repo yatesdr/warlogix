@@ -9,13 +9,38 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// PLCFamily represents the type/protocol family of a PLC.
+type PLCFamily string
+
+const (
+	FamilyLogix    PLCFamily = "logix"    // Allen-Bradley ControlLogix/CompactLogix
+	FamilyMicro800 PLCFamily = "micro800" // Allen-Bradley Micro800 series
+	FamilyS7       PLCFamily = "s7"       // Siemens S7 (future)
+	FamilyOmron    PLCFamily = "omron"    // Omron (future)
+)
+
+// SupportsDiscovery returns true if the PLC family supports tag discovery.
+func (f PLCFamily) SupportsDiscovery() bool {
+	return f == FamilyLogix || f == ""
+}
+
+// String returns the string representation of the PLC family.
+func (f PLCFamily) String() string {
+	if f == "" {
+		return "logix"
+	}
+	return string(f)
+}
+
 // Config holds the complete application configuration.
 type Config struct {
-	PLCs     []PLCConfig     `yaml:"plcs"`
-	REST     RESTConfig      `yaml:"rest"`
-	MQTT     []MQTTConfig    `yaml:"mqtt"`
-	Valkey   []ValkeyConfig  `yaml:"valkey,omitempty"`
-	PollRate time.Duration   `yaml:"poll_rate"`
+	PLCs     []PLCConfig      `yaml:"plcs"`
+	REST     RESTConfig       `yaml:"rest"`
+	MQTT     []MQTTConfig     `yaml:"mqtt"`
+	Valkey   []ValkeyConfig   `yaml:"valkey,omitempty"`
+	Kafka    []KafkaConfig    `yaml:"kafka,omitempty"`
+	Triggers []TriggerConfig  `yaml:"triggers,omitempty"`
+	PollRate time.Duration    `yaml:"poll_rate"`
 }
 
 // PLCConfig stores configuration for a single PLC connection.
@@ -23,14 +48,24 @@ type PLCConfig struct {
 	Name    string         `yaml:"name"`
 	Address string         `yaml:"address"`
 	Slot    byte           `yaml:"slot"`
+	Family  PLCFamily      `yaml:"family,omitempty"`
 	Enabled bool           `yaml:"enabled"`
 	Tags    []TagSelection `yaml:"tags,omitempty"`
+}
+
+// GetFamily returns the PLC family, defaulting to logix if not set.
+func (p *PLCConfig) GetFamily() PLCFamily {
+	if p.Family == "" {
+		return FamilyLogix
+	}
+	return p.Family
 }
 
 // TagSelection represents a tag selected for republishing.
 type TagSelection struct {
 	Name     string `yaml:"name"`
 	Alias    string `yaml:"alias,omitempty"`
+	DataType string `yaml:"data_type,omitempty"` // Manual type: BOOL, INT, DINT, REAL, etc.
 	Enabled  bool   `yaml:"enabled"`
 	Writable bool   `yaml:"writable,omitempty"`
 }
@@ -69,6 +104,46 @@ type ValkeyConfig struct {
 	EnableWriteback bool          `yaml:"enable_writeback,omitempty"` // Enable write-back queue
 }
 
+// KafkaConfig holds Kafka cluster configuration.
+type KafkaConfig struct {
+	Name          string        `yaml:"name"`
+	Enabled       bool          `yaml:"enabled"`
+	Brokers       []string      `yaml:"brokers"`
+	UseTLS        bool          `yaml:"use_tls,omitempty"`
+	TLSSkipVerify bool          `yaml:"tls_skip_verify,omitempty"`
+	SASLMechanism string        `yaml:"sasl_mechanism,omitempty"` // PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
+	Username      string        `yaml:"username,omitempty"`
+	Password      string        `yaml:"password,omitempty"`
+	RequiredAcks  int           `yaml:"required_acks,omitempty"` // -1=all, 0=none, 1=leader
+	MaxRetries    int           `yaml:"max_retries,omitempty"`
+	RetryBackoff  time.Duration `yaml:"retry_backoff,omitempty"`
+
+	// Tag publishing settings
+	PublishChanges bool   `yaml:"publish_changes,omitempty"` // Publish tag changes to Kafka
+	Topic          string `yaml:"topic,omitempty"`           // Topic for tag change publishing
+}
+
+// TriggerCondition defines when a trigger fires.
+type TriggerCondition struct {
+	Operator string      `yaml:"operator"` // ==, !=, >, <, >=, <=
+	Value    interface{} `yaml:"value"`    // Value to compare against
+}
+
+// TriggerConfig holds configuration for an event-driven data capture trigger.
+type TriggerConfig struct {
+	Name         string            `yaml:"name"`
+	Enabled      bool              `yaml:"enabled"`
+	PLC          string            `yaml:"plc"`                   // PLC name to monitor
+	TriggerTag   string            `yaml:"trigger_tag"`           // Tag to watch for condition
+	Condition    TriggerCondition  `yaml:"condition"`             // When to fire
+	AckTag       string            `yaml:"ack_tag,omitempty"`     // Tag to write status: 1=success, -1=error
+	DebounceMS   int               `yaml:"debounce_ms,omitempty"` // Debounce time in milliseconds
+	Tags         []string          `yaml:"tags"`                  // Tags to capture when triggered
+	KafkaCluster string            `yaml:"kafka_cluster"`         // Kafka cluster name
+	Topic        string            `yaml:"topic"`                 // Kafka topic
+	Metadata     map[string]string `yaml:"metadata,omitempty"`    // Static metadata to include
+}
+
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -79,8 +154,10 @@ func DefaultConfig() *Config {
 			Port:    8080,
 			Host:    "0.0.0.0",
 		},
-		MQTT:   []MQTTConfig{},
-		Valkey: []ValkeyConfig{},
+		MQTT:     []MQTTConfig{},
+		Valkey:   []ValkeyConfig{},
+		Kafka:    []KafkaConfig{},
+		Triggers: []TriggerConfig{},
 	}
 }
 
@@ -107,6 +184,30 @@ func DefaultValkeyConfig(name string) ValkeyConfig {
 		KeyTTL:          0,
 		PublishChanges:  true,
 		EnableWriteback: false,
+	}
+}
+
+// DefaultKafkaConfig returns a default Kafka configuration.
+func DefaultKafkaConfig(name string) KafkaConfig {
+	return KafkaConfig{
+		Name:         name,
+		Enabled:      false,
+		Brokers:      []string{"localhost:9092"},
+		RequiredAcks: -1, // All replicas must acknowledge
+		MaxRetries:   3,
+		RetryBackoff: 100 * time.Millisecond,
+	}
+}
+
+// DefaultTriggerConfig returns a default trigger configuration.
+func DefaultTriggerConfig(name string) TriggerConfig {
+	return TriggerConfig{
+		Name:       name,
+		Enabled:    false,
+		Condition:  TriggerCondition{Operator: "==", Value: true},
+		DebounceMS: 100,
+		Tags:       []string{},
+		Metadata:   make(map[string]string),
 	}
 }
 
@@ -257,6 +358,80 @@ func (c *Config) UpdatePLC(name string, updated PLCConfig) bool {
 	for i, plc := range c.PLCs {
 		if plc.Name == name {
 			c.PLCs[i] = updated
+			return true
+		}
+	}
+	return false
+}
+
+// FindKafka returns the Kafka config with the given name, or nil if not found.
+func (c *Config) FindKafka(name string) *KafkaConfig {
+	for i := range c.Kafka {
+		if c.Kafka[i].Name == name {
+			return &c.Kafka[i]
+		}
+	}
+	return nil
+}
+
+// AddKafka adds a new Kafka configuration.
+func (c *Config) AddKafka(kafka KafkaConfig) {
+	c.Kafka = append(c.Kafka, kafka)
+}
+
+// RemoveKafka removes a Kafka config by name.
+func (c *Config) RemoveKafka(name string) bool {
+	for i, k := range c.Kafka {
+		if k.Name == name {
+			c.Kafka = append(c.Kafka[:i], c.Kafka[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateKafka updates an existing Kafka configuration.
+func (c *Config) UpdateKafka(name string, updated KafkaConfig) bool {
+	for i, k := range c.Kafka {
+		if k.Name == name {
+			c.Kafka[i] = updated
+			return true
+		}
+	}
+	return false
+}
+
+// FindTrigger returns the Trigger config with the given name, or nil if not found.
+func (c *Config) FindTrigger(name string) *TriggerConfig {
+	for i := range c.Triggers {
+		if c.Triggers[i].Name == name {
+			return &c.Triggers[i]
+		}
+	}
+	return nil
+}
+
+// AddTrigger adds a new Trigger configuration.
+func (c *Config) AddTrigger(trigger TriggerConfig) {
+	c.Triggers = append(c.Triggers, trigger)
+}
+
+// RemoveTrigger removes a Trigger config by name.
+func (c *Config) RemoveTrigger(name string) bool {
+	for i, t := range c.Triggers {
+		if t.Name == name {
+			c.Triggers = append(c.Triggers[:i], c.Triggers[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateTrigger updates an existing Trigger configuration.
+func (c *Config) UpdateTrigger(name string, updated TriggerConfig) bool {
+	for i, t := range c.Triggers {
+		if t.Name == name {
+			c.Triggers[i] = updated
 			return true
 		}
 	}

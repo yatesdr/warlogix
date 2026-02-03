@@ -1,0 +1,553 @@
+package tui
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
+
+	"warlogix/config"
+	"warlogix/kafka"
+)
+
+// KafkaTab handles the Kafka configuration tab.
+type KafkaTab struct {
+	app       *App
+	flex      *tview.Flex
+	table     *tview.Table
+	info      *tview.TextView
+	statusBar *tview.TextView
+}
+
+// NewKafkaTab creates a new Kafka tab.
+func NewKafkaTab(app *App) *KafkaTab {
+	t := &KafkaTab{app: app}
+	t.setupUI()
+	t.Refresh()
+	return t
+}
+
+func (t *KafkaTab) setupUI() {
+	// Button bar
+	buttons := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter).
+		SetText(" [yellow]a[white]dd  [yellow]e[white]dit  [yellow]r[white]emove  [yellow]c[white]onnect  dis[yellow]C[white]onnect  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab ")
+
+	// Cluster table
+	t.table = tview.NewTable().
+		SetBorders(false).
+		SetSelectable(true, false).
+		SetFixed(1, 0)
+
+	t.table.SetInputCapture(t.handleKeys)
+	t.table.SetSelectedFunc(t.onSelect)
+
+	// Set up headers
+	headers := []string{"", "Name", "Brokers", "TLS", "SASL", "Status"}
+	for i, h := range headers {
+		t.table.SetCell(0, i, tview.NewTableCell(h).
+			SetTextColor(tcell.ColorYellow).
+			SetSelectable(false).
+			SetAttributes(tcell.AttrBold))
+	}
+
+	tableFrame := tview.NewFrame(t.table).SetBorders(1, 0, 0, 0, 1, 1)
+	tableFrame.SetBorder(true).SetTitle(" Kafka Clusters ")
+
+	// Info panel
+	t.info = tview.NewTextView().
+		SetDynamicColors(true).
+		SetScrollable(true)
+	t.info.SetBorder(true).SetTitle(" Cluster Info ")
+
+	// Content area
+	content := tview.NewFlex().
+		AddItem(tableFrame, 0, 2, true).
+		AddItem(t.info, 0, 1, false)
+
+	// Status bar
+	t.statusBar = tview.NewTextView().
+		SetDynamicColors(true)
+
+	// Main layout
+	t.flex = tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(buttons, 1, 0, false).
+		AddItem(content, 0, 1, true).
+		AddItem(t.statusBar, 1, 0, false)
+}
+
+func (t *KafkaTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
+	switch event.Rune() {
+	case 'a':
+		t.showAddDialog()
+		return nil
+	case 'e':
+		t.showEditDialog()
+		return nil
+	case 'r':
+		t.removeSelected()
+		return nil
+	case 'c':
+		t.connectSelected()
+		return nil
+	case 'C':
+		t.disconnectSelected()
+		return nil
+	}
+	return event
+}
+
+func (t *KafkaTab) getSelectedName() string {
+	row, _ := t.table.GetSelection()
+	if row <= 0 {
+		return ""
+	}
+	cell := t.table.GetCell(row, 1)
+	if cell == nil {
+		return ""
+	}
+	return cell.Text
+}
+
+func (t *KafkaTab) onSelect(row, col int) {
+	name := t.getSelectedName()
+	if name == "" {
+		return
+	}
+	t.updateInfo(name)
+}
+
+func (t *KafkaTab) updateInfo(name string) {
+	cfg := t.app.config.FindKafka(name)
+	if cfg == nil {
+		t.info.SetText("")
+		return
+	}
+
+	producer := t.app.kafkaMgr.GetProducer(name)
+
+	info := fmt.Sprintf("[yellow]Name:[white] %s\n", cfg.Name)
+	info += fmt.Sprintf("[yellow]Brokers:[white] %s\n", strings.Join(cfg.Brokers, ", "))
+	info += fmt.Sprintf("[yellow]TLS:[white] %v\n", cfg.UseTLS)
+	if cfg.SASLMechanism != "" {
+		info += fmt.Sprintf("[yellow]SASL:[white] %s\n", cfg.SASLMechanism)
+	}
+	info += fmt.Sprintf("[yellow]Required Acks:[white] %d\n", cfg.RequiredAcks)
+	info += fmt.Sprintf("[yellow]Max Retries:[white] %d\n", cfg.MaxRetries)
+
+	// Tag publishing settings
+	if cfg.PublishChanges {
+		info += fmt.Sprintf("\n[yellow]Publish Changes:[green] Enabled\n")
+		info += fmt.Sprintf("[yellow]Topic:[white] %s\n", cfg.Topic)
+	}
+
+	if producer != nil {
+		status := producer.GetStatus()
+		info += fmt.Sprintf("\n[yellow]Status:[white] %s\n", status.String())
+		if err := producer.GetError(); err != nil {
+			info += fmt.Sprintf("[yellow]Error:[red] %s\n", err.Error())
+		}
+		sent, errors, lastSend := producer.GetStats()
+		info += fmt.Sprintf("[yellow]Messages Sent:[white] %d\n", sent)
+		info += fmt.Sprintf("[yellow]Errors:[white] %d\n", errors)
+		if !lastSend.IsZero() {
+			info += fmt.Sprintf("[yellow]Last Send:[white] %s\n", lastSend.Format("15:04:05"))
+		}
+	}
+
+	t.info.SetText(info)
+}
+
+// GetPrimitive returns the main primitive for this tab.
+func (t *KafkaTab) GetPrimitive() tview.Primitive {
+	return t.flex
+}
+
+// GetFocusable returns the element that should receive focus.
+func (t *KafkaTab) GetFocusable() tview.Primitive {
+	return t.table
+}
+
+// Refresh updates the display.
+func (t *KafkaTab) Refresh() {
+	// Clear existing rows (keep header)
+	for t.table.GetRowCount() > 1 {
+		t.table.RemoveRow(1)
+	}
+
+	// Sort clusters by name
+	clusters := make([]config.KafkaConfig, len(t.app.config.Kafka))
+	copy(clusters, t.app.config.Kafka)
+	sort.Slice(clusters, func(i, j int) bool {
+		return clusters[i].Name < clusters[j].Name
+	})
+
+	// Add clusters to table
+	for i, cfg := range clusters {
+		row := i + 1
+
+		// Status indicator
+		indicator := StatusIndicatorDisconnected
+		producer := t.app.kafkaMgr.GetProducer(cfg.Name)
+		if producer != nil {
+			switch producer.GetStatus() {
+			case kafka.StatusConnected:
+				indicator = StatusIndicatorConnected
+			case kafka.StatusConnecting:
+				indicator = StatusIndicatorConnecting
+			case kafka.StatusError:
+				indicator = StatusIndicatorError
+			}
+		}
+
+		// TLS indicator
+		tlsStr := "No"
+		if cfg.UseTLS {
+			tlsStr = "Yes"
+		}
+
+		// SASL indicator
+		saslStr := "-"
+		if cfg.SASLMechanism != "" {
+			saslStr = cfg.SASLMechanism
+		}
+
+		// Brokers (truncated)
+		brokers := strings.Join(cfg.Brokers, ", ")
+		if len(brokers) > 30 {
+			brokers = brokers[:27] + "..."
+		}
+
+		// Status text
+		statusText := "Disabled"
+		if cfg.Enabled {
+			if producer != nil {
+				statusText = producer.GetStatus().String()
+			}
+		}
+
+		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
+		t.table.SetCell(row, 1, tview.NewTableCell(cfg.Name).SetExpansion(1))
+		t.table.SetCell(row, 2, tview.NewTableCell(brokers).SetExpansion(2))
+		t.table.SetCell(row, 3, tview.NewTableCell(tlsStr).SetExpansion(0))
+		t.table.SetCell(row, 4, tview.NewTableCell(saslStr).SetExpansion(1))
+		t.table.SetCell(row, 5, tview.NewTableCell(statusText).SetExpansion(1))
+	}
+
+	// Update status bar
+	connected := 0
+	for _, cfg := range clusters {
+		producer := t.app.kafkaMgr.GetProducer(cfg.Name)
+		if producer != nil && producer.GetStatus() == kafka.StatusConnected {
+			connected++
+		}
+	}
+	t.statusBar.SetText(fmt.Sprintf(" %d clusters, %d connected", len(clusters), connected))
+
+	// Update info panel for selected
+	if name := t.getSelectedName(); name != "" {
+		t.updateInfo(name)
+	}
+}
+
+func (t *KafkaTab) showAddDialog() {
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle(" Add Kafka Cluster ")
+
+	form.AddInputField("Name:", "", 30, nil, nil)
+	form.AddInputField("Brokers:", "localhost:9092", 40, nil, nil)
+	form.AddCheckbox("Use TLS:", false, nil)
+	form.AddDropDown("SASL:", []string{"None", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}, 0, nil)
+	form.AddInputField("Username:", "", 30, nil, nil)
+	form.AddPasswordField("Password:", "", 30, '*', nil)
+	form.AddCheckbox("Publish Changes:", false, nil)
+	form.AddInputField("Topic:", "", 30, nil, nil)
+	form.AddCheckbox("Auto-connect:", false, nil)
+
+	form.AddButton("Add", func() {
+		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
+		brokers := form.GetFormItemByLabel("Brokers:").(*tview.InputField).GetText()
+		useTLS := form.GetFormItemByLabel("Use TLS:").(*tview.Checkbox).IsChecked()
+		saslIdx, _ := form.GetFormItemByLabel("SASL:").(*tview.DropDown).GetCurrentOption()
+		username := form.GetFormItemByLabel("Username:").(*tview.InputField).GetText()
+		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
+		publishChanges := form.GetFormItemByLabel("Publish Changes:").(*tview.Checkbox).IsChecked()
+		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
+		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
+
+		if name == "" || brokers == "" {
+			t.app.showError("Error", "Name and brokers are required")
+			return
+		}
+
+		saslMechs := []string{"", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}
+		cfg := config.KafkaConfig{
+			Name:           name,
+			Enabled:        autoConnect,
+			Brokers:        strings.Split(brokers, ","),
+			UseTLS:         useTLS,
+			SASLMechanism:  saslMechs[saslIdx],
+			Username:       username,
+			Password:       password,
+			RequiredAcks:   -1,
+			MaxRetries:     3,
+			PublishChanges: publishChanges,
+			Topic:          topic,
+		}
+
+		// Trim whitespace from brokers
+		for i := range cfg.Brokers {
+			cfg.Brokers[i] = strings.TrimSpace(cfg.Brokers[i])
+		}
+
+		t.app.config.AddKafka(cfg)
+		t.app.SaveConfig()
+
+		// Add to manager
+		t.app.kafkaMgr.AddCluster(&kafka.Config{
+			Name:           cfg.Name,
+			Enabled:        cfg.Enabled,
+			Brokers:        cfg.Brokers,
+			UseTLS:         cfg.UseTLS,
+			SASLMechanism:  kafka.SASLMechanism(cfg.SASLMechanism),
+			Username:       cfg.Username,
+			Password:       cfg.Password,
+			RequiredAcks:   cfg.RequiredAcks,
+			MaxRetries:     cfg.MaxRetries,
+			PublishChanges: cfg.PublishChanges,
+			Topic:          cfg.Topic,
+		})
+
+		if autoConnect {
+			go t.app.kafkaMgr.Connect(name)
+		}
+
+		t.app.pages.RemovePage("add-kafka")
+		t.Refresh()
+		t.app.focusCurrentTab()
+		t.app.setStatus(fmt.Sprintf("Added Kafka cluster: %s", name))
+	})
+
+	form.AddButton("Cancel", func() {
+		t.app.pages.RemovePage("add-kafka")
+		t.app.focusCurrentTab()
+	})
+
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			t.app.pages.RemovePage("add-kafka")
+			t.app.focusCurrentTab()
+			return nil
+		}
+		return event
+	})
+
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 24, 1, true).
+			AddItem(nil, 0, 1, false), 60, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	t.app.pages.AddPage("add-kafka", modal, true, true)
+	t.app.app.SetFocus(form)
+}
+
+func (t *KafkaTab) showEditDialog() {
+	name := t.getSelectedName()
+	if name == "" {
+		return
+	}
+
+	cfg := t.app.config.FindKafka(name)
+	if cfg == nil {
+		return
+	}
+
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle(" Edit Kafka Cluster ")
+
+	saslIdx := 0
+	switch cfg.SASLMechanism {
+	case "PLAIN":
+		saslIdx = 1
+	case "SCRAM-SHA-256":
+		saslIdx = 2
+	case "SCRAM-SHA-512":
+		saslIdx = 3
+	}
+
+	form.AddInputField("Name:", cfg.Name, 30, nil, nil)
+	form.AddInputField("Brokers:", strings.Join(cfg.Brokers, ", "), 40, nil, nil)
+	form.AddCheckbox("Use TLS:", cfg.UseTLS, nil)
+	form.AddDropDown("SASL:", []string{"None", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}, saslIdx, nil)
+	form.AddInputField("Username:", cfg.Username, 30, nil, nil)
+	form.AddPasswordField("Password:", cfg.Password, 30, '*', nil)
+	form.AddCheckbox("Publish Changes:", cfg.PublishChanges, nil)
+	form.AddInputField("Topic:", cfg.Topic, 30, nil, nil)
+	form.AddCheckbox("Auto-connect:", cfg.Enabled, nil)
+
+	originalName := cfg.Name
+
+	form.AddButton("Save", func() {
+		newName := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
+		brokers := form.GetFormItemByLabel("Brokers:").(*tview.InputField).GetText()
+		useTLS := form.GetFormItemByLabel("Use TLS:").(*tview.Checkbox).IsChecked()
+		newSaslIdx, _ := form.GetFormItemByLabel("SASL:").(*tview.DropDown).GetCurrentOption()
+		username := form.GetFormItemByLabel("Username:").(*tview.InputField).GetText()
+		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
+		publishChanges := form.GetFormItemByLabel("Publish Changes:").(*tview.Checkbox).IsChecked()
+		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
+		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
+
+		if newName == "" || brokers == "" {
+			t.app.showError("Error", "Name and brokers are required")
+			return
+		}
+
+		saslMechs := []string{"", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}
+		updated := config.KafkaConfig{
+			Name:           newName,
+			Enabled:        autoConnect,
+			Brokers:        strings.Split(brokers, ","),
+			UseTLS:         useTLS,
+			SASLMechanism:  saslMechs[newSaslIdx],
+			Username:       username,
+			Password:       password,
+			RequiredAcks:   cfg.RequiredAcks,
+			MaxRetries:     cfg.MaxRetries,
+			PublishChanges: publishChanges,
+			Topic:          topic,
+		}
+
+		// Trim whitespace from brokers
+		for i := range updated.Brokers {
+			updated.Brokers[i] = strings.TrimSpace(updated.Brokers[i])
+		}
+
+		t.app.config.UpdateKafka(originalName, updated)
+		t.app.SaveConfig()
+
+		// Update manager
+		t.app.kafkaMgr.RemoveCluster(originalName)
+		t.app.kafkaMgr.AddCluster(&kafka.Config{
+			Name:           updated.Name,
+			Enabled:        updated.Enabled,
+			Brokers:        updated.Brokers,
+			UseTLS:         updated.UseTLS,
+			SASLMechanism:  kafka.SASLMechanism(updated.SASLMechanism),
+			Username:       updated.Username,
+			Password:       updated.Password,
+			RequiredAcks:   updated.RequiredAcks,
+			MaxRetries:     updated.MaxRetries,
+			PublishChanges: updated.PublishChanges,
+			Topic:          updated.Topic,
+		})
+
+		if autoConnect {
+			go t.app.kafkaMgr.Connect(newName)
+		}
+
+		t.app.pages.RemovePage("edit-kafka")
+		t.Refresh()
+		t.app.focusCurrentTab()
+		t.app.setStatus(fmt.Sprintf("Updated Kafka cluster: %s", newName))
+	})
+
+	form.AddButton("Cancel", func() {
+		t.app.pages.RemovePage("edit-kafka")
+		t.app.focusCurrentTab()
+	})
+
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			t.app.pages.RemovePage("edit-kafka")
+			t.app.focusCurrentTab()
+			return nil
+		}
+		return event
+	})
+
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 24, 1, true).
+			AddItem(nil, 0, 1, false), 60, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	t.app.pages.AddPage("edit-kafka", modal, true, true)
+	t.app.app.SetFocus(form)
+}
+
+func (t *KafkaTab) removeSelected() {
+	name := t.getSelectedName()
+	if name == "" {
+		return
+	}
+
+	t.app.showConfirm("Remove Kafka Cluster", fmt.Sprintf("Remove %s?", name), func() {
+		t.app.kafkaMgr.Disconnect(name)
+		t.app.kafkaMgr.RemoveCluster(name)
+		t.app.config.RemoveKafka(name)
+		t.app.SaveConfig()
+		t.Refresh()
+		t.app.setStatus(fmt.Sprintf("Removed Kafka cluster: %s", name))
+	})
+}
+
+func (t *KafkaTab) connectSelected() {
+	name := t.getSelectedName()
+	if name == "" {
+		return
+	}
+
+	cfg := t.app.config.FindKafka(name)
+	if cfg == nil {
+		return
+	}
+
+	cfg.Enabled = true
+	t.app.SaveConfig()
+
+	t.app.setStatus(fmt.Sprintf("Connecting to %s...", name))
+	go func() {
+		err := t.app.kafkaMgr.Connect(name)
+		t.app.QueueUpdateDraw(func() {
+			if err != nil {
+				t.app.setStatus(fmt.Sprintf("Kafka connection failed: %v", err))
+				DebugLogError("Kafka %s connection failed: %v", name, err)
+			} else {
+				t.app.setStatus(fmt.Sprintf("Connected to Kafka: %s", name))
+				DebugLog("Kafka %s connected", name)
+				// Force publish all values if PublishChanges is enabled
+				if cfg.PublishChanges && cfg.Topic != "" {
+					go t.app.ForcePublishAllValuesToKafka()
+				}
+			}
+			t.Refresh()
+		})
+	}()
+}
+
+func (t *KafkaTab) disconnectSelected() {
+	name := t.getSelectedName()
+	if name == "" {
+		return
+	}
+
+	cfg := t.app.config.FindKafka(name)
+	if cfg != nil {
+		cfg.Enabled = false
+		t.app.SaveConfig()
+	}
+
+	t.app.kafkaMgr.Disconnect(name)
+	t.Refresh()
+	t.app.setStatus(fmt.Sprintf("Disconnected from Kafka: %s", name))
+}

@@ -20,6 +20,8 @@ WAR stands for "whispers across realms" - this application is intended to provid
 - **Valkey/Redis Publishing**: Store tag values in Valkey/Redis with key-value storage and Pub/Sub notifications
 - **Valkey Write-back**: Write to PLC tags via Valkey LIST queue with response notifications
 - **Valkey TLS/SSL**: Encrypted connections to Valkey/Redis servers
+- **Kafka Publishing**: Publish tag changes to Apache Kafka topics with exactly-once semantics
+- **Event Triggers**: Capture data snapshots on PLC events and publish to Kafka with acknowledgment support
 - **Multi-PLC Support**: Connect to and manage multiple PLCs simultaneously (12+ PLCs supported)
 - **Array Support**: Arrays of known types are published as native JSON arrays
 - **Configuration Persistence**: Save your PLC connections, tag selections, and settings to YAML
@@ -156,6 +158,24 @@ make macos
 - `c` - Connect
 - `C` - Disconnect
 
+### Kafka Tab
+- `a` - Add cluster
+- `e` - Edit selected
+- `r` - Remove selected
+- `c` - Connect
+- `C` - Disconnect
+
+### Triggers Tab
+- `a` - Add trigger
+- `e` - Edit selected trigger
+- `r` - Remove selected trigger
+- `t` - Add data tag to selected trigger
+- `x` - Remove data tag from selected trigger
+- `s` - Start/arm trigger
+- `S` - Stop trigger
+- `T` - Test fire trigger (manual test)
+- `Tab` - Switch between triggers table and data tags
+
 ## Configuration
 
 Configuration is stored in YAML format at `~/.warlogix/config.yaml` - you do not generally need to manually edit this:
@@ -198,6 +218,34 @@ valkey:
     key_ttl: 0s            # TTL for keys (0 = no expiry)
     publish_changes: true  # Publish to Pub/Sub on changes
     enable_writeback: false # Enable write-back queue
+
+kafka:
+  - name: LocalKafka
+    enabled: true
+    brokers:
+      - localhost:9092
+    topic: plc-events      # Default topic for triggers
+    publish_changes: false # Set true to publish all tag changes (separate from triggers)
+
+triggers:
+  - name: ProductComplete
+    enabled: true
+    plc: MainPLC
+    trigger_tag: Program:MainProgram.ProductReady  # Tag to monitor
+    condition:
+      operator: "=="       # ==, !=, >, <, >=, <=
+      value: true          # Fire when tag equals this value
+    ack_tag: Program:MainProgram.ProductAck        # Optional: write 1=success, -1=error
+    debounce_ms: 100       # Minimum time between fires
+    tags:                  # Data tags to capture when trigger fires
+      - Program:MainProgram.ProductID
+      - Program:MainProgram.BatchNumber
+      - Program:MainProgram.Quantity
+    kafka_cluster: LocalKafka
+    topic: production-events
+    metadata:              # Optional static metadata
+      line: "Line1"
+      station: "Station5"
 
 poll_rate: 1s
 ```
@@ -306,6 +354,151 @@ Write response format:
 
 ### TTL for Stale Detection
 Set `key_ttl` to a duration (e.g., `30s`, `1m`) to automatically expire keys. This allows consumers to detect stale data when the gateway stops updating.
+
+## Event Triggers
+
+Event Triggers provide a way to capture data from a PLC when a specific condition is met, and publish the captured data to Kafka. This is useful for event-driven architectures where you need to capture a snapshot of process data at a specific moment (e.g., when a product is complete, when a fault occurs, or when a cycle finishes).
+
+### How Triggers Work
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           TRIGGER DATA FLOW                             │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  ┌─────────┐         ┌──────────────┐         ┌─────────────────┐
+  │   PLC   │────────▶│   WarLogix   │────────▶│     Kafka       │
+  │         │         │   Trigger    │         │     Topic       │
+  └─────────┘         └──────────────┘         └─────────────────┘
+       │                     │                         │
+       │                     │                         ▼
+       │  1. Monitor         │  3. Publish        ┌─────────┐
+       │     Trigger Tag     │     JSON           │ Consumer│
+       │                     │     Message        │  App    │
+       ▼                     ▼                    └─────────┘
+  ┌─────────┐         ┌──────────────┐
+  │ Trigger │         │  2. Capture  │
+  │   Tag   │────────▶│     Data     │
+  │ = true  │ (edge)  │     Tags     │
+  └─────────┘         └──────────────┘
+       │                     │
+       │                     │  4. Write Ack
+       │                     │     (1=ok, -1=err)
+       ▼                     ▼
+  ┌─────────┐         ┌──────────────┐
+  │   Ack   │◀────────│   Ack Tag    │
+  │   Tag   │         │   Written    │
+  └─────────┘         └──────────────┘
+```
+
+1. **Monitor**: The trigger continuously monitors a "trigger tag" on the PLC (polling every 100ms)
+2. **Edge Detection**: When the trigger tag transitions from NOT meeting the condition to meeting it (rising edge), the trigger fires
+3. **Capture**: All configured "data tags" are read from the PLC and packaged into a JSON message
+4. **Publish**: The message is sent to the configured Kafka topic
+5. **Acknowledge**: If an ack tag is configured, WarLogix writes `1` for success or `-1` for error
+
+### Trigger States
+
+| State | Description |
+|-------|-------------|
+| **Disabled** | Trigger is not running |
+| **Armed** | Trigger is running and waiting for condition |
+| **Firing** | Trigger condition met, capturing and sending data |
+| **Cooldown** | Waiting for trigger tag to reset before re-arming |
+| **Error** | An error occurred (will auto-recover on condition reset) |
+
+### Condition Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `==` | Equal | `value == true` |
+| `!=` | Not equal | `value != 0` |
+| `>` | Greater than | `value > 100` |
+| `<` | Less than | `value < 50` |
+| `>=` | Greater or equal | `value >= 10` |
+| `<=` | Less or equal | `value <= 1000` |
+
+### Kafka Message Format
+
+When a trigger fires, it publishes a JSON message to Kafka:
+
+```json
+{
+  "trigger": "ProductComplete",
+  "timestamp": "2024-01-15T10:30:00.123456789Z",
+  "sequence": 42,
+  "plc": "MainPLC",
+  "metadata": {
+    "line": "Line1",
+    "station": "Station5"
+  },
+  "data": {
+    "Program:MainProgram.ProductID": 12345,
+    "Program:MainProgram.BatchNumber": "BATCH-001",
+    "Program:MainProgram.Quantity": 100
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `trigger` | Name of the trigger that fired |
+| `timestamp` | UTC timestamp with nanosecond precision |
+| `sequence` | Monotonically increasing sequence number (unique per session) |
+| `plc` | Name of the PLC the data was captured from |
+| `metadata` | Static key-value pairs configured on the trigger |
+| `data` | Captured tag values at the moment the trigger fired |
+
+### Acknowledgment Tags
+
+The ack tag feature allows the PLC program to know when data has been successfully captured:
+
+- **Success (1)**: Data was captured and sent to Kafka successfully
+- **Error (-1)**: An error occurred during capture or send
+
+This enables the PLC program to:
+- Wait for acknowledgment before proceeding
+- Retry or alarm if an error occurs
+- Track that events were successfully recorded
+
+### Example Use Cases
+
+**Production Tracking**: Capture product data when a "part complete" signal goes true
+```yaml
+triggers:
+  - name: PartComplete
+    plc: LineController
+    trigger_tag: Part_Complete
+    condition: { operator: "==", value: true }
+    tags: [Part_ID, Serial_Number, Cycle_Time, Quality_Score]
+    kafka_cluster: Production
+    topic: part-completions
+```
+
+**Fault Recording**: Capture machine state when a fault occurs
+```yaml
+triggers:
+  - name: MachineFault
+    plc: Machine1
+    trigger_tag: Fault_Active
+    condition: { operator: "==", value: true }
+    tags: [Fault_Code, Axis_Position, Motor_Current, Last_Command]
+    kafka_cluster: Maintenance
+    topic: machine-faults
+```
+
+**Batch Completion**: Capture batch summary when batch count reaches target
+```yaml
+triggers:
+  - name: BatchDone
+    plc: BatchController
+    trigger_tag: Batch_Count
+    condition: { operator: ">=", value: 1000 }
+    ack_tag: Batch_Ack
+    tags: [Batch_ID, Total_Count, Good_Count, Reject_Count, Start_Time, End_Time]
+    kafka_cluster: Quality
+    topic: batch-reports
+```
 
 ## Supported Data Types
 

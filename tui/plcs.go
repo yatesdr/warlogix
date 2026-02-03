@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
@@ -41,7 +42,7 @@ func (t *PLCsTab) setupUI() {
 	t.table.SetInputCapture(t.handleKeys)
 
 	// Set up headers
-	headers := []string{"", "Name", "Address", "Status", "Product"}
+	headers := []string{"", "Name", "Address", "Family", "Status", "Product"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
 			SetTextColor(tcell.ColorYellow).
@@ -53,7 +54,7 @@ func (t *PLCsTab) setupUI() {
 	buttonBar := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter).
-		SetText(" [yellow]d[white]iscover  [yellow]a[white]dd  [yellow]e[white]dit  [yellow]r[white]emove  [yellow]c[white]onnect  dis[yellow]C[white]onnect  [yellow]i[white]nfo ")
+		SetText(" [yellow]d[white]iscover  [yellow]a[white]dd  [yellow]e[white]dit  [yellow]r[white]emove  [yellow]c[white]onnect  dis[yellow]C[white]onnect  [yellow]i[white]nfo  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab ")
 	t.buttons = tview.NewFlex().AddItem(buttonBar, 0, 1, false)
 
 	// Create status bar
@@ -100,17 +101,32 @@ func (t *PLCsTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	return event
 }
 
+// getSelectedPLCName returns the name of the currently selected PLC from the table.
+func (t *PLCsTab) getSelectedPLCName() string {
+	row, _ := t.table.GetSelection()
+	if row <= 0 {
+		return ""
+	}
+	cell := t.table.GetCell(row, 1) // Column 1 is the Name column
+	if cell == nil {
+		return ""
+	}
+	return cell.Text
+}
+
 func (t *PLCsTab) onSelect(row, col int) {
 	if row <= 0 {
 		return
 	}
-	// Double-click/Enter toggles connection
-	plcs := t.app.manager.ListPLCs()
-	if row-1 >= len(plcs) {
+	// Get PLC name from the table cell, not by index
+	name := t.table.GetCell(row, 1).Text
+	if name == "" {
 		return
 	}
-	plc := plcs[row-1]
-	name := plc.Config.Name
+	plc := t.app.manager.GetPLC(name)
+	if plc == nil {
+		return
+	}
 	if plc.GetStatus() == plcman.StatusConnected {
 		// Disable auto-connect and disconnect in background
 		if cfg := t.app.config.FindPLC(name); cfg != nil {
@@ -147,6 +163,12 @@ func (t *PLCsTab) Refresh() {
 
 	// Add PLCs
 	plcs := t.app.manager.ListPLCs()
+
+	// Sort PLCs by name for consistent ordering
+	sort.Slice(plcs, func(i, j int) bool {
+		return plcs[i].Config.Name < plcs[j].Config.Name
+	})
+
 	for i, plc := range plcs {
 		row := i + 1
 
@@ -172,8 +194,9 @@ func (t *PLCsTab) Refresh() {
 		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
 		t.table.SetCell(row, 1, tview.NewTableCell(plc.Config.Name).SetExpansion(1))
 		t.table.SetCell(row, 2, tview.NewTableCell(plc.Config.Address).SetExpansion(1))
-		t.table.SetCell(row, 3, tview.NewTableCell(plc.GetStatus().String()).SetExpansion(1))
-		t.table.SetCell(row, 4, tview.NewTableCell(productName).SetExpansion(1))
+		t.table.SetCell(row, 3, tview.NewTableCell(plc.Config.GetFamily().String()).SetExpansion(1))
+		t.table.SetCell(row, 4, tview.NewTableCell(plc.GetStatus().String()).SetExpansion(1))
+		t.table.SetCell(row, 5, tview.NewTableCell(productName).SetExpansion(1))
 	}
 
 	// Update column widths
@@ -281,18 +304,23 @@ func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 		defaultName = dev.ProductName
 	}
 
+	familyOptions := []string{"logix", "micro800", "s7", "omron"}
+	selectedFamily := 0 // Default to logix
+
 	form.AddInputField("Name:", defaultName, 30, nil, nil)
 	form.AddInputField("Address:", defaultAddr, 30, nil, nil)
 	form.AddInputField("Slot:", defaultSlot, 5, func(text string, lastChar rune) bool {
 		_, err := strconv.Atoi(text)
 		return err == nil || text == ""
 	}, nil)
+	form.AddDropDown("Family:", familyOptions, selectedFamily, nil)
 	form.AddCheckbox("Auto-connect:", false, nil)
 
 	form.AddButton("Add", func() {
 		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
 		addr := form.GetFormItemByLabel("Address:").(*tview.InputField).GetText()
 		slotStr := form.GetFormItemByLabel("Slot:").(*tview.InputField).GetText()
+		familyIdx, _ := form.GetFormItemByLabel("Family:").(*tview.DropDown).GetCurrentOption()
 		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
 
 		if name == "" || addr == "" {
@@ -301,17 +329,22 @@ func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 		}
 
 		slot, _ := strconv.Atoi(slotStr)
+		family := config.PLCFamily(familyOptions[familyIdx])
 
 		cfg := config.PLCConfig{
 			Name:    name,
 			Address: addr,
 			Slot:    byte(slot),
+			Family:  family,
 			Enabled: autoConnect,
 		}
 
 		t.app.config.AddPLC(cfg)
-		t.app.manager.AddPLC(&t.app.config.PLCs[len(t.app.config.PLCs)-1])
 		t.app.SaveConfig()
+		// Get the pointer from config after it's been added
+		if addedCfg := t.app.config.FindPLC(name); addedCfg != nil {
+			t.app.manager.AddPLC(addedCfg)
+		}
 		t.app.UpdateMQTTPLCNames()
 
 		t.app.pages.RemovePage("add")
@@ -338,7 +371,7 @@ func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(form, 13, 1, true).
+			AddItem(form, 15, 1, true).
 			AddItem(nil, 0, 1, false), 50, 1, true).
 		AddItem(nil, 0, 1, false)
 
@@ -347,21 +380,28 @@ func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 }
 
 func (t *PLCsTab) showEditDialog() {
-	row, _ := t.table.GetSelection()
-	if row <= 0 {
+	name := t.getSelectedPLCName()
+	if name == "" {
 		return
 	}
 
-	plcs := t.app.manager.ListPLCs()
-	if row-1 >= len(plcs) {
+	plc := t.app.manager.GetPLC(name)
+	if plc == nil {
 		return
 	}
-
-	plc := plcs[row-1]
 	cfg := plc.Config
 
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(" Edit PLC ")
+
+	familyOptions := []string{"logix", "micro800", "s7", "omron"}
+	selectedFamily := 0
+	for i, opt := range familyOptions {
+		if config.PLCFamily(opt) == cfg.Family || (cfg.Family == "" && opt == "logix") {
+			selectedFamily = i
+			break
+		}
+	}
 
 	form.AddInputField("Name:", cfg.Name, 30, nil, nil)
 	form.AddInputField("Address:", cfg.Address, 30, nil, nil)
@@ -369,6 +409,7 @@ func (t *PLCsTab) showEditDialog() {
 		_, err := strconv.Atoi(text)
 		return err == nil || text == ""
 	}, nil)
+	form.AddDropDown("Family:", familyOptions, selectedFamily, nil)
 	form.AddCheckbox("Auto-connect:", cfg.Enabled, nil)
 
 	originalName := cfg.Name
@@ -377,6 +418,7 @@ func (t *PLCsTab) showEditDialog() {
 		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
 		addr := form.GetFormItemByLabel("Address:").(*tview.InputField).GetText()
 		slotStr := form.GetFormItemByLabel("Slot:").(*tview.InputField).GetText()
+		familyIdx, _ := form.GetFormItemByLabel("Family:").(*tview.DropDown).GetCurrentOption()
 		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
 
 		if name == "" || addr == "" {
@@ -385,11 +427,13 @@ func (t *PLCsTab) showEditDialog() {
 		}
 
 		slot, _ := strconv.Atoi(slotStr)
+		family := config.PLCFamily(familyOptions[familyIdx])
 
 		updated := config.PLCConfig{
 			Name:    name,
 			Address: addr,
 			Slot:    byte(slot),
+			Family:  family,
 			Enabled: autoConnect,
 			Tags:    cfg.Tags,
 		}
@@ -447,7 +491,7 @@ func (t *PLCsTab) showEditDialog() {
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(form, 13, 1, true).
+			AddItem(form, 15, 1, true).
 			AddItem(nil, 0, 1, false), 50, 1, true).
 		AddItem(nil, 0, 1, false)
 
@@ -456,18 +500,10 @@ func (t *PLCsTab) showEditDialog() {
 }
 
 func (t *PLCsTab) removeSelected() {
-	row, _ := t.table.GetSelection()
-	if row <= 0 {
+	name := t.getSelectedPLCName()
+	if name == "" {
 		return
 	}
-
-	plcs := t.app.manager.ListPLCs()
-	if row-1 >= len(plcs) {
-		return
-	}
-
-	plc := plcs[row-1]
-	name := plc.Config.Name
 
 	t.app.showConfirm("Remove PLC", fmt.Sprintf("Remove %s?", name), func() {
 		t.app.config.RemovePLC(name)
@@ -488,18 +524,15 @@ func (t *PLCsTab) removeSelected() {
 }
 
 func (t *PLCsTab) connectSelected() {
-	row, _ := t.table.GetSelection()
-	if row <= 0 {
+	name := t.getSelectedPLCName()
+	if name == "" {
 		return
 	}
 
-	plcs := t.app.manager.ListPLCs()
-	if row-1 >= len(plcs) {
+	plc := t.app.manager.GetPLC(name)
+	if plc == nil {
 		return
 	}
-
-	plc := plcs[row-1]
-	name := plc.Config.Name
 	t.app.setStatus(fmt.Sprintf("Connecting to %s...", name))
 
 	// Enable auto-connect so it stays connected
@@ -526,18 +559,10 @@ func (t *PLCsTab) connectSelected() {
 }
 
 func (t *PLCsTab) disconnectSelected() {
-	row, _ := t.table.GetSelection()
-	if row <= 0 {
+	name := t.getSelectedPLCName()
+	if name == "" {
 		return
 	}
-
-	plcs := t.app.manager.ListPLCs()
-	if row-1 >= len(plcs) {
-		return
-	}
-
-	plc := plcs[row-1]
-	name := plc.Config.Name
 	t.app.setStatus(fmt.Sprintf("Disconnecting from %s...", name))
 
 	// Disable auto-connect to prevent auto-reconnect
@@ -556,17 +581,15 @@ func (t *PLCsTab) disconnectSelected() {
 }
 
 func (t *PLCsTab) showInfoDialog() {
-	row, _ := t.table.GetSelection()
-	if row <= 0 {
+	name := t.getSelectedPLCName()
+	if name == "" {
 		return
 	}
 
-	plcs := t.app.manager.ListPLCs()
-	if row-1 >= len(plcs) {
+	plc := t.app.manager.GetPLC(name)
+	if plc == nil {
 		return
 	}
-
-	plc := plcs[row-1]
 	identity := plc.GetIdentity()
 
 	// Build info text

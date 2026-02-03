@@ -10,6 +10,7 @@ import (
 
 	"warlogix/config"
 	"warlogix/logix"
+	"warlogix/s7"
 )
 
 // ConnectionStatus represents the state of a PLC connection.
@@ -37,18 +38,26 @@ func (s ConnectionStatus) String() string {
 	}
 }
 
+// MaxConnectRetries is the maximum number of connection attempts before giving up.
+const MaxConnectRetries = 5
+
 // ManagedPLC represents a PLC under management.
 type ManagedPLC struct {
-	Config    *config.PLCConfig
-	Client    *logix.Client
-	Identity  *logix.DeviceInfo
-	Programs  []string
-	Tags      []logix.TagInfo
-	Values    map[string]*logix.TagValue
-	Status    ConnectionStatus
-	LastError error
-	LastPoll  time.Time
-	mu        sync.RWMutex
+	Config       *config.PLCConfig
+	Client       *logix.Client    // For Logix/Micro800 PLCs
+	S7Client     *s7.Client       // For Siemens S7 PLCs
+	Identity     *logix.DeviceInfo
+	S7Info       *s7.CPUInfo
+	Programs     []string
+	Tags         []logix.TagInfo  // Discovered tags (for discovery-capable PLCs)
+	ManualTags   []logix.TagInfo  // Tags from config (for non-discovery PLCs)
+	Values       map[string]*logix.TagValue
+	Status       ConnectionStatus
+	LastError    error
+	LastPoll     time.Time
+	ConnRetries  int  // Number of consecutive failed connection attempts
+	RetryLimited bool // True if retry limit reached, stops auto-reconnect
+	mu           sync.RWMutex
 }
 
 // GetStatus returns the current connection status thread-safely.
@@ -73,6 +82,22 @@ func (m *ManagedPLC) IsTagWritable(tagName string) bool {
 	return false
 }
 
+// GetTagInfo returns whether a tag exists and if it's writable, thread-safely.
+// Returns (found, writable).
+func (m *ManagedPLC) GetTagInfo(tagName string) (bool, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.Config == nil {
+		return false, false
+	}
+	for _, tag := range m.Config.Tags {
+		if tag.Name == tagName {
+			return true, tag.Writable
+		}
+	}
+	return false, false
+}
+
 // GetError returns the last error thread-safely.
 func (m *ManagedPLC) GetError() error {
 	m.mu.RLock()
@@ -91,11 +116,56 @@ func (m *ManagedPLC) GetValues() map[string]*logix.TagValue {
 	return result
 }
 
-// GetTags returns the discovered tags.
+// GetTags returns the appropriate tags based on PLC family.
+// For discovery-capable PLCs (logix), returns discovered tags.
+// For non-discovery PLCs (micro800, s7, omron), returns manual tags from config.
 func (m *ManagedPLC) GetTags() []logix.TagInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.Tags
+	if m.Config.GetFamily().SupportsDiscovery() {
+		return m.Tags
+	}
+	return m.ManualTags
+}
+
+// BuildManualTags creates TagInfo entries from config.Tags for non-discovery PLCs.
+func (m *ManagedPLC) BuildManualTags() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.ManualTags = nil
+	if m.Config == nil {
+		return
+	}
+
+	family := m.Config.GetFamily()
+
+	for _, sel := range m.Config.Tags {
+		var typeCode uint16
+		var ok bool
+
+		// Use appropriate type lookup based on family
+		if family == config.FamilyS7 {
+			typeCode, ok = s7.TypeCodeFromName(sel.DataType)
+			if !ok {
+				// Default to DINT for S7
+				typeCode = s7.TypeDInt
+			}
+		} else {
+			typeCode, ok = logix.TypeCodeFromName(sel.DataType)
+			if !ok {
+				// Default to DINT for Logix
+				typeCode = logix.TypeDINT
+			}
+		}
+
+		tagInfo := logix.TagInfo{
+			Name:     sel.Name,
+			TypeCode: typeCode,
+			Instance: 0, // Not applicable for manual tags
+		}
+		m.ManualTags = append(m.ManualTags, tagInfo)
+	}
 }
 
 // GetPrograms returns the discovered programs.
@@ -116,10 +186,13 @@ func (m *ManagedPLC) GetIdentity() *logix.DeviceInfo {
 func (m *ManagedPLC) GetConnectionMode() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.Client == nil {
-		return "Not connected"
+	if m.S7Client != nil {
+		return m.S7Client.ConnectionMode()
 	}
-	return m.Client.ConnectionMode()
+	if m.Client != nil {
+		return m.Client.ConnectionMode()
+	}
+	return "Not connected"
 }
 
 // ValueChange represents a tag value that has changed.
@@ -205,14 +278,22 @@ func (w *PLCWorker) pollLoop() {
 func (w *PLCWorker) poll() {
 	plc := w.plc
 
-	// Check if auto-reconnect is needed
-	w.checkAutoReconnect()
-
 	plc.mu.RLock()
 	client := plc.Client
+	s7Client := plc.S7Client
 	status := plc.Status
 	cfg := plc.Config
 	plcName := cfg.Name
+	family := cfg.GetFamily()
+	// Copy the tags to read while holding the lock to avoid race with UI
+	tagsToRead := make([]string, 0)
+	writableMap := make(map[string]bool)
+	for _, sel := range cfg.Tags {
+		if sel.Enabled {
+			tagsToRead = append(tagsToRead, sel.Name)
+		}
+		writableMap[sel.Name] = sel.Writable
+	}
 	oldValues := make(map[string]interface{})
 	for k, v := range plc.Values {
 		if v != nil && v.Error == nil {
@@ -221,21 +302,15 @@ func (w *PLCWorker) poll() {
 	}
 	plc.mu.RUnlock()
 
-	if status != StatusConnected || client == nil {
+	// Check if we have a valid connection
+	hasConnection := (family == config.FamilyS7 && s7Client != nil) || (family != config.FamilyS7 && client != nil)
+	if status != StatusConnected || !hasConnection {
 		w.statsMu.Lock()
 		w.tagsPolled = 0
 		w.changesFound = 0
 		w.lastError = nil
 		w.statsMu.Unlock()
 		return
-	}
-
-	// Determine which tags to read
-	tagsToRead := []string{}
-	for _, sel := range cfg.Tags {
-		if sel.Enabled {
-			tagsToRead = append(tagsToRead, sel.Name)
-		}
 	}
 
 	if len(tagsToRead) == 0 {
@@ -247,8 +322,16 @@ func (w *PLCWorker) poll() {
 		return
 	}
 
-	// Read selected tags - this is the blocking I/O operation
-	values, err := client.Read(tagsToRead...)
+	// Read selected tags based on family type
+	var values []*logix.TagValue
+	var err error
+
+	if family == config.FamilyS7 {
+		values, err = w.pollS7(s7Client, tagsToRead)
+	} else {
+		values, err = client.Read(tagsToRead...)
+	}
+
 	if err != nil {
 		plc.mu.Lock()
 		plc.LastError = err
@@ -268,13 +351,7 @@ func (w *PLCWorker) poll() {
 	// Detect changes and update values
 	var changes []ValueChange
 	plc.mu.Lock()
-	// Build writable map inside the lock to avoid calling IsTagWritable (which also locks)
-	writableMap := make(map[string]bool)
-	if plc.Config != nil {
-		for _, tag := range plc.Config.Tags {
-			writableMap[tag.Name] = tag.Writable
-		}
-	}
+	// writableMap was already built above while holding the lock
 	for _, v := range values {
 		if v.Error == nil {
 			newVal := v.GoValue()
@@ -308,25 +385,26 @@ func (w *PLCWorker) poll() {
 	w.manager.markStatusDirty()
 }
 
-func (w *PLCWorker) checkAutoReconnect() {
-	plc := w.plc
-
-	plc.mu.RLock()
-	status := plc.Status
-	enabled := plc.Config.Enabled
-	plc.mu.RUnlock()
-
-	// Only auto-reconnect if enabled and currently disconnected or in error state
-	if !enabled {
-		return
-	}
-	if status == StatusConnected || status == StatusConnecting {
-		return
+// pollS7 reads tags from an S7 PLC and converts them to logix.TagValue format.
+func (w *PLCWorker) pollS7(client *s7.Client, addresses []string) ([]*logix.TagValue, error) {
+	s7Values, err := client.Read(addresses...)
+	if err != nil {
+		return nil, err
 	}
 
-	// Attempt reconnection (runs in this worker's goroutine)
-	w.manager.connectPLC(plc)
+	// Convert S7 TagValues to logix TagValues for compatibility
+	results := make([]*logix.TagValue, len(s7Values))
+	for i, sv := range s7Values {
+		results[i] = &logix.TagValue{
+			Name:     sv.Name,
+			DataType: sv.DataType,
+			Bytes:    sv.Bytes,
+			Error:    sv.Error,
+		}
+	}
+	return results, nil
 }
+
 
 // Manager manages multiple PLC connections and polling.
 type Manager struct {
@@ -352,6 +430,10 @@ type Manager struct {
 	// Aggregated stats
 	lastPollStats PollStats
 	statsMu       sync.RWMutex
+
+	// Track in-progress reconnections to prevent duplicates
+	reconnecting   map[string]bool
+	reconnectingMu sync.Mutex
 }
 
 // NewManager creates a new PLC manager.
@@ -365,6 +447,7 @@ func NewManager(pollRate time.Duration) *Manager {
 		pollRate:      pollRate,
 		batchInterval: 100 * time.Millisecond, // Batch UI updates every 100ms
 		changeChan:    make(chan []ValueChange, 100),
+		reconnecting:  make(map[string]bool),
 	}
 }
 
@@ -446,8 +529,13 @@ func (m *Manager) RemovePLC(name string) error {
 		worker.Stop()
 	}
 
-	if exists && plc.Client != nil {
-		plc.Client.Close()
+	if exists {
+		if plc.Client != nil {
+			plc.Client.Close()
+		}
+		if plc.S7Client != nil {
+			plc.S7Client.Close()
+		}
 	}
 
 	m.markStatusDirty()
@@ -459,20 +547,35 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	plc.mu.Lock()
 	plc.Status = StatusConnecting
 	plc.LastError = nil
+	family := plc.Config.GetFamily()
+	address := plc.Config.Address
+	slot := plc.Config.Slot
 	plc.mu.Unlock()
 	m.markStatusDirty()
 
-	// Build connection options
-	opts := []logix.Option{}
-	if plc.Config.Slot > 0 {
-		opts = append(opts, logix.WithSlot(plc.Config.Slot))
+	// Handle S7 family separately
+	if family == config.FamilyS7 {
+		return m.connectS7PLC(plc, address, int(slot))
 	}
 
-	client, err := logix.Connect(plc.Config.Address, opts...)
+	// Logix/Micro800 connection
+	opts := []logix.Option{}
+	if slot > 0 {
+		opts = append(opts, logix.WithSlot(slot))
+	}
+
+	client, err := logix.Connect(address, opts...)
 	if err != nil {
 		plc.mu.Lock()
-		plc.Status = StatusError
-		plc.LastError = err
+		plc.ConnRetries++
+		if plc.ConnRetries >= MaxConnectRetries {
+			plc.RetryLimited = true
+			plc.Status = StatusDisconnected
+			plc.LastError = fmt.Errorf("retry limit reached (%d attempts): %w", MaxConnectRetries, err)
+		} else {
+			plc.Status = StatusError
+			plc.LastError = err
+		}
 		plc.mu.Unlock()
 		m.markStatusDirty()
 		return err
@@ -481,9 +584,14 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	// Get identity
 	identity, _ := client.Identity()
 
-	// Discover programs and tags
-	programs, _ := client.Programs()
-	tags, _ := client.AllTags()
+	var programs []string
+	var tags []logix.TagInfo
+
+	// Only discover programs and tags for discovery-capable PLCs
+	if family.SupportsDiscovery() {
+		programs, _ = client.Programs()
+		tags, _ = client.AllTags()
+	}
 
 	plc.mu.Lock()
 	plc.Client = client
@@ -491,7 +599,61 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	plc.Programs = programs
 	plc.Tags = tags
 	plc.Status = StatusConnected
+	plc.ConnRetries = 0     // Reset on successful connection
+	plc.RetryLimited = false // Clear retry limit on success
 	plc.mu.Unlock()
+
+	// For non-discovery PLCs, build manual tags from config
+	if !family.SupportsDiscovery() {
+		plc.BuildManualTags()
+	}
+
+	m.markStatusDirty()
+
+	return nil
+}
+
+// connectS7PLC handles S7 PLC connections.
+func (m *Manager) connectS7PLC(plc *ManagedPLC, address string, slot int) error {
+	// S7-1200/1500 typically use rack 0, slot 0 or 1
+	// The slot in our config will be used as S7 slot
+	rack := 0
+	s7Slot := slot
+	if s7Slot == 0 {
+		s7Slot = 1 // Default to slot 1 for S7-300/400 compatibility
+	}
+
+	s7Client, err := s7.Connect(address, s7.WithRackSlot(rack, s7Slot))
+	if err != nil {
+		plc.mu.Lock()
+		plc.ConnRetries++
+		if plc.ConnRetries >= MaxConnectRetries {
+			plc.RetryLimited = true
+			plc.Status = StatusDisconnected
+			plc.LastError = fmt.Errorf("retry limit reached (%d attempts): %w", MaxConnectRetries, err)
+		} else {
+			plc.Status = StatusError
+			plc.LastError = err
+		}
+		plc.mu.Unlock()
+		m.markStatusDirty()
+		return err
+	}
+
+	// Get CPU info
+	cpuInfo, _ := s7Client.GetCPUInfo()
+
+	plc.mu.Lock()
+	plc.S7Client = s7Client
+	plc.S7Info = cpuInfo
+	plc.Status = StatusConnected
+	plc.ConnRetries = 0
+	plc.RetryLimited = false
+	plc.mu.Unlock()
+
+	// Build manual tags from config (S7 doesn't support discovery)
+	plc.BuildManualTags()
+
 	m.markStatusDirty()
 
 	return nil
@@ -507,6 +669,12 @@ func (m *Manager) Connect(name string) error {
 	if !exists {
 		return fmt.Errorf("PLC not found: %s", name)
 	}
+
+	// Reset retry state for manual connection attempts
+	plc.mu.Lock()
+	plc.ConnRetries = 0
+	plc.RetryLimited = false
+	plc.mu.Unlock()
 
 	// Run connection in a separate goroutine to not block UI
 	go m.connectPLC(plc)
@@ -528,9 +696,14 @@ func (m *Manager) Disconnect(name string) error {
 		plc.Client.Close()
 		plc.Client = nil
 	}
+	if plc.S7Client != nil {
+		plc.S7Client.Close()
+		plc.S7Client = nil
+	}
 	plc.Status = StatusDisconnected
 	plc.LastError = nil
 	plc.Identity = nil
+	plc.S7Info = nil
 	plc.mu.Unlock()
 	m.markStatusDirty()
 
@@ -580,6 +753,10 @@ func (m *Manager) Start() {
 	// Start the stats aggregator
 	m.wg.Add(1)
 	go m.statsAggregatorLoop()
+
+	// Start the reconnection watchdog
+	m.wg.Add(1)
+	go m.watchdogLoop()
 }
 
 // Stop halts all background polling.
@@ -710,20 +887,115 @@ func (m *Manager) aggregateStats() {
 	m.statsMu.Unlock()
 }
 
+// watchdogLoop periodically checks for disconnected PLCs and attempts reconnection.
+// Runs every 1 minute for PLCs that have auto-connect enabled.
+func (m *Manager) watchdogLoop() {
+	defer m.wg.Done()
+
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.checkReconnections()
+		}
+	}
+}
+
+// checkReconnections attempts to reconnect PLCs that are disconnected and have auto-connect enabled.
+func (m *Manager) checkReconnections() {
+	m.mu.RLock()
+	plcs := make([]*ManagedPLC, 0, len(m.plcs))
+	for _, plc := range m.plcs {
+		plcs = append(plcs, plc)
+	}
+	m.mu.RUnlock()
+
+	for _, plc := range plcs {
+		plc.mu.RLock()
+		status := plc.Status
+		enabled := plc.Config.Enabled
+		name := plc.Config.Name
+		plc.mu.RUnlock()
+
+		// Only attempt reconnection if:
+		// - Auto-connect is enabled
+		// - PLC is disconnected or in error state (not connected or connecting)
+		if !enabled {
+			continue
+		}
+		if status == StatusConnected || status == StatusConnecting {
+			continue
+		}
+
+		// Check if reconnection is already in progress for this PLC
+		m.reconnectingMu.Lock()
+		if m.reconnecting[name] {
+			m.reconnectingMu.Unlock()
+			continue // Skip - reconnection already in progress
+		}
+		m.reconnecting[name] = true
+		m.reconnectingMu.Unlock()
+
+		// Attempt reconnection in a separate goroutine to not block the watchdog
+		go func(p *ManagedPLC, n string) {
+			defer func() {
+				m.reconnectingMu.Lock()
+				delete(m.reconnecting, n)
+				m.reconnectingMu.Unlock()
+			}()
+
+			// Reset retry state before attempting reconnection
+			p.mu.Lock()
+			p.ConnRetries = 0
+			p.RetryLimited = false
+			p.mu.Unlock()
+
+			m.connectPLC(p)
+		}(plc, name)
+	}
+}
+
 // ReadTag reads a single tag from a connected PLC.
 func (m *Manager) ReadTag(plcName, tagName string) (*logix.TagValue, error) {
 	m.mu.RLock()
 	plc, exists := m.plcs[plcName]
 	m.mu.RUnlock()
 
-	if !exists || plc.Client == nil {
+	if !exists {
 		return nil, nil
 	}
 
 	plc.mu.RLock()
 	client := plc.Client
+	s7Client := plc.S7Client
+	family := plc.Config.GetFamily()
 	plc.mu.RUnlock()
 
+	// Handle S7 PLCs
+	if family == config.FamilyS7 {
+		if s7Client == nil {
+			return nil, nil
+		}
+		s7Values, err := s7Client.Read(tagName)
+		if err != nil {
+			return nil, err
+		}
+		if len(s7Values) > 0 {
+			return &logix.TagValue{
+				Name:     s7Values[0].Name,
+				DataType: s7Values[0].DataType,
+				Bytes:    s7Values[0].Bytes,
+				Error:    s7Values[0].Error,
+			}, nil
+		}
+		return nil, nil
+	}
+
+	// Handle Logix/Micro800 PLCs
 	if client == nil {
 		return nil, nil
 	}
@@ -750,10 +1022,25 @@ func (m *Manager) WriteTag(plcName, tagName string, value interface{}) error {
 
 	plc.mu.RLock()
 	client := plc.Client
+	s7Client := plc.S7Client
 	status := plc.Status
+	family := plc.Config.GetFamily()
 	plc.mu.RUnlock()
 
-	if client == nil || status != StatusConnected {
+	if status != StatusConnected {
+		return fmt.Errorf("PLC not connected: %s", plcName)
+	}
+
+	// Handle S7 PLCs
+	if family == config.FamilyS7 {
+		if s7Client == nil {
+			return fmt.Errorf("S7 PLC not connected: %s", plcName)
+		}
+		return s7Client.Write(tagName, value)
+	}
+
+	// Handle Logix/Micro800 PLCs
+	if client == nil {
 		return fmt.Errorf("PLC not connected: %s", plcName)
 	}
 
@@ -839,6 +1126,24 @@ func (m *Manager) GetAllCurrentValues() []ValueChange {
 	return results
 }
 
+// RefreshManualTags rebuilds manual tags from config for a specific PLC.
+// Called after UI adds/removes tags for non-discovery PLCs.
+func (m *Manager) RefreshManualTags(name string) {
+	m.mu.RLock()
+	plc, exists := m.plcs[name]
+	m.mu.RUnlock()
+
+	if !exists || plc == nil {
+		return
+	}
+
+	// Only rebuild for non-discovery PLCs
+	if !plc.Config.GetFamily().SupportsDiscovery() {
+		plc.BuildManualTags()
+		m.markStatusDirty()
+	}
+}
+
 // GetTagType returns the data type code for a tag.
 // Returns 0 if the tag type cannot be determined.
 func (m *Manager) GetTagType(plcName, tagName string) uint16 {
@@ -872,4 +1177,106 @@ func (m *Manager) GetTagType(plcName, tagName string) uint16 {
 	}
 
 	return values[0].DataType
+}
+
+// ReadTagValue reads a single tag and returns its Go value.
+// This implements the trigger.TagReader interface.
+func (m *Manager) ReadTagValue(plcName, tagName string) (interface{}, error) {
+	val, err := m.ReadTag(plcName, tagName)
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, fmt.Errorf("tag not found: %s", tagName)
+	}
+	if val.Error != nil {
+		return nil, val.Error
+	}
+	return val.GoValue(), nil
+}
+
+// ReadTagValues reads multiple tags and returns their Go values.
+// This implements the trigger.TagReader interface.
+func (m *Manager) ReadTagValues(plcName string, tagNames []string) (map[string]interface{}, error) {
+	m.mu.RLock()
+	plc, exists := m.plcs[plcName]
+	m.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("PLC not found: %s", plcName)
+	}
+
+	plc.mu.RLock()
+	client := plc.Client
+	s7Client := plc.S7Client
+	status := plc.Status
+	family := plc.Config.GetFamily()
+	plc.mu.RUnlock()
+
+	if status != StatusConnected {
+		return nil, fmt.Errorf("PLC not connected: %s", plcName)
+	}
+
+	result := make(map[string]interface{})
+
+	// Handle S7 PLCs
+	if family == config.FamilyS7 {
+		if s7Client == nil {
+			return nil, fmt.Errorf("S7 client not available")
+		}
+		s7Values, err := s7Client.Read(tagNames...)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range s7Values {
+			if v.Error == nil {
+				result[v.Name] = v.GoValue()
+			} else {
+				result[v.Name] = nil
+			}
+		}
+		return result, nil
+	}
+
+	// Handle Logix/Micro800 PLCs
+	if client == nil {
+		return nil, fmt.Errorf("client not available")
+	}
+	values, err := client.Read(tagNames...)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range values {
+		if v.Error == nil {
+			result[v.Name] = v.GoValue()
+		} else {
+			result[v.Name] = nil
+		}
+	}
+	return result, nil
+}
+
+// TriggerTagReader wraps the Manager to implement the trigger.TagReader interface.
+type TriggerTagReader struct {
+	Manager *Manager
+}
+
+// ReadTag implements trigger.TagReader.
+func (r *TriggerTagReader) ReadTag(plcName, tagName string) (interface{}, error) {
+	return r.Manager.ReadTagValue(plcName, tagName)
+}
+
+// ReadTags implements trigger.TagReader.
+func (r *TriggerTagReader) ReadTags(plcName string, tagNames []string) (map[string]interface{}, error) {
+	return r.Manager.ReadTagValues(plcName, tagNames)
+}
+
+// TriggerTagWriter wraps the Manager to implement the trigger.TagWriter interface.
+type TriggerTagWriter struct {
+	Manager *Manager
+}
+
+// WriteTag implements trigger.TagWriter.
+func (w *TriggerTagWriter) WriteTag(plcName, tagName string, value interface{}) error {
+	return w.Manager.WriteTag(plcName, tagName, value)
 }

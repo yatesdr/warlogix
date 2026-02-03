@@ -11,8 +11,10 @@ import (
 
 	"warlogix/api"
 	"warlogix/config"
+	"warlogix/kafka"
 	"warlogix/mqtt"
 	"warlogix/plcman"
+	"warlogix/trigger"
 	"warlogix/tui"
 	"warlogix/valkey"
 )
@@ -32,6 +34,13 @@ type tuiValkeyDebugLogger struct{}
 
 func (t tuiValkeyDebugLogger) LogValkey(format string, args ...interface{}) {
 	tui.DebugLogValkey(format, args...)
+}
+
+// tuiKafkaDebugLogger adapts the TUI debug logging for Kafka.
+type tuiKafkaDebugLogger struct{}
+
+func (t tuiKafkaDebugLogger) LogKafka(format string, args ...interface{}) {
+	tui.DebugLogKafka(format, args...)
 }
 
 func main() {
@@ -69,17 +78,45 @@ func main() {
 	valkeyMgr := valkey.NewManager()
 	valkeyMgr.LoadFromConfig(cfg.Valkey)
 
+	// Create Kafka manager
+	kafkaMgr := kafka.NewManager()
+	for i := range cfg.Kafka {
+		kc := cfg.Kafka[i]
+		kafkaMgr.AddCluster(&kafka.Config{
+			Name:           kc.Name,
+			Enabled:        kc.Enabled,
+			Brokers:        kc.Brokers,
+			UseTLS:         kc.UseTLS,
+			TLSSkipVerify:  kc.TLSSkipVerify,
+			SASLMechanism:  kafka.SASLMechanism(kc.SASLMechanism),
+			Username:       kc.Username,
+			Password:       kc.Password,
+			RequiredAcks:   kc.RequiredAcks,
+			MaxRetries:     kc.MaxRetries,
+			RetryBackoff:   kc.RetryBackoff,
+			PublishChanges: kc.PublishChanges,
+			Topic:          kc.Topic,
+		})
+	}
+
+	// Create trigger manager with PLC manager as reader/writer
+	tagReader := &plcman.TriggerTagReader{Manager: manager}
+	tagWriter := &plcman.TriggerTagWriter{Manager: manager}
+	triggerMgr := trigger.NewManager(kafkaMgr, tagReader, tagWriter)
+	triggerMgr.LoadFromConfig(cfg.Triggers)
+
 	// Set up publishing on value changes
-	// MQTT and Valkey run in separate goroutines to avoid blocking each other
+	// MQTT, Valkey, and Kafka run in separate goroutines to avoid blocking each other
 	manager.SetOnValueChange(func(changes []plcman.ValueChange) {
 		// Check running status without blocking
 		mqttRunning := mqttMgr.AnyRunning()
 		valkeyRunning := valkeyMgr.AnyRunning()
+		kafkaPublishing := kafkaMgr.AnyPublishing()
 
-		tui.DebugLog("OnValueChange: %d changes, MQTT running: %v, Valkey running: %v",
-			len(changes), mqttRunning, valkeyRunning)
+		tui.DebugLog("OnValueChange: %d changes, MQTT: %v, Valkey: %v, Kafka: %v",
+			len(changes), mqttRunning, valkeyRunning, kafkaPublishing)
 
-		if !mqttRunning && !valkeyRunning {
+		if !mqttRunning && !valkeyRunning && !kafkaPublishing {
 			return
 		}
 
@@ -101,6 +138,16 @@ func main() {
 			go func() {
 				for _, c := range changesCopy {
 					valkeyMgr.Publish(c.PLCName, c.TagName, c.TypeName, c.Value, c.Writable)
+				}
+			}()
+		}
+
+		// Publish to Kafka in its own goroutine (if PublishChanges enabled)
+		if kafkaPublishing {
+			go func() {
+				for _, c := range changesCopy {
+					// Use force=true since OnValueChange already confirms this is a changed value
+					kafkaMgr.Publish(c.PLCName, c.TagName, c.TypeName, c.Value, c.Writable, true)
 				}
 			}()
 		}
@@ -163,13 +210,16 @@ func main() {
 	})
 
 	// Create TUI app first (this sets up the debug logger)
-	app := tui.NewApp(cfg, *configPath, manager, apiServer, mqttMgr, valkeyMgr)
+	app := tui.NewApp(cfg, *configPath, manager, apiServer, mqttMgr, valkeyMgr, kafkaMgr, triggerMgr)
 
 	// Set up MQTT debug logging to the TUI debug tab
 	mqtt.SetDebugLogger(tuiDebugLogger{})
 
 	// Set up Valkey debug logging to the TUI debug tab
 	valkey.SetDebugLogger(tuiValkeyDebugLogger{})
+
+	// Set up Kafka debug logging to the TUI debug tab
+	kafka.SetDebugLogger(tuiKafkaDebugLogger{})
 
 	// Set up Valkey on-connect callback to publish all values
 	valkeyMgr.SetOnConnectCallback(func() {
@@ -204,6 +254,17 @@ func main() {
 			app.ForcePublishAllValuesToValkey()
 		}
 	}()
+
+	// Auto-connect enabled Kafka clusters in background
+	go kafkaMgr.ConnectEnabled()
+
+	// Set up trigger debug logging
+	triggerMgr.SetLogFunc(func(format string, args ...interface{}) {
+		tui.DebugLog(format, args...)
+	})
+
+	// Auto-start enabled triggers
+	triggerMgr.Start()
 
 	// Run TUI (Shutdown handles all cleanup)
 	if err := app.Run(); err != nil {

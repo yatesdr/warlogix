@@ -11,6 +11,7 @@ import (
 	"warlogix/config"
 	"warlogix/logix"
 	"warlogix/plcman"
+	"warlogix/s7"
 )
 
 // BrowserTab handles the tag browser tab.
@@ -23,11 +24,13 @@ type BrowserTab struct {
 	details   *tview.TextView
 	statusBar *tview.TextView
 
-	selectedPLC  string
-	treeRoot     *tview.TreeNode
-	tagNodes     map[string]*tview.TreeNode // Tag name -> tree node for quick lookup
-	enabledTags  map[string]bool            // Tag name -> enabled for current PLC
-	writableTags map[string]bool            // Tag name -> writable for current PLC
+	selectedPLC       string
+	lastPLCOptions    []string // Track dropdown options to avoid unnecessary updates
+	updatingDropdown  bool     // True when programmatically updating dropdown
+	treeRoot          *tview.TreeNode
+	tagNodes          map[string]*tview.TreeNode // Tag name -> tree node for quick lookup
+	enabledTags       map[string]bool            // Tag name -> enabled for current PLC
+	writableTags      map[string]bool            // Tag name -> writable for current PLC
 }
 
 // NewBrowserTab creates a new browser tab.
@@ -50,7 +53,10 @@ func (t *BrowserTab) setupUI() {
 	t.plcSelect.SetSelectedFunc(func(text string, index int) {
 		t.selectedPLC = text
 		t.loadTags()
-		t.app.app.SetFocus(t.tree)
+		// Only change focus if this was a user selection, not programmatic
+		if !t.updatingDropdown {
+			t.app.app.SetFocus(t.tree)
+		}
 	})
 	t.plcSelect.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
@@ -166,9 +172,42 @@ func (t *BrowserTab) handleTreeKeys(event *tcell.EventKey) *tcell.EventKey {
 			t.toggleNodeWritable(node)
 		}
 		return nil
+	case 'a':
+		// Add manual tag (only for non-discovery PLCs)
+		if t.isManualPLC() {
+			t.showAddTagDialog()
+		}
+		return nil
+	case 'e':
+		// Edit manual tag (only for non-discovery PLCs)
+		if t.isManualPLC() {
+			node := t.tree.GetCurrentNode()
+			if node != nil {
+				t.showEditTagDialog(node)
+			}
+		}
+		return nil
+	case 'x':
+		// Delete manual tag (only for non-discovery PLCs)
+		if t.isManualPLC() {
+			node := t.tree.GetCurrentNode()
+			if node != nil {
+				t.deleteManualTag(node)
+			}
+		}
+		return nil
 	}
 
 	return event
+}
+
+// getTypeName returns the appropriate type name for a type code based on the current PLC family.
+func (t *BrowserTab) getTypeName(typeCode uint16) string {
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg != nil && cfg.GetFamily() == config.FamilyS7 {
+		return s7.TypeName(typeCode)
+	}
+	return logix.TypeName(typeCode)
 }
 
 func (t *BrowserTab) onNodeSelected(node *tview.TreeNode) {
@@ -256,7 +295,7 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 		writeIndicator = "[red]W[-] "
 	}
 
-	typeName := tag.TypeName()
+	typeName := t.getTypeName(tag.TypeCode)
 	shortName := tag.Name
 	if idx := strings.LastIndex(tag.Name, "."); idx >= 0 {
 		shortName = tag.Name[idx+1:]
@@ -305,7 +344,7 @@ func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
 	var sb strings.Builder
 
 	sb.WriteString("[yellow]Name:[-] " + tag.Name + "\n")
-	sb.WriteString("[yellow]Type:[-] " + tag.TypeName() + "\n")
+	sb.WriteString("[yellow]Type:[-] " + t.getTypeName(tag.TypeCode) + "\n")
 
 	// Get current value if available
 	plc := t.app.manager.GetPLC(t.selectedPLC)
@@ -343,13 +382,13 @@ func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
 	enabled := t.enabledTags[tag.Name]
 	writable := t.writableTags[tag.Name]
 	if enabled {
-		sb.WriteString("\n[green]" + CheckboxChecked + " Publishing to REST/MQTT[-]")
+		sb.WriteString("\n[green]" + CheckboxChecked + " Publishing to REST/MQTT/Valkey[-]")
 	} else {
 		sb.WriteString("\n[gray]" + CheckboxUnchecked + " Not publishing[-]")
 	}
 
 	if writable {
-		sb.WriteString("\n[red]W Writable via MQTT[-]")
+		sb.WriteString("\n[red]W Writable[-]")
 	} else {
 		sb.WriteString("\n[gray]  Read-only[-]")
 	}
@@ -375,7 +414,7 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 	sb.WriteString("[yellow::b]Tag Information[-::-]\n")
 	sb.WriteString("─────────────────────────────\n")
 	sb.WriteString(fmt.Sprintf("[yellow]Name:[-] %s\n", tagInfo.Name))
-	sb.WriteString(fmt.Sprintf("[yellow]Type:[-] %s (0x%04X)\n", tagInfo.TypeName(), tagInfo.TypeCode))
+	sb.WriteString(fmt.Sprintf("[yellow]Type:[-] %s (0x%04X)\n", t.getTypeName(tagInfo.TypeCode), tagInfo.TypeCode))
 	sb.WriteString(fmt.Sprintf("[yellow]Instance:[-] %d\n", tagInfo.Instance))
 
 	// Dimensions
@@ -417,7 +456,7 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 			result.WriteString("[yellow::b]Tag Information[-::-]\n")
 			result.WriteString("─────────────────────────────\n")
 			result.WriteString(fmt.Sprintf("[yellow]Name:[-] %s\n", tagName))
-			result.WriteString(fmt.Sprintf("[yellow]Type:[-] %s (0x%04X)\n", tagInfo.TypeName(), tagInfo.TypeCode))
+			result.WriteString(fmt.Sprintf("[yellow]Type:[-] %s (0x%04X)\n", t.getTypeName(tagInfo.TypeCode), tagInfo.TypeCode))
 			result.WriteString(fmt.Sprintf("[yellow]Instance:[-] %d\n", tagInfo.Instance))
 
 			if len(tagInfo.Dimensions) > 0 {
@@ -453,7 +492,7 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 
 			// Display value
 			result.WriteString(fmt.Sprintf("[yellow]Value:[-] %v\n", val.GoValue()))
-			result.WriteString(fmt.Sprintf("[yellow]Data Type:[-] %s (0x%04X)\n", val.TypeName(), val.DataType))
+			result.WriteString(fmt.Sprintf("[yellow]Data Type:[-] %s (0x%04X)\n", t.getTypeName(val.DataType), val.DataType))
 			result.WriteString(fmt.Sprintf("[yellow]Size:[-] %d bytes\n", len(val.Bytes)))
 
 			// Raw bytes hex dump
@@ -512,7 +551,15 @@ func (t *BrowserTab) updateStatus() {
 			count++
 		}
 	}
-	t.statusBar.SetText(fmt.Sprintf(" %d tags selected | [yellow]/[white] filter  [yellow]c[white] clear  [yellow]p[white] PLC  [yellow]Space[white] toggle  [yellow]w[white] writable  [yellow]d[white] details", count))
+	baseStatus := fmt.Sprintf(" %d tags selected | [yellow]/[white] filter  [yellow]c[white] clear  [yellow]p[white] PLC  [yellow]Space[white] toggle  [yellow]w[white] writable  [yellow]d[white] details", count)
+
+	// Add manual tag keys for non-discovery PLCs
+	if t.isManualPLC() {
+		baseStatus += "  [yellow]a[white] add  [yellow]e[white] edit  [yellow]x[white] delete"
+	}
+
+	baseStatus += "  [gray]│[white]  [yellow]?[white] help"
+	t.statusBar.SetText(baseStatus)
 }
 
 // GetPrimitive returns the main primitive for this tab.
@@ -530,30 +577,73 @@ func (t *BrowserTab) Refresh() {
 	// Update PLC dropdown
 	plcs := t.app.manager.ListPLCs()
 
+	// Sort PLCs by name for consistent ordering
+	sort.Slice(plcs, func(i, j int) bool {
+		return plcs[i].Config.Name < plcs[j].Config.Name
+	})
+
 	options := make([]string, 0)
 	selectedIdx := -1
 
-	for i, plc := range plcs {
-		if plc.GetStatus() == plcman.StatusConnected {
-			options = append(options, plc.Config.Name)
+	for _, plc := range plcs {
+		// Show connected PLCs, or manual PLCs (even if not connected, so tags can be configured)
+		isManual := !plc.Config.GetFamily().SupportsDiscovery()
+		if plc.GetStatus() == plcman.StatusConnected || isManual {
 			if plc.Config.Name == t.selectedPLC {
-				selectedIdx = i
+				selectedIdx = len(options) // Index in options, not in plcs
 			}
+			options = append(options, plc.Config.Name)
 		}
 	}
 
-	t.plcSelect.SetOptions(options, nil)
+	// Check if options have changed before updating
+	optionsChanged := !stringSlicesEqual(t.lastPLCOptions, options)
 
-	if selectedIdx >= 0 {
-		t.plcSelect.SetCurrentOption(selectedIdx)
-	} else if len(options) > 0 {
-		t.plcSelect.SetCurrentOption(0)
-		t.selectedPLC = options[0]
-		t.loadTags()
-	} else {
-		t.selectedPLC = ""
-		t.clearTree()
+	if optionsChanged {
+		// Options changed, need to update dropdown
+		t.lastPLCOptions = options
+
+		// Mark that we're doing a programmatic update to avoid focus changes
+		t.updatingDropdown = true
+
+		// Use the callback version of SetOptions to preserve selection behavior
+		t.plcSelect.SetOptions(options, func(text string, index int) {
+			t.selectedPLC = text
+			t.loadTags()
+			// Only change focus if this was a user selection, not programmatic
+			if !t.updatingDropdown {
+				t.app.app.SetFocus(t.tree)
+			}
+		})
+
+		if selectedIdx >= 0 {
+			t.plcSelect.SetCurrentOption(selectedIdx)
+		} else if len(options) > 0 && t.selectedPLC == "" {
+			// Only auto-select if nothing was selected before
+			t.plcSelect.SetCurrentOption(0)
+			t.selectedPLC = options[0]
+			t.loadTags()
+		} else if len(options) == 0 {
+			t.selectedPLC = ""
+			t.clearTree()
+		}
+
+		t.updatingDropdown = false
 	}
+	// If options haven't changed, don't touch the dropdown at all
+}
+
+// stringSlicesEqual compares two string slices for equality.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *BrowserTab) clearTree() {
@@ -575,16 +665,42 @@ func (t *BrowserTab) loadTags() {
 		return
 	}
 
-	plc := t.app.manager.GetPLC(t.selectedPLC)
-	if plc == nil {
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg == nil {
 		return
 	}
 
-	tags := plc.GetTags()
-	programs := plc.GetPrograms()
+	isManual := !cfg.GetFamily().SupportsDiscovery()
+
+	plc := t.app.manager.GetPLC(t.selectedPLC)
+
+	var tags []logix.TagInfo
+	var programs []string
+	var values map[string]*logix.TagValue
+
+	if plc != nil {
+		tags = plc.GetTags()
+		programs = plc.GetPrograms()
+		values = plc.GetValues()
+	} else {
+		values = make(map[string]*logix.TagValue)
+	}
+
+	// For manual PLCs not yet connected, build tags from config
+	if isManual && len(tags) == 0 && len(cfg.Tags) > 0 {
+		for _, sel := range cfg.Tags {
+			typeCode, ok := logix.TypeCodeFromName(sel.DataType)
+			if !ok {
+				typeCode = logix.TypeDINT
+			}
+			tags = append(tags, logix.TagInfo{
+				Name:     sel.Name,
+				TypeCode: typeCode,
+			})
+		}
+	}
 
 	// Load enabled and writable tags from config
-	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg != nil {
 		for _, sel := range cfg.Tags {
 			t.enabledTags[sel.Name] = sel.Enabled
@@ -592,7 +708,38 @@ func (t *BrowserTab) loadTags() {
 		}
 	}
 
-	// Organize tags by program
+	// For manual PLCs, show a different tree structure
+	if isManual {
+		sectionName := "Manual Tags"
+		sectionNode := tview.NewTreeNode(sectionName).
+			SetColor(tcell.ColorBlue).
+			SetExpanded(true)
+		t.treeRoot.AddChild(sectionNode)
+
+		// Sort tags by name
+		sort.Slice(tags, func(i, j int) bool {
+			return tags[i].Name < tags[j].Name
+		})
+
+		for i := range tags {
+			tag := &tags[i]
+			enabled := t.enabledTags[tag.Name]
+			writable := t.writableTags[tag.Name]
+			// Check for error
+			var hasError bool
+			if val, ok := values[tag.Name]; ok && val != nil && val.Error != nil {
+				hasError = true
+			}
+			node := t.createTagNodeWithError(tag, enabled, writable, hasError)
+			sectionNode.AddChild(node)
+			t.tagNodes[tag.Name] = node
+		}
+
+		t.updateStatus()
+		return
+	}
+
+	// Discovery-based PLCs: organize tags by program
 	controllerTags := []logix.TagInfo{}
 	programTags := make(map[string][]logix.TagInfo)
 
@@ -664,6 +811,10 @@ func (t *BrowserTab) loadTags() {
 }
 
 func (t *BrowserTab) createTagNode(tag *logix.TagInfo, enabled, writable bool) *tview.TreeNode {
+	return t.createTagNodeWithError(tag, enabled, writable, false)
+}
+
+func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writable, hasError bool) *tview.TreeNode {
 	checkbox := CheckboxUnchecked
 	if enabled {
 		checkbox = CheckboxChecked
@@ -675,17 +826,37 @@ func (t *BrowserTab) createTagNode(tag *logix.TagInfo, enabled, writable bool) *
 		writeIndicator = "[red]W[-] "
 	}
 
-	typeName := tag.TypeName()
+	// Error indicator
+	errorIndicator := ""
+	if hasError {
+		errorIndicator = "[red]![-] "
+	}
+
+	typeName := t.getTypeName(tag.TypeCode)
 	shortName := tag.Name
 	if idx := strings.LastIndex(tag.Name, "."); idx >= 0 {
 		shortName = tag.Name[idx+1:]
 	}
 
+	// For S7 PLCs, show alias as primary name if set, with address in gray
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg != nil && cfg.GetFamily() == config.FamilyS7 {
+		// Look up the alias for this tag
+		for _, sel := range cfg.Tags {
+			if sel.Name == tag.Name && sel.Alias != "" {
+				// Show: checkbox [indicators] Alias  (address) type
+				shortName = sel.Alias
+				typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
+				break
+			}
+		}
+	}
+
 	var text string
 	if enabled {
-		text = fmt.Sprintf("%s %s%s  [gray]%s[-]", checkbox, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("%s %s%s%s  [gray]%s[-]", checkbox, errorIndicator, writeIndicator, shortName, typeName)
 	} else {
-		text = fmt.Sprintf("[gray]%s %s%s  %s[-]", checkbox, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("[gray]%s %s%s%s  %s[-]", checkbox, errorIndicator, writeIndicator, shortName, typeName)
 	}
 
 	node := tview.NewTreeNode(text).
@@ -712,4 +883,294 @@ func (t *BrowserTab) applyFilter(filterText string) {
 			node.SetColor(tcell.ColorGray)
 		}
 	}
+}
+
+// isManualPLC returns true if the currently selected PLC is a non-discovery type.
+func (t *BrowserTab) isManualPLC() bool {
+	if t.selectedPLC == "" {
+		return false
+	}
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg == nil {
+		return false
+	}
+	return !cfg.GetFamily().SupportsDiscovery()
+}
+
+// showAddTagDialog shows a dialog to add a manual tag.
+func (t *BrowserTab) showAddTagDialog() {
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle(" Add Manual Tag ")
+
+	// Use "Address:" label and S7 types for S7 PLCs
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	nameLabel := "Tag Name:"
+	var typeOptions []string
+	if cfg != nil && cfg.GetFamily() == config.FamilyS7 {
+		nameLabel = "Address:"
+		typeOptions = s7.SupportedTypeNames()
+	} else {
+		typeOptions = logix.SupportedTypeNames()
+	}
+
+	form.AddInputField(nameLabel, "", 30, nil, nil)
+	form.AddDropDown("Data Type:", typeOptions, 3, nil) // Default to DINT (index 3)
+	form.AddInputField("Alias:", "", 30, nil, nil)
+	form.AddCheckbox("Writable:", false, nil)
+
+	form.AddButton("Add", func() {
+		tagName := form.GetFormItemByLabel(nameLabel).(*tview.InputField).GetText()
+		typeIdx, _ := form.GetFormItemByLabel("Data Type:").(*tview.DropDown).GetCurrentOption()
+		alias := form.GetFormItemByLabel("Alias:").(*tview.InputField).GetText()
+		writable := form.GetFormItemByLabel("Writable:").(*tview.Checkbox).IsChecked()
+
+		isS7 := cfg != nil && cfg.GetFamily() == config.FamilyS7
+		if tagName == "" {
+			if isS7 {
+				t.app.showErrorWithFocus("Error", "Address is required", form)
+			} else {
+				t.app.showErrorWithFocus("Error", "Tag name is required", form)
+			}
+			return
+		}
+
+		// Validate S7 address format
+		if isS7 {
+			if err := s7.ValidateAddress(tagName); err != nil {
+				t.app.showErrorWithFocus("Invalid Address", err.Error(), form)
+				return
+			}
+		}
+
+		// Check for duplicate
+		cfg := t.app.config.FindPLC(t.selectedPLC)
+		if cfg != nil {
+			for _, tag := range cfg.Tags {
+				if tag.Name == tagName {
+					t.app.showErrorWithFocus("Error", "Tag already exists: "+tagName, form)
+					return
+				}
+			}
+
+			// Add the tag
+			cfg.Tags = append(cfg.Tags, config.TagSelection{
+				Name:     tagName,
+				DataType: typeOptions[typeIdx],
+				Alias:    alias,
+				Enabled:  true,
+				Writable: writable,
+			})
+
+			t.app.SaveConfig()
+
+			// Refresh manual tags in manager
+			t.app.manager.RefreshManualTags(t.selectedPLC)
+		}
+
+		t.app.pages.RemovePage("addtag")
+		t.loadTags()
+		t.app.focusCurrentTab()
+		t.app.setStatus(fmt.Sprintf("Added tag: %s", tagName))
+	})
+
+	form.AddButton("Cancel", func() {
+		t.app.pages.RemovePage("addtag")
+		t.app.focusCurrentTab()
+	})
+
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			t.app.pages.RemovePage("addtag")
+			t.app.focusCurrentTab()
+			return nil
+		}
+		return event
+	})
+
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 14, 1, true).
+			AddItem(nil, 0, 1, false), 50, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	t.app.pages.AddPage("addtag", modal, true, true)
+	t.app.app.SetFocus(form)
+}
+
+// showEditTagDialog shows a dialog to edit a manual tag.
+func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
+	ref := node.GetReference()
+	if ref == nil {
+		return
+	}
+
+	tagInfo, ok := ref.(*logix.TagInfo)
+	if !ok {
+		return
+	}
+
+	// Find the tag in config
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg == nil {
+		return
+	}
+
+	var tagSel *config.TagSelection
+	var tagIdx int
+	for i := range cfg.Tags {
+		if cfg.Tags[i].Name == tagInfo.Name {
+			tagSel = &cfg.Tags[i]
+			tagIdx = i
+			break
+		}
+	}
+
+	if tagSel == nil {
+		return
+	}
+
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle(" Edit Manual Tag ")
+
+	// Use S7 types for S7 PLCs
+	isS7 := cfg.GetFamily() == config.FamilyS7
+	var typeOptions []string
+	if isS7 {
+		typeOptions = s7.SupportedTypeNames()
+	} else {
+		typeOptions = logix.SupportedTypeNames()
+	}
+
+	selectedType := 3 // Default to DINT
+	for i, opt := range typeOptions {
+		if opt == tagSel.DataType {
+			selectedType = i
+			break
+		}
+	}
+
+	// Use "Address:" label for S7 PLCs, "Tag Name:" for others
+	nameLabel := "Tag Name:"
+	if isS7 {
+		nameLabel = "Address:"
+	}
+
+	form.AddInputField(nameLabel, tagSel.Name, 30, nil, nil)
+	form.AddDropDown("Data Type:", typeOptions, selectedType, nil)
+	form.AddInputField("Alias:", tagSel.Alias, 30, nil, nil)
+	form.AddCheckbox("Writable:", tagSel.Writable, nil)
+
+	originalName := tagSel.Name
+
+	form.AddButton("Save", func() {
+		tagName := form.GetFormItemByLabel(nameLabel).(*tview.InputField).GetText()
+		typeIdx, _ := form.GetFormItemByLabel("Data Type:").(*tview.DropDown).GetCurrentOption()
+		alias := form.GetFormItemByLabel("Alias:").(*tview.InputField).GetText()
+		writable := form.GetFormItemByLabel("Writable:").(*tview.Checkbox).IsChecked()
+
+		if tagName == "" {
+			if isS7 {
+				t.app.showErrorWithFocus("Error", "Address is required", form)
+			} else {
+				t.app.showErrorWithFocus("Error", "Tag name is required", form)
+			}
+			return
+		}
+
+		// Validate S7 address format
+		if isS7 {
+			if err := s7.ValidateAddress(tagName); err != nil {
+				t.app.showErrorWithFocus("Invalid Address", err.Error(), form)
+				return
+			}
+		}
+
+		// Check for duplicate if name changed
+		if tagName != originalName {
+			for _, tag := range cfg.Tags {
+				if tag.Name == tagName {
+					t.app.showErrorWithFocus("Error", "Tag already exists: "+tagName, form)
+					return
+				}
+			}
+		}
+
+		// Update the tag
+		cfg.Tags[tagIdx].Name = tagName
+		cfg.Tags[tagIdx].DataType = typeOptions[typeIdx]
+		cfg.Tags[tagIdx].Alias = alias
+		cfg.Tags[tagIdx].Writable = writable
+
+		t.app.SaveConfig()
+
+		// Refresh manual tags in manager
+		t.app.manager.RefreshManualTags(t.selectedPLC)
+
+		t.app.pages.RemovePage("edittag")
+		t.loadTags()
+		t.app.focusCurrentTab()
+		t.app.setStatus(fmt.Sprintf("Updated tag: %s", tagName))
+	})
+
+	form.AddButton("Cancel", func() {
+		t.app.pages.RemovePage("edittag")
+		t.app.focusCurrentTab()
+	})
+
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			t.app.pages.RemovePage("edittag")
+			t.app.focusCurrentTab()
+			return nil
+		}
+		return event
+	})
+
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 14, 1, true).
+			AddItem(nil, 0, 1, false), 50, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	t.app.pages.AddPage("edittag", modal, true, true)
+	t.app.app.SetFocus(form)
+}
+
+// deleteManualTag deletes a manual tag after confirmation.
+func (t *BrowserTab) deleteManualTag(node *tview.TreeNode) {
+	ref := node.GetReference()
+	if ref == nil {
+		return
+	}
+
+	tagInfo, ok := ref.(*logix.TagInfo)
+	if !ok {
+		return
+	}
+
+	tagName := tagInfo.Name
+
+	t.app.showConfirm("Delete Tag", fmt.Sprintf("Delete tag %s?", tagName), func() {
+		cfg := t.app.config.FindPLC(t.selectedPLC)
+		if cfg != nil {
+			// Remove from config
+			for i, tag := range cfg.Tags {
+				if tag.Name == tagName {
+					cfg.Tags = append(cfg.Tags[:i], cfg.Tags[i+1:]...)
+					break
+				}
+			}
+			t.app.SaveConfig()
+
+			// Refresh manual tags in manager
+			t.app.manager.RefreshManualTags(t.selectedPLC)
+		}
+
+		t.loadTags()
+		t.app.setStatus(fmt.Sprintf("Deleted tag: %s", tagName))
+	})
 }
