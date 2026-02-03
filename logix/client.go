@@ -10,9 +10,10 @@ import (
 // Client is a high-level wrapper that manages connection lifecycle
 // and provides simplified methods for common PLC operations.
 type Client struct {
-	plc      *PLC              // Low-level access preserved
-	micro800 bool              // True for Micro800 series (no batch reads)
-	tagInfo  map[string]TagInfo // Discovered tags for element count lookup
+	plc           *PLC               // Low-level access preserved
+	micro800      bool               // True for Micro800 series (no batch reads)
+	tagInfo       map[string]TagInfo // Discovered tags for element count lookup
+	templateSizes map[uint16]uint32  // Cache of template ID -> size in bytes
 }
 
 // options holds configuration options for Connect.
@@ -209,6 +210,47 @@ func (c *Client) GetTagInfo(tagName string) (TagInfo, bool) {
 // Exported for debugging purposes.
 func (c *Client) GetElementCount(tagName string) uint16 {
 	return c.getElementCount(tagName)
+}
+
+// GetElementSize returns the size in bytes of a single element for the given type.
+// For structures, queries the template to get the size (cached after first query).
+// Returns 0 if size cannot be determined.
+func (c *Client) GetElementSize(typeCode uint16) uint32 {
+	// For atomic types, use TypeSize
+	baseType := BaseType(typeCode)
+	if size := TypeSize(baseType); size > 0 {
+		return uint32(size)
+	}
+
+	// For structures, look up or query the template size
+	if IsStructure(typeCode) {
+		templateID := TemplateID(typeCode)
+		if templateID == 0 {
+			return 0
+		}
+
+		// Check cache first
+		if c.templateSizes != nil {
+			if size, ok := c.templateSizes[templateID]; ok {
+				return size
+			}
+		}
+
+		// Query from PLC
+		if c.plc != nil {
+			size, err := c.plc.GetTemplateSize(typeCode)
+			if err == nil && size > 0 {
+				// Cache the result
+				if c.templateSizes == nil {
+					c.templateSizes = make(map[uint16]uint32)
+				}
+				c.templateSizes[templateID] = size
+				return size
+			}
+		}
+	}
+
+	return 0
 }
 
 // Programs returns the list of program names in the PLC.

@@ -193,6 +193,75 @@ func (p *PLC) getSymbolByteCount(instance uint32) (uint32, error) {
 	return byteCount, nil
 }
 
+// GetTemplateSize returns the size in bytes of a structure/UDT type.
+// The templateID is extracted from the type code (lower 12 bits when struct flag is set).
+func (p *PLC) GetTemplateSize(typeCode uint16) (uint32, error) {
+	if !IsStructure(typeCode) {
+		return 0, fmt.Errorf("type 0x%04X is not a structure", typeCode)
+	}
+
+	// Template instance ID is in bits 11-0 of the type code
+	templateID := uint32(typeCode & 0x0FFF)
+	if templateID == 0 {
+		return 0, fmt.Errorf("invalid template ID 0")
+	}
+
+	return p.getTemplateAttribute(templateID, 4) // Attribute 4 = template size in bytes
+}
+
+// getTemplateAttribute fetches an attribute from a Template Object instance.
+// Template Object is class 0x6C. Common attributes:
+// - 1: Member count
+// - 2: Definition size
+// - 4: Template size in bytes (what we need for reading)
+// - 5: Template name
+func (p *PLC) getTemplateAttribute(templateID uint32, attrID byte) (uint32, error) {
+	// Build path to Template Object (class 0x6C), specific instance
+	builder := cip.EPath().Class(0x6C)
+	if templateID <= 0xFF {
+		builder = builder.Instance(byte(templateID))
+	} else if templateID <= 0xFFFF {
+		builder = builder.Instance16(uint16(templateID))
+	} else {
+		builder = builder.Instance32(templateID)
+	}
+	path, err := builder.Attribute(attrID).Build()
+	if err != nil {
+		return 0, err
+	}
+
+	// Build Get Attribute Single request
+	reqData := make([]byte, 0, 2+len(path))
+	reqData = append(reqData, SvcGetAttributeSingle)
+	reqData = append(reqData, path.WordLen())
+	reqData = append(reqData, path...)
+
+	cipResp, err := p.sendCipRequest(reqData)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(cipResp) < 4 {
+		return 0, fmt.Errorf("response too short")
+	}
+
+	status := cipResp[2]
+	addlStatusSize := cipResp[3]
+
+	if status != StatusSuccess {
+		return 0, parseCipError(status, addlStatusSize, cipResp[4:])
+	}
+
+	// Parse the attribute value (UDINT - 4 bytes)
+	dataStart := 4 + int(addlStatusSize)*2
+	if len(cipResp) < dataStart+4 {
+		return 0, fmt.Errorf("insufficient data for attribute")
+	}
+
+	value := binary.LittleEndian.Uint32(cipResp[dataStart : dataStart+4])
+	return value, nil
+}
+
 // getSymbolDimensions fetches attribute 3 (dimensions) from a Symbol Object instance.
 func (p *PLC) getSymbolDimensions(instance uint32, numDims int) ([]int, error) {
 	builder := cip.EPath().Class(0x6B)

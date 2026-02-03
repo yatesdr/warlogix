@@ -1,6 +1,9 @@
 package logix
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Logix CIP data type codes.
 // These are returned in the DataType field of Tag after a ReadTag operation.
@@ -59,6 +62,15 @@ func TypeSize(dataType uint16) int {
 	}
 }
 
+// TemplateID extracts the template instance ID from a structure type code.
+// Returns 0 if the type is not a structure.
+func TemplateID(dataType uint16) uint16 {
+	if !IsStructure(dataType) {
+		return 0
+	}
+	return dataType & 0x0FFF
+}
+
 // IsStructure returns true if the data type represents a structure/UDT.
 func IsStructure(dataType uint16) bool {
 	return (dataType & TypeStructureMask) != 0
@@ -72,7 +84,12 @@ func IsArray(dataType uint16) bool {
 // TypeName returns a human-readable name for the data type.
 func TypeName(dataType uint16) string {
 	if IsStructure(dataType) {
-		return "STRUCT"
+		templateID := TemplateID(dataType)
+		name := fmt.Sprintf("STRUCT(%d)", templateID)
+		if IsArray(dataType) {
+			return name + "[]"
+		}
+		return name
 	}
 
 	baseType := dataType & 0x0FFF

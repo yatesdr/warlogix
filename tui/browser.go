@@ -324,8 +324,10 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 		text = fmt.Sprintf("%s %s%s  [gray]%s[-]", checkbox, writeIndicator, shortName, typeName)
 		node.SetColor(tcell.ColorWhite)
 	} else {
-		text = fmt.Sprintf("[gray]%s %s%s  %s[-]", checkbox, writeIndicator, shortName, typeName)
-		node.SetColor(tcell.ColorGray)
+		// Don't use inline color tags - let node.SetColor handle it
+		// This allows proper color inversion when the node is selected
+		text = fmt.Sprintf("%s %s%s  %s", checkbox, writeIndicator, shortName, typeName)
+		node.SetColor(tcell.ColorDarkGray)
 	}
 	node.SetText(text)
 }
@@ -471,13 +473,31 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 		// For array types, show array info (dimensions come from tag list discovery)
 		var arrayDebugInfo string
 		isArrayType := logix.IsArrayType(tagTypeCode)
-		if isArrayType {
+		isStruct := logix.IsStructure(tagTypeCode)
+		if isArrayType || isStruct {
 			var debugSb strings.Builder
-			debugSb.WriteString("\n[yellow::b]Array Info[-::-]\n")
+			if isArrayType {
+				debugSb.WriteString("\n[yellow::b]Array Info[-::-]\n")
+			} else {
+				debugSb.WriteString("\n[yellow::b]Type Info[-::-]\n")
+			}
 			debugSb.WriteString("─────────────────────────────\n")
 			baseType := logix.BaseType(tagTypeCode)
 			debugSb.WriteString(fmt.Sprintf("[yellow]Base Type:[-] %s\n", logix.TypeName(baseType)))
-			elemSize := logix.TypeSize(baseType)
+
+			// For structures, show template ID
+			if isStruct {
+				templateID := logix.TemplateID(tagTypeCode)
+				debugSb.WriteString(fmt.Sprintf("[yellow]Template ID:[-] %d (0x%04X)\n", templateID, templateID))
+			}
+
+			// Get element size (handles both atomic and structure types)
+			var elemSize uint32
+			if client := plc.GetLogixClient(); client != nil {
+				elemSize = client.GetElementSize(tagTypeCode)
+			} else {
+				elemSize = uint32(logix.TypeSize(baseType))
+			}
 			debugSb.WriteString(fmt.Sprintf("[yellow]Element Size:[-] %d bytes\n", elemSize))
 			arrayDebugInfo = debugSb.String()
 		}
@@ -921,7 +941,9 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 	if enabled {
 		text = fmt.Sprintf("%s %s%s%s  [gray]%s[-]", checkbox, errorIndicator, writeIndicator, shortName, typeName)
 	} else {
-		text = fmt.Sprintf("[gray]%s %s%s%s  %s[-]", checkbox, errorIndicator, writeIndicator, shortName, typeName)
+		// Don't use inline color tags - let node.SetColor handle it
+		// This allows proper color inversion when the node is selected
+		text = fmt.Sprintf("%s %s%s%s  %s", checkbox, errorIndicator, writeIndicator, shortName, typeName)
 	}
 
 	node := tview.NewTreeNode(text).
@@ -931,7 +953,7 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 	if enabled {
 		node.SetColor(tcell.ColorWhite)
 	} else {
-		node.SetColor(tcell.ColorGray)
+		node.SetColor(tcell.ColorDarkGray)
 	}
 
 	return node

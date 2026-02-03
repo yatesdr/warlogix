@@ -94,6 +94,7 @@ func (p *PLC) ReadTag(tagName string) (*Tag, error) {
 }
 
 // ReadTagCount reads multiple elements of a tag (for arrays).
+// For large arrays that exceed packet size, automatically reads in chunks using array indexing.
 func (p *PLC) ReadTagCount(tagName string, count uint16) (*Tag, error) {
 	if p == nil || p.Connection == nil {
 		return nil, fmt.Errorf("ReadTag: nil plc or connection")
@@ -102,32 +103,136 @@ func (p *PLC) ReadTagCount(tagName string, count uint16) (*Tag, error) {
 		return nil, fmt.Errorf("ReadTag: empty tag name")
 	}
 
-	// Build the symbolic EPath for the tag name.
+	// Try reading all elements at once first
+	tag, partialTransfer, err := p.readTagCountInternal(tagName, count)
+	if err != nil {
+		return nil, err
+	}
+
+	// If we got all data, return it
+	if !partialTransfer {
+		return tag, nil
+	}
+
+	// Partial transfer - need to read in chunks using array indexing
+	// This works better for structures than byte-offset fragmented reads
+	return p.readTagChunked(tagName, count, tag)
+}
+
+// readTagCountInternal performs a single read request and returns partial transfer flag.
+func (p *PLC) readTagCountInternal(tagName string, count uint16) (*Tag, bool, error) {
 	path, err := cip.EPath().Symbol(tagName).Build()
 	if err != nil {
-		return nil, fmt.Errorf("ReadTag: failed to build path: %w", err)
+		return nil, false, fmt.Errorf("ReadTag: failed to build path: %w", err)
 	}
 
-	// Build the CIP request:
-	// [Service 1 byte] [PathSize 1 byte] [Path n bytes] [Element Count 2 bytes]
 	reqData := make([]byte, 0, 2+len(path)+2)
-	reqData = append(reqData, SvcReadTag)                      // Service code
-	reqData = append(reqData, path.WordLen())                  // Path size in words
-	reqData = append(reqData, path...)                         // Path bytes
-	reqData = binary.LittleEndian.AppendUint16(reqData, count) // Element count
+	reqData = append(reqData, SvcReadTag)
+	reqData = append(reqData, path.WordLen())
+	reqData = append(reqData, path...)
+	reqData = binary.LittleEndian.AppendUint16(reqData, count)
 
-	// Send request and get response
 	cipResp, err := p.sendCipRequest(reqData)
 	if err != nil {
-		return nil, fmt.Errorf("ReadTag: %w", err)
+		return nil, false, fmt.Errorf("ReadTag: %w", err)
 	}
 
-	tag, err := parseReadTagResponse(cipResp, tagName)
+	return parseReadTagResponseEx(cipResp, tagName)
+}
+
+// readTagChunked reads a large array in chunks using array index syntax.
+// This is more reliable for structure arrays than byte-offset fragmented reads.
+func (p *PLC) readTagChunked(tagName string, totalCount uint16, initialTag *Tag) (*Tag, error) {
+	if initialTag == nil || len(initialTag.Bytes) == 0 {
+		return nil, fmt.Errorf("readTagChunked: no initial data to determine element size")
+	}
+
+	// Calculate element size from initial read
+	// The initial read gave us partial data - figure out how many elements fit
+	initialBytes := len(initialTag.Bytes)
+
+	// Estimate elements per chunk based on connection size
+	// Leave room for CIP overhead (header, type code, etc.)
+	maxPayload := 480 // Conservative default for unconnected messaging
+	if p.connSize > 0 {
+		maxPayload = int(p.connSize) - 100 // Leave room for protocol overhead
+	}
+
+	// We need to figure out how many complete elements we got
+	// For the first chunk, we'll use the partial data and continue from there
+	allBytes := make([]byte, 0, initialBytes*int(totalCount)/10+initialBytes)
+	allBytes = append(allBytes, initialTag.Bytes...)
+
+	// Calculate elements read so far
+	// We need to determine element size - try reading a single element to get the size
+	singleTag, _, err := p.readTagCountInternal(tagName+"[0]", 1)
 	if err != nil {
-		return nil, fmt.Errorf("ReadTag: %w", err)
+		// Can't determine element size, return what we have
+		return &Tag{
+			Name:     tagName,
+			DataType: initialTag.DataType,
+			Bytes:    allBytes,
+		}, nil
 	}
 
-	return tag, nil
+	elemSize := len(singleTag.Bytes)
+	if elemSize == 0 {
+		return &Tag{
+			Name:     tagName,
+			DataType: initialTag.DataType,
+			Bytes:    allBytes,
+		}, nil
+	}
+
+	// Calculate how many elements we already have
+	elementsRead := initialBytes / elemSize
+
+	// Calculate optimal chunk size
+	elemsPerChunk := maxPayload / elemSize
+	if elemsPerChunk < 1 {
+		elemsPerChunk = 1
+	}
+	if elemsPerChunk > 100 {
+		elemsPerChunk = 100 // Cap chunk size to avoid huge requests
+	}
+
+	// Read remaining elements in chunks
+	for elementsRead < int(totalCount) {
+		remaining := int(totalCount) - elementsRead
+		chunkSize := elemsPerChunk
+		if chunkSize > remaining {
+			chunkSize = remaining
+		}
+
+		// Read chunk starting at current index
+		chunkTagName := fmt.Sprintf("%s[%d]", tagName, elementsRead)
+		chunkTag, partial, err := p.readTagCountInternal(chunkTagName, uint16(chunkSize))
+		if err != nil {
+			// Return what we have so far
+			break
+		}
+
+		allBytes = append(allBytes, chunkTag.Bytes...)
+		elementsRead += len(chunkTag.Bytes) / elemSize
+
+		// If no partial transfer, we got all requested elements
+		if !partial {
+			// Move to next chunk
+			continue
+		}
+
+		// Partial transfer within chunk - add what we got and continue
+		actualElems := len(chunkTag.Bytes) / elemSize
+		if actualElems == 0 {
+			break // No progress, stop to avoid infinite loop
+		}
+	}
+
+	return &Tag{
+		Name:     tagName,
+		DataType: initialTag.DataType,
+		Bytes:    allBytes,
+	}, nil
 }
 
 // WriteTag writes raw bytes to a tag. The dataType must match the tag's type in the PLC.
@@ -313,8 +418,14 @@ func unwrapUCMMResponse(data []byte) ([]byte, error) {
 // parseReadTagResponse parses the CIP response for a Read Tag request.
 // Response format: [ReplyService 1] [Reserved 1] [Status 1] [AddlStatusSize 1] [AddlStatus n] [DataType 2] [Data n]
 func parseReadTagResponse(data []byte, tagName string) (*Tag, error) {
+	tag, _, err := parseReadTagResponseEx(data, tagName)
+	return tag, err
+}
+
+// parseReadTagResponseEx parses Read Tag response and returns partial transfer flag.
+func parseReadTagResponseEx(data []byte, tagName string) (*Tag, bool, error) {
 	if len(data) < 4 {
-		return nil, fmt.Errorf("response too short: %d bytes", len(data))
+		return nil, false, fmt.Errorf("response too short: %d bytes", len(data))
 	}
 
 	replyService := data[0]
@@ -324,18 +435,19 @@ func parseReadTagResponse(data []byte, tagName string) (*Tag, error) {
 
 	// Verify it's a reply (bit 7 set) to Read Tag
 	if replyService != (SvcReadTag | 0x80) {
-		return nil, fmt.Errorf("unexpected reply service: 0x%02X", replyService)
+		return nil, false, fmt.Errorf("unexpected reply service: 0x%02X", replyService)
 	}
 
-	// Check status
-	if status != StatusSuccess {
-		return nil, parseCipError(status, addlStatusSize, data[4:])
+	// Check status - partial transfer (0x06) is OK, we'll read more
+	partialTransfer := (status == StatusPartialTransfer)
+	if status != StatusSuccess && status != StatusPartialTransfer {
+		return nil, false, parseCipError(status, addlStatusSize, data[4:])
 	}
 
 	// Skip additional status words
 	dataStart := 4 + int(addlStatusSize)*2
 	if len(data) < dataStart+2 {
-		return nil, fmt.Errorf("response missing data type field")
+		return nil, false, fmt.Errorf("response missing data type field")
 	}
 
 	dataType := binary.LittleEndian.Uint16(data[dataStart : dataStart+2])
@@ -345,7 +457,44 @@ func parseReadTagResponse(data []byte, tagName string) (*Tag, error) {
 		Name:     tagName,
 		DataType: dataType,
 		Bytes:    tagData,
-	}, nil
+	}, partialTransfer, nil
+}
+
+// parseReadTagFragmentedResponse parses the response for Read Tag Fragmented service.
+// Response format: [ReplyService 1] [Reserved 1] [Status 1] [AddlStatusSize 1] [AddlStatus n] [DataType 2] [Data n]
+func parseReadTagFragmentedResponse(data []byte, tagName string) (*Tag, bool, error) {
+	if len(data) < 4 {
+		return nil, false, fmt.Errorf("response too short: %d bytes", len(data))
+	}
+
+	replyService := data[0]
+	status := data[2]
+	addlStatusSize := data[3]
+
+	// Verify it's a reply to Read Tag Fragmented (0x52 | 0x80 = 0xD2)
+	if replyService != (SvcReadTagFragmented | 0x80) {
+		return nil, false, fmt.Errorf("unexpected reply service: 0x%02X", replyService)
+	}
+
+	// Check status - partial transfer means more data available
+	partialTransfer := (status == StatusPartialTransfer)
+	if status != StatusSuccess && status != StatusPartialTransfer {
+		return nil, false, parseCipError(status, addlStatusSize, data[4:])
+	}
+
+	dataStart := 4 + int(addlStatusSize)*2
+	if len(data) < dataStart+2 {
+		return nil, false, fmt.Errorf("response missing data type field")
+	}
+
+	dataType := binary.LittleEndian.Uint16(data[dataStart : dataStart+2])
+	tagData := data[dataStart+2:]
+
+	return &Tag{
+		Name:     tagName,
+		DataType: dataType,
+		Bytes:    tagData,
+	}, partialTransfer, nil
 }
 
 // parseWriteTagResponse parses the CIP response for a Write Tag request.

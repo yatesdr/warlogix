@@ -189,6 +189,14 @@ func (m *ManagedPLC) GetIdentity() *logix.DeviceInfo {
 	return m.Identity
 }
 
+// GetLogixClient returns the underlying Logix client, or nil if not available.
+// Used for accessing client-specific features like GetElementSize.
+func (m *ManagedPLC) GetLogixClient() *logix.Client {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.Client
+}
+
 // GetConnectionMode returns a human-readable string describing the connection mode.
 func (m *ManagedPLC) GetConnectionMode() string {
 	m.mu.RLock()
