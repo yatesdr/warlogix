@@ -2,7 +2,6 @@
 
 A TUI (Text User Interface) gateway application for Allen-Bradley/Rockwell Automation ControlLogix and CompactLogix PLCs. Browse tags, monitor values in real-time, and republish data via REST API, MQTT brokers, and Redis or Valkey.
 
-WarLogix Beta release is still a little buggy, but most issues can be resolved by restarting the application if something weird is found.
 
 ## The name
 
@@ -47,39 +46,38 @@ WAR stands for "whispers across realms" - this application is intended to provid
 
 Download the binary, or build from source, and run the application.
 
+### Adding PLCs
 - Navigate between tabs by pressing Shift-Tab.
 - Use the hot-keys to add one or more PLC's, edit settings, browse tags, and configure REST and MQTT re-publishing.
 - By default, no tags will be synced.   Use the Tag Browser tab to select tags to publish and set the status.
 - If you are on the same switch as the PLC you may be able to discover available PLC's by pressing 'd', but in many situations the UDP discovery is limited by broadcast domain and you will need to add the PLC by the IP Address.
 
-<img width="885" height="582" alt="image" src="https://github.com/user-attachments/assets/660d1c0f-bce3-47b8-aa2f-5451f403ae70" />
-<img width="364" height="220" alt="image" src="https://github.com/user-attachments/assets/9063a2a5-4aa6-4646-abbc-9ca39d90e958" />
-<pre>
+<img width="822" height="537" alt="image" src="https://github.com/user-attachments/assets/e57a3ff9-bd15-4943-911a-ebb8567aadcc" />
 
-  
-</pre>
+### Browsing Tags
 
 - To add tags for read / republish you can select them in the tag browser (Shift-Tab to tab to it)
-<img width="882" height="576" alt="image" src="https://github.com/user-attachments/assets/9cf6c677-0a4b-43f7-85a0-9e24bd3131b5" />
-<pre>
+<img width="816" height="539" alt="image" src="https://github.com/user-attachments/assets/a87fc123-bd94-4f19-a5e7-2c748b34449e" />
 
-  
-</pre>
+
+### Local REST Endpoint
 
 - The REST endpoint is read-only, but useful for polling state.
-<img width="885" height="578" alt="image" src="https://github.com/user-attachments/assets/f016aa2b-af67-42c1-a0b9-42949fbb99d8" />
-<pre>
+<img width="821" height="540" alt="image" src="https://github.com/user-attachments/assets/899f2be1-7adb-453c-a35e-df87aeb07d9b" />
 
-  
-</pre>
+
+### MQTT Re-Publishing
 
 - The MQTT re-publisher can republish to any accessible MQTT broker with optional username/password authentication and TLS encryption. This is the primary way to move data into the IT world as it can punch out of the typical machine network onto the IT side with a proper firewall config.
 - MQTT protocol offers write-back for write-enabled tags with a properly formatted write request (see more below).  This is only tested on basic types and should not be used as part of a control system.   It is intended for ack / clear requests to the PLC.
-<img width="887" height="579" alt="image" src="https://github.com/user-attachments/assets/20bbab85-bf11-4d58-a352-058acab28197" />
-<pre>
 
-  
-</pre>
+<img width="817" height="540" alt="image" src="https://github.com/user-attachments/assets/c5e459c9-65f0-4fa9-92c6-c3b9fd8cb401" />
+
+### Redis / Valkey Re-Publishing
+
+- Great for real-time dashboards or status, republish to any Valkey or Redis server accessible from the application.
+
+<img width="822" height="542" alt="image" src="https://github.com/user-attachments/assets/474057b9-de37-4694-acf3-bf4936352563" />
 
 
 ## Installation
@@ -254,10 +252,10 @@ poll_rate: 1s
 
 When enabled, the REST API provides the following endpoints:
 
-- `GET /plcs` - List all PLCs with status
-- `GET /plcs/{name}` - PLC details and identity
-- `GET /plcs/{name}/tags` - All tags with current values
-- `GET /plcs/{name}/tags/{tagname}` - Single tag value
+- `GET /` - List all PLCs with status
+- `GET /{plc_name}` - PLC details and identity
+- `GET /{plc_name}/tags` - All tags with current values
+- `GET /{plc_name}/tags/{tagname}` - Single tag value
 
 ## MQTT Topics
 
