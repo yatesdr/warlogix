@@ -225,15 +225,146 @@ poll_rate: 1s  # Global default (used when per-PLC poll_rate not set)
 
 ## MQTT Topics
 
-- **Publish**: `{root_topic}/{plc}/tags/{tag}` - Tag values with metadata
-- **Write**: `{root_topic}/{plc}/write` - Send write requests
-- **Response**: `{root_topic}/{plc}/write/response` - Write confirmations
+### Publishing (Read)
+Tags are published to: `{root_topic}/{plc}/tags/{tag}`
+
+Published message format:
+```json
+{
+  "topic": "factory",
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 42,
+  "type": "DINT",
+  "writable": true,
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+### Write Requests
+Send write requests to: `{root_topic}/{plc}/write`
+
+**Request format:**
+```json
+{
+  "topic": "factory",
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 100
+}
+```
+
+**Response** (published to `{root_topic}/{plc}/write/response`):
+```json
+{
+  "topic": "factory",
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 100,
+  "success": true,
+  "timestamp": "2024-01-15T10:30:05Z"
+}
+```
+
+**Notes:**
+- The `topic` field must match the broker's `root_topic` configuration
+- Tags must be marked as `writable: true` in the configuration
+- Values are automatically converted to the tag's data type (JSON numbers become DINT/REAL, etc.)
+- Write responses include `"success": false` and an `"error"` field on failure
 
 ## Valkey/Redis
 
-- **Keys**: `{factory}:{plc}:tags:{tag}` - JSON tag values
-- **Pub/Sub**: `{factory}:{plc}:changes` - Change notifications
-- **Write Queue**: `{factory}:writes` (LIST) - Write requests via RPUSH
+### Key Storage
+Tags are stored with the key pattern: `{factory}:{plc}:tags:{tag}`
+
+Stored value format:
+```json
+{
+  "factory": "factory",
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 42,
+  "type": "DINT",
+  "writable": true,
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+### Pub/Sub Channels
+When `publish_changes: true`, changes are published to:
+- `{factory}:{plc}:changes` - Per-PLC change notifications
+- `{factory}:_all:changes` - All changes across all PLCs
+
+### Write-back Queue
+When `enable_writeback: true`, write requests can be sent via a LIST queue.
+
+**Queue key:** `{factory}:writes`
+
+**Send a write request:**
+```bash
+redis-cli RPUSH factory:writes '{"factory":"factory","plc":"MainPLC","tag":"Counter","value":100}'
+```
+
+**Request format:**
+```json
+{
+  "factory": "factory",
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 100
+}
+```
+
+**Response channel:** `{factory}:write:responses` (Pub/Sub)
+
+Subscribe to receive write responses:
+```bash
+redis-cli SUBSCRIBE factory:write:responses
+```
+
+**Response format:**
+```json
+{
+  "factory": "factory",
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 100,
+  "success": true,
+  "timestamp": "2024-01-15T10:30:05Z"
+}
+```
+
+**Notes:**
+- Tags must be marked as `writable: true` in the configuration
+- The `factory` field must match the server's `factory` configuration
+- Use `key_ttl` to automatically expire keys for stale data detection
+
+## Kafka
+
+Kafka is **publish-only** (no write-back support). Tag changes and trigger events are published to configured topics.
+
+**Tag change message format** (when `publish_changes: true`):
+```json
+{
+  "plc": "MainPLC",
+  "tag": "Counter",
+  "value": 42,
+  "type": "DINT",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+**Trigger event format** (see Event Triggers section for details):
+```json
+{
+  "trigger": "ProductComplete",
+  "timestamp": "2024-01-15T10:30:00.123456789Z",
+  "sequence": 42,
+  "plc": "MainPLC",
+  "metadata": {"line": "Line1"},
+  "data": {"ProductID": 12345, "Quantity": 100}
+}
+```
 
 ## Supported Data Types
 
