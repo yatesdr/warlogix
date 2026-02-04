@@ -192,38 +192,132 @@ poll_rate: 1s
 
 **Byte Order**: S7 and Omron use big-endian; Logix and Beckhoff use little-endian. WarLogix handles this automatically.
 
-## PLC-Specific Notes
+## PLC Configuration Guide
 
-### Siemens S7
+### Allen-Bradley ControlLogix/CompactLogix
 
-- **Addressing**: `DB<n>.<offset>` with `data_type` field (e.g., `DB1.0` with `data_type: DINT`)
-- **Bit access**: `DB<n>.<offset>.<bit>` (e.g., `DB1.4.0` for bit 0 at byte 4)
-- **Other areas**: `I<offset>`, `Q<offset>`, `M<offset>` (inputs, outputs, markers)
-- **Arrays**: `DB1.0[10]` for 10 elements starting at byte 0
-- **TIA Portal**: Enable PUT/GET access; disable optimized block access for DBs
+**PLC-Side Setup:**
+- No special configuration required - EtherNet/IP is enabled by default
+- Ensure the PLC has an IP address configured (via RSLogix/Studio 5000 or DHCP)
+- The EtherNet/IP port (TCP 44818) must be accessible from WarLogix
+
+**WarLogix Configuration:**
+- `address`: PLC IP address
+- `slot`: CPU slot number (typically 0 for CompactLogix, varies for ControlLogix)
+- Tags are discovered automatically; select which to publish in the Tag Browser
+
+**Troubleshooting:**
+- Verify network connectivity with ping
+- Check that no firewall blocks port 44818
+- For ControlLogix in remote chassis, ensure routing path is correct
+
+### Siemens S7-1200/1500
+
+**PLC-Side Setup (TIA Portal):**
+1. Open your project in TIA Portal
+2. Select the PLC and open **Properties** > **Protection & Security**
+3. Enable **Permit access with PUT/GET communication from remote partner**
+4. For each Data Block you want to access:
+   - Open DB properties > **Attributes**
+   - Uncheck **Optimized block access** (enables absolute addressing)
+5. Download the project to the PLC
+
+**WarLogix Configuration:**
+- `address`: PLC IP address
+- `slot`: Rack/slot - use `0` for S7-1200/1500 integrated CPU
+- `family`: `s7`
+- Tags must be configured manually with byte offsets
+
+**Addressing Format:**
+- `DB<n>.<offset>` with `data_type` field (e.g., `DB1.0` with `data_type: DINT`)
+- Bit access: `DB<n>.<offset>.<bit>` (e.g., `DB1.4.0` for bit 0 at byte 4)
+- Other areas: `I<offset>`, `Q<offset>`, `M<offset>` (inputs, outputs, markers)
+- Arrays: `DB1.0[10]` for 10 elements starting at byte 0
+
+**Troubleshooting:**
+- "Connection refused" - PUT/GET not enabled or wrong IP
+- "Access denied" - DB has optimized access enabled
+- Wrong values - check byte offsets match your DB layout
+
+### Siemens S7-300/400
+
+**PLC-Side Setup:**
+- No special configuration typically required
+- Ensure the CP (Communications Processor) or integrated Ethernet port has an IP address
+
+**WarLogix Configuration:**
+- `address`: PLC IP address
+- `slot`: CPU slot (typically `2` for S7-300, varies for S7-400)
+- `rack`: Rack number (typically `0`)
 
 ### Beckhoff TwinCAT
 
-- **AMS Net ID**: Typically `IP.1.1` (e.g., `192.168.1.100.1.1`)
-- **AMS Ports**: 851 (TC3 Runtime 1), 852 (Runtime 2), 801 (TC2)
-- **Symbols**: Dot notation (`MAIN.Variable`, `GVL.GlobalVar`)
-- **Routes**: Add a static route in TwinCAT System Manager for WarLogix machine
+**PLC-Side Setup:**
+1. **Configure AMS Net ID**: In TwinCAT System Manager, note your PLC's AMS Net ID (usually `<IP>.1.1`)
+2. **Add a Route** for the WarLogix machine:
+   - Open TwinCAT System Manager > SYSTEM > Routes
+   - Add Static Route:
+     - **Name**: WarLogix (or any identifier)
+     - **AMS Net ID**: Use the WarLogix machine's IP + `.1.1` (e.g., `192.168.1.50.1.1`)
+     - **Address**: WarLogix machine IP address
+     - **Transport**: TCP/IP
+3. **Firewall**: Ensure port 48898 (ADS) is open for TCP traffic
+4. **PLC must be in RUN mode** for symbol access
 
-### Omron FINS
+**WarLogix Configuration:**
+- `address`: PLC IP address
+- `ams_net_id`: PLC's AMS Net ID (e.g., `192.168.1.100.1.1`)
+- `ams_port`: Runtime port - `851` for TwinCAT 3 Runtime 1, `801` for TwinCAT 2
+- `family`: `beckhoff`
+- Tags are discovered automatically from the symbol table
 
+**Symbol Naming:**
+- `MAIN.Variable` - Variable in MAIN program
+- `GVL.GlobalVar` - Global Variable List
+- `FB_Instance.Member` - Function block members
+
+**Troubleshooting:**
+- "No route" - Add a route in TwinCAT for the WarLogix machine
+- "Port not found" - Check AMS port matches your runtime (851 vs 801)
+- No symbols - Ensure PLC is in RUN mode and project is activated
+
+### Omron FINS (CJ/CS/CP/NJ/NX Series)
+
+**PLC-Side Setup:**
+1. **Configure IP Address**: Set via CX-Programmer, Sysmac Studio, or rotary switches
+2. **FINS Port**: Default UDP 9600 (usually no change needed)
+3. **Node Address**: Configure in PLC settings; often matches last octet of IP address
+4. **Firewall**: Ensure UDP port 9600 is open
+
+**WarLogix Configuration:**
+- `address`: PLC IP address
+- `fins_port`: UDP port (default `9600`)
+- `fins_node`: PLC's FINS node number (often `0` or last IP octet)
+- `fins_network`: FINS network number (usually `0` for local)
+- `fins_unit`: CPU unit number (usually `0`)
+- `family`: `omron`
+- Tags must be configured manually
+
+**Addressing Format:**
 - **Memory Areas**: DM (data), CIO (I/O), WR (work), HR (holding), AR (auxiliary)
-- **Addressing**: `<Area><Word>[.Bit]` (e.g., `DM100`, `CIO0.5`)
-- **Arrays**: `DM100[10]` for 10 words
-- **Port**: Default UDP 9600
+- Word access: `DM100`, `CIO50`, `HR10`
+- Bit access: `DM100.5` (bit 5 of DM100)
+- Arrays: `DM100[10]` for 10 consecutive words
+
+**Troubleshooting:**
+- Timeout errors - Check IP, port, and that PLC is powered on
+- Wrong node - Verify FINS node address matches PLC configuration
+- No response - Ensure UDP 9600 is not blocked by firewall
 
 ### Tag Aliases
 
-For S7 and Omron PLCs, assign friendly names to addresses:
+For S7 and Omron PLCs (which use address-based tags), assign friendly names:
 ```yaml
 - name: DB1.0
   alias: ProductCount
   data_type: DINT
 ```
+The alias appears in MQTT/Valkey/Kafka messages instead of the raw address.
 
 ## Event Triggers
 
@@ -247,7 +341,24 @@ Apache License 2.0
 
 ## Acknowledgements
 
-- Pylogix / dmroeder - reference code for EtherNet/IP development
+This project builds on excellent open source libraries:
+
+**PLC Communication:**
+- [gos7](https://github.com/robinson/gos7) - Siemens S7 protocol implementation
+- [fins](https://github.com/xiaotushaoxia/fins) - Omron FINS/UDP protocol
+- [pylogix](https://github.com/dmroeder/pylogix) - Reference for Allen-Bradley EtherNet/IP
+
+**Infrastructure:**
+- [paho.mqtt.golang](https://github.com/eclipse/paho.mqtt.golang) - Eclipse MQTT client
+- [go-redis](https://github.com/redis/go-redis) - Redis/Valkey client
+- [kafka-go](https://github.com/segmentio/kafka-go) - Apache Kafka client
+
+**User Interface:**
+- [tview](https://github.com/rivo/tview) - Terminal UI framework
+- [tcell](https://github.com/gdamore/tcell) - Terminal cell library
+
+**Utilities:**
+- [yaml.v3](https://github.com/go-yaml/yaml) - YAML parsing
 
 ## Contributing
 
