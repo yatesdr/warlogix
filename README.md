@@ -2,7 +2,7 @@
 
 A TUI (Text User Interface) gateway application for industrial PLCs including Allen-Bradley ControlLogix/CompactLogix, Siemens S7, Beckhoff TwinCAT, and Omron FINS. Browse tags, monitor values in real-time, and republish data via REST API, MQTT brokers, Kafka, and Redis/Valkey.
 
-> **BETA PROJECT** - This software is under active development. Allen-Bradley Logix and Siemens S7 support is stable and well-tested. Beckhoff TwinCAT and Omron FINS support are works in progress and may have bugs or missing features. Please report issues on GitHub.
+> **BETA PROJECT** - This software is under active development. Allen-Bradley Logix and Siemens S7 support is reasonably well-tested with a variety of hardware and tags. Beckhoff TwinCAT and Omron FINS support are works in progress and may have bugs or missing features. Please report issues on GitHub.
 
 ## The name
 
