@@ -22,6 +22,7 @@ WAR stands for "whispers across realms" - this application provides a gateway be
 - **Event Triggers**: Capture data snapshots on PLC events and publish to Kafka with acknowledgment
 - **Array Support**: Arrays of known types are published as native JSON arrays
 - **Auto-Reconnection**: Automatic connection recovery with watchdog monitoring
+- **Daemon Mode**: Run as a background service with SSH access for remote TUI control
 
 ## Warnings
 
@@ -49,10 +50,72 @@ Or use `make all` to build for all platforms.
 
 ## Usage
 
+### Local Mode (Default)
+
 ```bash
 ./warlogix                          # Default config (~/.warlogix/config.yaml)
 ./warlogix -config /path/to/config  # Custom config file
+./warlogix --log /var/log/warlogix.log  # Enable file logging
 ```
+
+### Daemon Mode (Remote Access via SSH)
+
+Run WarLogix as a daemon that serves the TUI over SSH, allowing remote access while keeping services running continuously:
+
+```bash
+# Start daemon with password authentication
+./warlogix -d -p 2222 --ssh-password "secret"
+
+# Start daemon with public key authentication
+./warlogix -d -p 2222 --ssh-keys ~/.ssh/authorized_keys
+
+# Start daemon with both auth methods and file logging
+./warlogix -d -p 2222 --ssh-password "secret" --ssh-keys ./keys --log /var/log/warlogix.log
+
+# Connect from remote machine
+ssh -p 2222 localhost
+```
+
+**Daemon Mode Features:**
+- Multiple SSH clients share the same TUI view (PTY multiplexing)
+- All clients see the same screen and can interact with it
+- Services (PLC polling, MQTT, Valkey, Kafka) continue running even with no SSH connections
+- Graceful shutdown with SIGTERM/SIGINT
+- Host keys automatically generated and stored at `~/.warlogix/host_key`
+
+**Stopping the Daemon:**
+
+From the terminal where the daemon is running:
+```bash
+Ctrl+C
+```
+
+From another terminal:
+```bash
+# Find the process ID
+pgrep warlogix
+
+# Send SIGTERM for graceful shutdown
+kill <pid>
+
+# Or use pkill
+pkill warlogix
+```
+
+The daemon performs a graceful shutdown: stops all SSH sessions, disconnects MQTT/Valkey/Kafka, stops the REST API, and disconnects all PLCs.
+
+**Note:** `Shift+Q` from within an SSH session only disconnects that client—it does not stop the daemon.
+
+**CLI Flags:**
+| Flag | Description |
+|------|-------------|
+| `-d` | Enable daemon mode |
+| `-p <port>` | SSH port (default: 2222) |
+| `--ssh-password <pass>` | Password for SSH authentication |
+| `--ssh-keys <path>` | Path to authorized_keys file or directory |
+| `--log <path>` | Write debug logs to file (works in both modes) |
+| `-config <path>` | Configuration file path |
+| `-version` | Show version and exit |
 
 ## Basic Usage
 
@@ -72,7 +135,7 @@ Or use `make all` to build for all platforms.
 |-----|-----|--------|
 | Global | `Shift+Tab` | Switch tabs |
 | Global | `?` | Help |
-| Global | `Q` | Quit |
+| Global | `Q` | Quit (local) / Disconnect (daemon) |
 | PLCs | `d/a/e/r` | Discover/Add/Edit/Remove |
 | PLCs | `c/C` | Connect/Disconnect |
 | Browser | `/` | Focus filter |
@@ -81,6 +144,8 @@ Or use `make all` to build for all platforms.
 | Triggers | `a/e/r` | Add/Edit/Remove trigger |
 | Triggers | `t/x` | Add/Remove data tag |
 | Triggers | `s/S/T` | Start/Stop/Test trigger |
+
+**Note:** In daemon mode, `Shift+Q` disconnects your SSH session but leaves the daemon running. Use `kill <pid>` or `Ctrl+C` in the daemon's terminal to stop the daemon entirely.
 
 ## Configuration
 
@@ -572,6 +637,10 @@ This project builds on excellent open source libraries:
 **User Interface:**
 - [tview](https://github.com/rivo/tview) - Terminal UI framework
 - [tcell](https://github.com/gdamore/tcell) - Terminal cell library
+
+**Remote Access:**
+- [gliderlabs/ssh](https://github.com/gliderlabs/ssh) - Go SSH server library
+- [creack/pty](https://github.com/creack/pty) - PTY handling for terminal multiplexing
 
 **Utilities:**
 - [yaml.v3](https://github.com/go-yaml/yaml) - YAML parsing

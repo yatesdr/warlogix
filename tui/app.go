@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -44,6 +45,11 @@ type App struct {
 	tabNames   []string
 
 	stopChan chan struct{}
+
+	// Daemon mode support
+	daemonMode       bool
+	onDisconnect     func() // Called when user requests disconnect in daemon mode
+	onShutdownDaemon func() // Called when daemon needs to shutdown
 }
 
 // NewApp creates a new TUI application.
@@ -64,6 +70,78 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiS
 
 	a.setupUI()
 	return a
+}
+
+// NewAppWithScreen creates a TUI application that uses the provided tcell.Screen.
+// This is used for daemon mode where the TUI runs on a PTY.
+func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, screen tcell.Screen) *App {
+	a := &App{
+		app:        tview.NewApplication().SetScreen(screen),
+		config:     cfg,
+		configPath: configPath,
+		manager:    manager,
+		apiServer:  apiServer,
+		mqttMgr:    mqttMgr,
+		valkeyMgr:  valkeyMgr,
+		kafkaMgr:   kafkaMgr,
+		triggerMgr: triggerMgr,
+		tabNames:   []string{TabPLCs, TabBrowser, TabREST, TabMQTT, TabValkey, TabKafka, TabTriggers, TabDebug},
+		stopChan:   make(chan struct{}),
+		daemonMode: true,
+	}
+
+	a.setupUI()
+	return a
+}
+
+// NewAppWithPTY creates a TUI application that uses the provided PTY file descriptors.
+// This is used for daemon mode where the TUI runs on a PTY for SSH multiplexing.
+func NewAppWithPTY(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, ptyFile *os.File) (*App, error) {
+	// Create a PTYTty wrapper that implements tcell.Tty
+	ptyTty := NewPTYTty(ptyFile)
+
+	// Create a tcell screen using the PTY
+	screen, err := tcell.NewTerminfoScreenFromTty(ptyTty)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := screen.Init(); err != nil {
+		return nil, err
+	}
+
+	a := &App{
+		app:        tview.NewApplication().SetScreen(screen),
+		config:     cfg,
+		configPath: configPath,
+		manager:    manager,
+		apiServer:  apiServer,
+		mqttMgr:    mqttMgr,
+		valkeyMgr:  valkeyMgr,
+		kafkaMgr:   kafkaMgr,
+		triggerMgr: triggerMgr,
+		tabNames:   []string{TabPLCs, TabBrowser, TabREST, TabMQTT, TabValkey, TabKafka, TabTriggers, TabDebug},
+		stopChan:   make(chan struct{}),
+		daemonMode: true,
+	}
+
+	a.setupUI()
+	return a, nil
+}
+
+// SetDaemonMode sets whether the app is running in daemon mode.
+func (a *App) SetDaemonMode(daemon bool) {
+	a.daemonMode = daemon
+}
+
+// SetOnDisconnect sets a callback for when the user requests disconnect in daemon mode.
+func (a *App) SetOnDisconnect(fn func()) {
+	a.onDisconnect = fn
+}
+
+// SetOnShutdownDaemon sets a callback for when the daemon needs to shutdown.
+func (a *App) SetOnShutdownDaemon(fn func()) {
+	a.onShutdownDaemon = fn
 }
 
 func (a *App) setupUI() {
@@ -133,7 +211,14 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	// Handle quit and tab switching even if we're not sure about the page state
 	// Check for quit: Shift+Q (uppercase Q)
 	if event.Rune() == 'Q' {
-		a.Shutdown()
+		if a.daemonMode {
+			// In daemon mode, Shift-Q disconnects the session, not quits the daemon
+			if a.onDisconnect != nil {
+				a.onDisconnect()
+			}
+		} else {
+			a.Shutdown()
+		}
 		return nil
 	}
 
@@ -219,8 +304,12 @@ func (a *App) setStatus(msg string) {
 }
 
 func (a *App) showHelp() {
+	helpText := HelpText
+	if a.daemonMode {
+		helpText = HelpTextDaemon
+	}
 	textView := tview.NewTextView().
-		SetText(HelpText).
+		SetText(helpText).
 		SetDynamicColors(true)
 	textView.SetBorder(true).SetTitle(" Help ")
 
@@ -405,6 +494,20 @@ func (a *App) Shutdown() {
 // Stop halts the TUI application.
 func (a *App) Stop() {
 	a.app.Stop()
+}
+
+// ShutdownDaemon performs a full daemon shutdown.
+// This is called when SIGTERM/SIGINT is received in daemon mode.
+func (a *App) ShutdownDaemon() {
+	if a.onShutdownDaemon != nil {
+		a.onShutdownDaemon()
+	}
+	a.Shutdown()
+}
+
+// IsDaemonMode returns whether the app is running in daemon mode.
+func (a *App) IsDaemonMode() bool {
+	return a.daemonMode
 }
 
 // QueueUpdateDraw queues a function to run on the UI thread.

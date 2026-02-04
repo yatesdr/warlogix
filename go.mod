@@ -3,17 +3,22 @@ module warlogix
 go 1.24.0
 
 require (
+	github.com/creack/pty v1.1.21
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gdamore/tcell/v2 v2.8.1
+	github.com/gliderlabs/ssh v0.3.8
 	github.com/redis/go-redis/v9 v9.17.3
 	github.com/rivo/tview v0.42.0
 	github.com/robinson/gos7 v0.0.0-20241205073040-7ea1d6fb9d20
 	github.com/segmentio/kafka-go v0.4.50
 	github.com/xiaotushaoxia/fins v0.0.2
+	golang.org/x/crypto v0.42.0
+	golang.org/x/sys v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/gdamore/encoding v1.0.1 // indirect
@@ -28,7 +33,6 @@ require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	golang.org/x/net v0.44.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/sys v0.36.0 // indirect
 	golang.org/x/term v0.35.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
 )

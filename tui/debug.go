@@ -7,17 +7,19 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+	"warlogix/logging"
 )
 
 // DebugTab displays debug log messages.
 type DebugTab struct {
-	app       *App
-	flex      *tview.Flex
-	logView   *tview.TextView
-	statusBar *tview.TextView
-	messages  []string
-	mu        sync.Mutex
-	maxLines  int
+	app        *App
+	flex       *tview.Flex
+	logView    *tview.TextView
+	statusBar  *tview.TextView
+	messages   []string
+	mu         sync.Mutex
+	maxLines   int
+	fileLogger *logging.FileLogger
 }
 
 // Global debug logger instance
@@ -76,6 +78,14 @@ func (t *DebugTab) setupUI() {
 // This is safe to call from any goroutine.
 // Uses TryLock to avoid blocking - messages may be dropped if contended.
 func (t *DebugTab) Log(format string, args ...interface{}) {
+	formattedMsg := fmt.Sprintf(format, args...)
+
+	// Write to file logger if configured (always, even if TryLock fails)
+	if t.fileLogger != nil {
+		// Strip tview color tags for file output
+		t.fileLogger.Log("%s", stripColorTags(formattedMsg))
+	}
+
 	// Use TryLock to avoid blocking callers (especially fire() which can block UI)
 	if !t.mu.TryLock() {
 		return // Drop the message rather than block
@@ -83,7 +93,7 @@ func (t *DebugTab) Log(format string, args ...interface{}) {
 	defer t.mu.Unlock()
 
 	timestamp := time.Now().Format("15:04:05.000")
-	msg := fmt.Sprintf("[gray]%s[-] %s", timestamp, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf("[gray]%s[-] %s", timestamp, formattedMsg)
 	t.messages = append(t.messages, msg)
 
 	// Trim if too many messages
@@ -92,6 +102,34 @@ func (t *DebugTab) Log(format string, args ...interface{}) {
 	}
 
 	// Don't update UI here - let Refresh() handle it to avoid threading issues
+}
+
+// SetFileLogger sets a file logger for writing debug messages to disk.
+// Messages are written to the file in addition to the debug buffer.
+func (t *DebugTab) SetFileLogger(logger *logging.FileLogger) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.fileLogger = logger
+}
+
+// stripColorTags removes tview color tags like [red], [green], [-], etc.
+func stripColorTags(s string) string {
+	result := make([]byte, 0, len(s))
+	inTag := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '[' {
+			inTag = true
+			continue
+		}
+		if s[i] == ']' && inTag {
+			inTag = false
+			continue
+		}
+		if !inTag {
+			result = append(result, s[i])
+		}
+	}
+	return string(result)
 }
 
 // LogError adds an error message to the debug log.
@@ -196,5 +234,24 @@ func (t *DebugTab) LogKafka(format string, args ...interface{}) {
 func DebugLogKafka(format string, args ...interface{}) {
 	if debugLogger != nil {
 		debugLogger.LogKafka(format, args...)
+	}
+}
+
+// LogSSH adds an SSH-related message to the debug log.
+func (t *DebugTab) LogSSH(format string, args ...interface{}) {
+	t.Log("[magenta]SSH:[-] "+format, args...)
+}
+
+// DebugLogSSH logs an SSH message to the debug tab if it exists.
+func DebugLogSSH(format string, args ...interface{}) {
+	if debugLogger != nil {
+		debugLogger.LogSSH(format, args...)
+	}
+}
+
+// SetDebugFileLogger sets a file logger for the global debug logger.
+func SetDebugFileLogger(logger *logging.FileLogger) {
+	if debugLogger != nil {
+		debugLogger.SetFileLogger(logger)
 	}
 }

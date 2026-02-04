@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.8] - 2026-02-04
+
+### Added
+- **SSH Daemon Mode**: Run WarLogix as a background daemon with remote TUI access over SSH
+  - Multiple SSH clients share the same TUI view via PTY multiplexing
+  - Password and/or public key authentication support
+  - Automatic host key generation (`~/.warlogix/host_key`)
+  - Services continue running even with no SSH connections
+  - Graceful shutdown with SIGTERM/SIGINT signals
+- **File Logging**: New `--log` flag to write debug messages to a file
+  - Works in both local and daemon modes
+  - Logs written alongside the debug window (not instead of)
+  - Color tags stripped for clean log file output
+- New CLI flags: `-d`, `-p`, `--ssh-password`, `--ssh-keys`, `--log`
+
+### Changed
+- `Shift+Q` now disconnects from daemon (vs quit in local mode)
+- Help text updated to reflect daemon mode differences
+- Updated documentation with daemon mode usage, configuration, and shutdown procedures
+
+### Dependencies
+- Added `github.com/gliderlabs/ssh` for SSH server
+- Added `github.com/creack/pty` for PTY handling
+- Added `golang.org/x/crypto` for SSH key management
+
 ## [0.1.7] - 2026-02-04
 
 ### Added

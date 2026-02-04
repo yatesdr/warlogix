@@ -81,7 +81,7 @@ func acceptDigits(text string, lastChar rune) bool {
 	return true
 }
 
-// Help text
+// Help text for local mode
 const HelpText = `
  Keyboard Shortcuts
  ──────────────────────────────────────
@@ -133,4 +133,58 @@ const HelpText = `
 
  Application
    Q            Quit
+`
+
+// HelpTextDaemon is the help text for daemon mode
+const HelpTextDaemon = `
+ Keyboard Shortcuts (Daemon Mode)
+ ──────────────────────────────────────
+
+ Navigation
+   Shift+Tab    Switch program tabs
+   Tab          Move between fields
+   Enter        Select / Activate
+   Space        Toggle checkbox
+   Escape       Close dialog / Back
+   ?            Show this help
+
+ PLCs Tab
+   d            Discover PLCs
+   a            Add PLC
+   e            Edit selected
+   r            Remove selected
+   c            Connect
+   C            Disconnect
+   i            Show PLC info
+
+ Tag Browser Tab
+   /            Focus filter
+   c            Clear filter
+   p            Focus PLC dropdown
+   Space        Toggle tag publishing
+   w            Toggle tag writable
+   d            Show tag details
+   a            Add manual tag (Micro800/S7/Omron)
+   e            Edit manual tag (Micro800/S7/Omron)
+   x            Delete manual tag (Micro800/S7/Omron)
+   Escape       Return to tree
+
+ MQTT / Valkey / Kafka Tabs
+   a            Add broker/server/cluster
+   e            Edit selected
+   r            Remove selected
+   c            Connect
+   C            Disconnect
+
+ Triggers Tab
+   a            Add trigger
+   e            Edit selected
+   r            Remove selected
+   s            Start trigger
+   S            Stop trigger
+   T            Test fire trigger
+   R            Reset trigger from error
+
+ Session
+   Q            Disconnect from daemon
 `
