@@ -9,6 +9,7 @@ require (
 	github.com/rivo/tview v0.42.0
 	github.com/robinson/gos7 v0.0.0-20241205073040-7ea1d6fb9d20
 	github.com/segmentio/kafka-go v0.4.50
+	github.com/xiaotushaoxia/fins v0.0.2
 	gopkg.in/yaml.v3 v3.0.1
 )
 

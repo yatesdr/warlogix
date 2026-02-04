@@ -8,6 +8,7 @@ import (
 
 // ADS/TwinCAT data type codes
 // These match the internal TwinCAT type system.
+// ADS uses little-endian byte order (native x86 format).
 const (
 	TypeVoid   uint16 = 0x00
 	TypeBool   uint16 = 0x21 // BOOL (1 byte)
@@ -30,7 +31,25 @@ const (
 
 	// Pseudo-types for internal use
 	TypeUnknown uint16 = 0xFFFF
+
+	// Array flag - high bit indicates array type
+	TypeArrayFlag uint16 = 0x8000
 )
+
+// IsArray returns true if the type code represents an array.
+func IsArray(typeCode uint16) bool {
+	return (typeCode & TypeArrayFlag) != 0
+}
+
+// MakeArrayType returns the array version of a base type.
+func MakeArrayType(baseType uint16) uint16 {
+	return baseType | TypeArrayFlag
+}
+
+// BaseType returns the base type code with array flag removed.
+func BaseType(typeCode uint16) uint16 {
+	return typeCode &^ TypeArrayFlag
+}
 
 // TypeName returns the human-readable name for an ADS data type.
 func TypeName(typeCode uint16) string {
@@ -333,7 +352,15 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			if v {
 				b = 1
 			}
-		case int, int32, int64:
+		case int:
+			if v != 0 {
+				b = 1
+			}
+		case int32:
+			if v != 0 {
+				b = 1
+			}
+		case int64:
 			if v != 0 {
 				b = 1
 			}

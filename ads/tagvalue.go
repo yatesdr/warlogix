@@ -2,53 +2,17 @@ package ads
 
 import "fmt"
 
-// TagValue holds the result of a tag read operation.
-// This structure is designed to be compatible with the warlogix plcman package.
-type TagValue struct {
-	Name     string // Symbol name
-	DataType uint16 // ADS type code
-	Bytes    []byte // Raw value bytes (little-endian)
-	Error    error  // Per-tag error (nil if successful)
-}
-
-// GoValue returns the decoded Go value from the raw bytes.
-func (t *TagValue) GoValue() interface{} {
-	if t == nil || t.Error != nil || len(t.Bytes) == 0 {
-		return nil
-	}
-	return DecodeValue(t.DataType, t.Bytes)
-}
-
-// TypeName returns the human-readable type name.
-func (t *TagValue) TypeName() string {
-	if t == nil {
-		return ""
-	}
-	return TypeName(t.DataType)
-}
-
-// String returns a string representation of the tag value.
-func (t *TagValue) String() string {
-	if t == nil {
-		return "<nil>"
-	}
-	if t.Error != nil {
-		return fmt.Sprintf("%s: error: %v", t.Name, t.Error)
-	}
-	return fmt.Sprintf("%s (%s) = %v", t.Name, t.TypeName(), t.GoValue())
-}
-
 // TagInfo holds metadata about a discovered symbol.
 // This structure is designed to be compatible with the warlogix plcman package.
 type TagInfo struct {
-	Name       string // Full symbol name (e.g., "MAIN.Temperature")
-	TypeCode   uint16 // ADS type code
-	TypeName   string // Type name from TwinCAT (e.g., "REAL", "FB_MyBlock")
-	Size       uint32 // Size in bytes
-	Comment    string // Symbol comment/description
-	IndexGroup uint32 // Index group for direct access
+	Name        string // Full symbol name (e.g., "MAIN.Temperature")
+	TypeCode    uint16 // ADS type code
+	TypeName    string // Type name from TwinCAT (e.g., "REAL", "FB_MyBlock")
+	Size        uint32 // Size in bytes
+	Comment     string // Symbol comment/description
+	IndexGroup  uint32 // Index group for direct access
 	IndexOffset uint32 // Index offset for direct access
-	Flags      uint32 // Symbol flags
+	Flags       uint32 // Symbol flags
 }
 
 // IsReadable returns true if the symbol can be read.
@@ -66,7 +30,7 @@ func (t *TagInfo) IsWritable() bool {
 	// Check flags for write access
 	// In TwinCAT, most variables are writable unless marked as CONSTANT
 	// Flag bit 4 (0x10) typically indicates read-only
-	return (t.Flags & 0x10) == 0
+	return (t.Flags & SymFlagReadOnly) == 0
 }
 
 // IsPrimitive returns true if the type is a primitive (not a struct/FB).
@@ -81,6 +45,14 @@ func (t *TagInfo) IsPrimitive() bool {
 		// Check if size matches a primitive
 		return t.Size <= 8
 	}
+}
+
+// String returns a string representation of the tag info.
+func (t *TagInfo) String() string {
+	if t == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%s (%s, %d bytes)", t.Name, t.TypeName, t.Size)
 }
 
 // SymbolFlags contains bit flags for symbol attributes.

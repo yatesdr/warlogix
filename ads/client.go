@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -194,6 +195,103 @@ func (c *Client) IsConnected() bool {
 	return c.connected
 }
 
+// SetDisconnected marks the client as disconnected.
+// This is called when a read/write error indicates the connection is lost.
+func (c *Client) SetDisconnected() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connected = false
+}
+
+// Reconnect attempts to re-establish the connection.
+// Returns nil if already connected, otherwise attempts reconnection.
+func (c *Client) Reconnect() error {
+	if c == nil {
+		return fmt.Errorf("nil client")
+	}
+
+	c.mu.Lock()
+	if c.connected {
+		c.mu.Unlock()
+		return nil
+	}
+
+	// Close existing connection if any
+	if c.conn != nil {
+		c.conn.close()
+		c.conn = nil
+	}
+
+	// Clear symbol handles (they're invalid after reconnection)
+	c.symbolsMu.Lock()
+	for _, entry := range c.symbols {
+		entry.Handle = 0
+	}
+	c.symbolsMu.Unlock()
+
+	targetNetId := c.targetNetId
+	localNetId := c.localNetId
+	localPort := c.localPort
+	c.mu.Unlock()
+
+	// Derive host from target Net ID (first 4 bytes are typically the IP)
+	host := fmt.Sprintf("%d.%d.%d.%d", targetNetId[0], targetNetId[1], targetNetId[2], targetNetId[3])
+
+	// Connect to ADS TCP port
+	tcpAddr := fmt.Sprintf("%s:%d", host, DefaultTCPPort)
+	conn, err := net.DialTimeout("tcp", tcpAddr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("reconnect failed: %w", err)
+	}
+
+	// Set connection timeouts
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+
+	adsConn := newAdsConnection(conn, localNetId, localPort)
+
+	c.mu.Lock()
+	c.conn = adsConn
+	c.connected = true
+	c.mu.Unlock()
+
+	// Verify connection by reading device info
+	info, err := c.readDeviceInfo()
+	if err != nil {
+		c.mu.Lock()
+		c.connected = false
+		c.conn.close()
+		c.conn = nil
+		c.mu.Unlock()
+		return fmt.Errorf("reconnect verification failed: %w", err)
+	}
+	c.deviceInfo = info
+
+	return nil
+}
+
+// isConnectionError checks if an error indicates the TCP connection is broken.
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	// Common connection-related error patterns
+	return strings.Contains(errStr, "connection") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "reset by peer") ||
+		strings.Contains(errStr, "eof") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "refused") ||
+		strings.Contains(errStr, "closed") ||
+		strings.Contains(errStr, "nil")
+}
+
 // ConnectionMode returns a human-readable string describing the connection mode.
 func (c *Client) ConnectionMode() string {
 	if c == nil {
@@ -301,6 +399,12 @@ func (c *Client) readSymbol(name string) (*TagValue, error) {
 	// Get symbol info (from cache or PLC)
 	entry, err := c.getSymbolEntry(name)
 	if err != nil {
+		// Check for connection error
+		if isConnectionError(err) {
+			c.mu.Lock()
+			c.connected = false
+			c.mu.Unlock()
+		}
 		return nil, err
 	}
 
@@ -308,6 +412,12 @@ func (c *Client) readSymbol(name string) (*TagValue, error) {
 	if entry.Handle == 0 {
 		handle, err := c.acquireHandle(name)
 		if err != nil {
+			// Check for connection error
+			if isConnectionError(err) {
+				c.mu.Lock()
+				c.connected = false
+				c.mu.Unlock()
+			}
 			return nil, err
 		}
 		c.symbolsMu.Lock()
@@ -320,6 +430,7 @@ func (c *Client) readSymbol(name string) (*TagValue, error) {
 	defer c.mu.Unlock()
 
 	if c.conn == nil {
+		c.connected = false
 		return nil, fmt.Errorf("not connected")
 	}
 
@@ -331,6 +442,10 @@ func (c *Client) readSymbol(name string) (*TagValue, error) {
 
 	resp, err := c.conn.sendRequest(c.targetNetId, c.targetPort, CmdRead, data)
 	if err != nil {
+		// Check for connection error
+		if isConnectionError(err) {
+			c.connected = false
+		}
 		return nil, err
 	}
 
@@ -349,10 +464,18 @@ func (c *Client) readSymbol(name string) (*TagValue, error) {
 		return nil, fmt.Errorf("response data truncated: expected %d, got %d", length, len(resp)-8)
 	}
 
+	// Determine element count for arrays
+	elemSize := TypeSize(entry.Info.TypeCode)
+	count := 1
+	if elemSize > 0 && int(length) > elemSize {
+		count = int(length) / elemSize
+	}
+
 	return &TagValue{
 		Name:     name,
 		DataType: entry.Info.TypeCode,
 		Bytes:    resp[8 : 8+length],
+		Count:    count,
 		Error:    nil,
 	}, nil
 }

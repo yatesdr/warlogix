@@ -16,7 +16,7 @@ const (
 	FamilyLogix    PLCFamily = "logix"    // Allen-Bradley ControlLogix/CompactLogix
 	FamilyMicro800 PLCFamily = "micro800" // Allen-Bradley Micro800 series
 	FamilyS7       PLCFamily = "s7"       // Siemens S7
-	FamilyOmron    PLCFamily = "omron"    // Omron (future)
+	FamilyOmron    PLCFamily = "omron"    // Omron FINS protocol
 	FamilyBeckhoff PLCFamily = "beckhoff" // Beckhoff TwinCAT (ADS protocol)
 )
 
@@ -57,6 +57,12 @@ type PLCConfig struct {
 	// Beckhoff/TwinCAT-specific settings
 	AmsNetId string `yaml:"ams_net_id,omitempty"` // AMS Net ID (e.g., "192.168.1.100.1.1")
 	AmsPort  uint16 `yaml:"ams_port,omitempty"`   // AMS Port (default: 851 for TwinCAT 3)
+
+	// Omron FINS-specific settings
+	FinsPort    int  `yaml:"fins_port,omitempty"`    // FINS UDP port (default: 9600)
+	FinsNetwork byte `yaml:"fins_network,omitempty"` // FINS network number (default: 0)
+	FinsNode    byte `yaml:"fins_node,omitempty"`    // FINS node number (default: 0)
+	FinsUnit    byte `yaml:"fins_unit,omitempty"`    // FINS unit number (default: 0)
 }
 
 // GetFamily returns the PLC family, defaulting to logix if not set.
