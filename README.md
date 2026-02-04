@@ -2,6 +2,8 @@
 
 A TUI (Text User Interface) gateway application for industrial PLCs including Allen-Bradley ControlLogix/CompactLogix, Siemens S7, Beckhoff TwinCAT, and Omron FINS. Browse tags, monitor values in real-time, and republish data via REST API, MQTT brokers, Kafka, and Redis/Valkey.
 
+> **BETA PROJECT** - This software is under active development. Allen-Bradley Logix and Siemens S7 support is stable and well-tested. Beckhoff TwinCAT and Omron FINS support are works in progress and may have bugs or missing features. Please report issues on GitHub.
+
 ## The name
 
 WAR stands for "whispers across realms" - this application provides a gateway between industrial and IT applications, connecting PLCs from multiple vendors to REST / MQTT / Kafka / Valkey (Redis) formats.
