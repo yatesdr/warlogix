@@ -97,7 +97,7 @@ plcs:
     family: s7
     slot: 1
     tags:
-      - name: DB1.DBD0
+      - name: DB1.0
         data_type: DINT
         enabled: true
 
@@ -196,9 +196,10 @@ poll_rate: 1s
 
 ### Siemens S7
 
-- **Addressing**: `DB<n>.DB<type><offset>` (e.g., `DB1.DBD0` for DINT at byte 0)
-- **Types**: DBX=bit, DBB=byte, DBW=word, DBD=dword
-- **Arrays**: `DB1.0[10]` for 10 elements
+- **Addressing**: `DB<n>.<offset>` with `data_type` field (e.g., `DB1.0` with `data_type: DINT`)
+- **Bit access**: `DB<n>.<offset>.<bit>` (e.g., `DB1.4.0` for bit 0 at byte 4)
+- **Other areas**: `I<offset>`, `Q<offset>`, `M<offset>` (inputs, outputs, markers)
+- **Arrays**: `DB1.0[10]` for 10 elements starting at byte 0
 - **TIA Portal**: Enable PUT/GET access; disable optimized block access for DBs
 
 ### Beckhoff TwinCAT
@@ -219,7 +220,7 @@ poll_rate: 1s
 
 For S7 and Omron PLCs, assign friendly names to addresses:
 ```yaml
-- name: DB1.DBD0
+- name: DB1.0
   alias: ProductCount
   data_type: DINT
 ```
