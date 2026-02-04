@@ -159,11 +159,64 @@ poll_rate: 1s
 
 ## REST API
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /` | List all PLCs with status |
-| `GET /{plc}/tags` | All tags with current values |
-| `GET /{plc}/tags/{tag}` | Single tag value |
+### Read Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | List all PLCs with status |
+| `/{plc}` | GET | PLC details and identity |
+| `/{plc}/tags` | GET | All enabled tags with current values |
+| `/{plc}/tags/{tag}` | GET | Single tag value |
+| `/{plc}/programs` | GET | List programs (Logix only) |
+
+### Write Endpoint
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/{plc}/write` | POST | Write a value to a tag |
+
+**Write Request:**
+```json
+{
+  "plc": "MainPLC",
+  "tag": "Program:MainProgram.Counter",
+  "value": 100
+}
+```
+
+**Write Response:**
+```json
+{
+  "plc": "MainPLC",
+  "tag": "Program:MainProgram.Counter",
+  "value": 100,
+  "success": true,
+  "timestamp": "2024-01-15T10:30:05Z"
+}
+```
+
+**Error Response:**
+```json
+{
+  "plc": "MainPLC",
+  "tag": "Program:MainProgram.Counter",
+  "value": 100,
+  "success": false,
+  "error": "tag is not writable",
+  "timestamp": "2024-01-15T10:30:05Z"
+}
+```
+
+**Write Error Conditions:**
+| HTTP Status | Error |
+|-------------|-------|
+| 400 | Invalid JSON or PLC name mismatch |
+| 403 | Tag is not marked as writable |
+| 404 | Tag not found |
+| 500 | Write failed or timeout |
+| 503 | PLC not connected |
+
+**Note:** Tags must be marked as `writable: true` in the configuration to accept writes.
 
 ## MQTT Topics
 
