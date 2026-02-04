@@ -8,7 +8,6 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlogix/ads"
 	"warlogix/config"
 	"warlogix/logix"
 	"warlogix/plcman"
@@ -215,14 +214,14 @@ func (t *BrowserTab) handleTreeKeys(event *tcell.EventKey) *tcell.EventKey {
 }
 
 // getTypeName returns the appropriate type name for a type code based on the current PLC family.
+// Each PLC family uses its native type codes for accurate display.
 func (t *BrowserTab) getTypeName(typeCode uint16) string {
 	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg != nil {
 		switch cfg.GetFamily() {
 		case config.FamilyS7:
 			return s7.TypeName(typeCode)
-		case config.FamilyBeckhoff:
-			return ads.TypeName(typeCode)
+		// Note: Beckhoff/ADS could be added here when implemented
 		}
 	}
 	return logix.TypeName(typeCode)
@@ -317,6 +316,20 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 	shortName := tag.Name
 	if idx := strings.LastIndex(tag.Name, "."); idx >= 0 {
 		shortName = tag.Name[idx+1:]
+	}
+
+	// For S7 PLCs, show alias as primary name if set, with address in gray
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg != nil && cfg.GetFamily() == config.FamilyS7 {
+		// Look up the alias for this tag
+		for _, sel := range cfg.Tags {
+			if sel.Name == tag.Name && sel.Alias != "" {
+				// Show: checkbox [indicators] Alias  (address) type
+				shortName = sel.Alias
+				typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
+				break
+			}
+		}
 	}
 
 	var text string
@@ -737,14 +750,14 @@ func (t *BrowserTab) loadTags() {
 
 	var tags []logix.TagInfo
 	var programs []string
-	var values map[string]*logix.TagValue
+	var values map[string]*plcman.TagValue
 
 	if plc != nil {
 		tags = plc.GetTags()
 		programs = plc.GetPrograms()
 		values = plc.GetValues()
 	} else {
-		values = make(map[string]*logix.TagValue)
+		values = make(map[string]*plcman.TagValue)
 	}
 
 	// For manual PLCs not yet connected, build tags from config
@@ -991,27 +1004,38 @@ func (t *BrowserTab) showAddTagDialog() {
 
 	// Use "Address:" label and S7 types for S7 PLCs
 	cfg := t.app.config.FindPLC(t.selectedPLC)
-	nameLabel := "Tag Name:"
+	addressLabel := "Tag Name:"
 	var typeOptions []string
-	if cfg != nil && cfg.GetFamily() == config.FamilyS7 {
-		nameLabel = "Address:"
+	isS7 := cfg != nil && cfg.GetFamily() == config.FamilyS7
+	if isS7 {
+		addressLabel = "Address:"
 		typeOptions = s7.SupportedTypeNames()
+		// S7: Alias first, then Type, then Address (more intuitive)
+		form.AddInputField("Name:", "", 30, nil, nil)
+		form.AddDropDown("Data Type:", typeOptions, 3, nil) // Default to DINT (index 3)
+		form.AddInputField(addressLabel, "", 30, nil, nil)
+		form.AddCheckbox("Writable:", false, nil)
 	} else {
 		typeOptions = logix.SupportedTypeNames()
+		// Logix: Tag Name, Type, Alias
+		form.AddInputField(addressLabel, "", 30, nil, nil)
+		form.AddDropDown("Data Type:", typeOptions, 3, nil) // Default to DINT (index 3)
+		form.AddInputField("Alias:", "", 30, nil, nil)
+		form.AddCheckbox("Writable:", false, nil)
 	}
 
-	form.AddInputField(nameLabel, "", 30, nil, nil)
-	form.AddDropDown("Data Type:", typeOptions, 3, nil) // Default to DINT (index 3)
-	form.AddInputField("Alias:", "", 30, nil, nil)
-	form.AddCheckbox("Writable:", false, nil)
-
 	form.AddButton("Add", func() {
-		tagName := form.GetFormItemByLabel(nameLabel).(*tview.InputField).GetText()
+		var tagName, alias string
+		if isS7 {
+			alias = form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
+			tagName = form.GetFormItemByLabel(addressLabel).(*tview.InputField).GetText()
+		} else {
+			tagName = form.GetFormItemByLabel(addressLabel).(*tview.InputField).GetText()
+			alias = form.GetFormItemByLabel("Alias:").(*tview.InputField).GetText()
+		}
 		typeIdx, _ := form.GetFormItemByLabel("Data Type:").(*tview.DropDown).GetCurrentOption()
-		alias := form.GetFormItemByLabel("Alias:").(*tview.InputField).GetText()
 		writable := form.GetFormItemByLabel("Writable:").(*tview.Checkbox).IsChecked()
 
-		isS7 := cfg != nil && cfg.GetFamily() == config.FamilyS7
 		if tagName == "" {
 			if isS7 {
 				t.app.showErrorWithFocus("Error", "Address is required", form)
@@ -1139,22 +1163,34 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 	}
 
 	// Use "Address:" label for S7 PLCs, "Tag Name:" for others
-	nameLabel := "Tag Name:"
+	addressLabel := "Tag Name:"
 	if isS7 {
-		nameLabel = "Address:"
+		addressLabel = "Address:"
+		// S7: Name first, then Type, then Address (more intuitive)
+		form.AddInputField("Name:", tagSel.Alias, 30, nil, nil)
+		form.AddDropDown("Data Type:", typeOptions, selectedType, nil)
+		form.AddInputField(addressLabel, tagSel.Name, 30, nil, nil)
+		form.AddCheckbox("Writable:", tagSel.Writable, nil)
+	} else {
+		// Logix: Tag Name, Type, Alias
+		form.AddInputField(addressLabel, tagSel.Name, 30, nil, nil)
+		form.AddDropDown("Data Type:", typeOptions, selectedType, nil)
+		form.AddInputField("Alias:", tagSel.Alias, 30, nil, nil)
+		form.AddCheckbox("Writable:", tagSel.Writable, nil)
 	}
-
-	form.AddInputField(nameLabel, tagSel.Name, 30, nil, nil)
-	form.AddDropDown("Data Type:", typeOptions, selectedType, nil)
-	form.AddInputField("Alias:", tagSel.Alias, 30, nil, nil)
-	form.AddCheckbox("Writable:", tagSel.Writable, nil)
 
 	originalName := tagSel.Name
 
 	form.AddButton("Save", func() {
-		tagName := form.GetFormItemByLabel(nameLabel).(*tview.InputField).GetText()
+		var tagName, alias string
+		if isS7 {
+			alias = form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
+			tagName = form.GetFormItemByLabel(addressLabel).(*tview.InputField).GetText()
+		} else {
+			tagName = form.GetFormItemByLabel(addressLabel).(*tview.InputField).GetText()
+			alias = form.GetFormItemByLabel("Alias:").(*tview.InputField).GetText()
+		}
 		typeIdx, _ := form.GetFormItemByLabel("Data Type:").(*tview.DropDown).GetCurrentOption()
-		alias := form.GetFormItemByLabel("Alias:").(*tview.InputField).GetText()
 		writable := form.GetFormItemByLabel("Writable:").(*tview.Checkbox).IsChecked()
 
 		if tagName == "" {

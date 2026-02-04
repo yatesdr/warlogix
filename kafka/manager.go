@@ -12,6 +12,7 @@ import (
 type TagMessage struct {
 	PLC       string      `json:"plc"`
 	Tag       string      `json:"tag"`
+	Address   string      `json:"address,omitempty"` // S7 address in uppercase (empty for non-S7)
 	Value     interface{} `json:"value"`
 	Type      string      `json:"type,omitempty"`
 	Writable  bool        `json:"writable"`
@@ -307,7 +308,8 @@ func logKafka(format string, args ...interface{}) {
 
 // Publish sends a tag value to all connected Kafka clusters that have PublishChanges enabled.
 // Only publishes if the value has changed (unless force is true).
-func (m *Manager) Publish(plcName, tagName, typeName string, value interface{}, writable, force bool) {
+// For S7 PLCs, alias is the user-defined name and address is the S7 address in uppercase.
+func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, value interface{}, writable, force bool) {
 	// Ensure workers are running
 	m.startWorkers()
 
@@ -342,10 +344,16 @@ func (m *Manager) Publish(plcName, tagName, typeName string, value interface{}, 
 			continue // No change
 		}
 
-		// Build message
+		// Build message - use alias as tag name if provided
+		displayTag := tagName
+		if alias != "" {
+			displayTag = alias
+		}
+
 		msg := TagMessage{
 			PLC:       plcName,
-			Tag:       tagName,
+			Tag:       displayTag,
+			Address:   address, // S7 address in uppercase, empty for non-S7
 			Value:     value,
 			Type:      typeName,
 			Writable:  writable,

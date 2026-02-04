@@ -128,7 +128,7 @@ func main() {
 		if mqttRunning {
 			go func() {
 				for _, c := range changesCopy {
-					mqttMgr.Publish(c.PLCName, c.TagName, c.TypeName, c.Value, true)
+					mqttMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, true)
 				}
 			}()
 		}
@@ -137,7 +137,7 @@ func main() {
 		if valkeyRunning {
 			go func() {
 				for _, c := range changesCopy {
-					valkeyMgr.Publish(c.PLCName, c.TagName, c.TypeName, c.Value, c.Writable)
+					valkeyMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, c.Writable)
 				}
 			}()
 		}
@@ -147,7 +147,7 @@ func main() {
 			go func() {
 				for _, c := range changesCopy {
 					// Use force=true since OnValueChange already confirms this is a changed value
-					kafkaMgr.Publish(c.PLCName, c.TagName, c.TypeName, c.Value, c.Writable, true)
+					kafkaMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, c.Writable, true)
 				}
 			}()
 		}

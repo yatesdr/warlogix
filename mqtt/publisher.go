@@ -76,6 +76,7 @@ type TagMessage struct {
 	Topic     string      `json:"topic"`
 	PLC       string      `json:"plc"`
 	Tag       string      `json:"tag"`
+	Address   string      `json:"address,omitempty"` // S7 address in uppercase (empty for non-S7)
 	Value     interface{} `json:"value"`
 	Type      string      `json:"type,omitempty"`
 	Writable  bool        `json:"writable"`
@@ -301,7 +302,9 @@ func (p *Publisher) BuildTopic(plcName, tagName string) string {
 }
 
 // Publish sends a tag value to MQTT if it has changed.
-func (p *Publisher) Publish(plcName, tagName, typeName string, value interface{}, writable, force bool) bool {
+// For S7 PLCs, alias is the user-friendly name and address is the S7 address in uppercase.
+// For other PLCs, alias and address can be empty.
+func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, value interface{}, writable, force bool) bool {
 	p.mu.RLock()
 	running := p.running
 	client := p.client
@@ -321,10 +324,17 @@ func (p *Publisher) Publish(plcName, tagName, typeName string, value interface{}
 		return false
 	}
 
+	// For S7 with alias, use alias as "tag" and include address
+	displayTag := tagName
+	if alias != "" {
+		displayTag = alias
+	}
+
 	msg := TagMessage{
 		Topic:     p.config.RootTopic,
 		PLC:       plcName,
-		Tag:       tagName,
+		Tag:       displayTag,
+		Address:   address, // Empty for non-S7, uppercase address for S7
 		Value:     value,
 		Type:      typeName,
 		Writable:  writable,
@@ -849,7 +859,8 @@ func (m *Manager) StopAll() {
 }
 
 // Publish publishes a value to all running publishers.
-func (m *Manager) Publish(plcName, tagName, typeName string, value interface{}, force bool) {
+// For S7 PLCs, alias is the user-friendly name and address is the S7 address in uppercase.
+func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, value interface{}, force bool) {
 	m.mu.RLock()
 	pubs := make([]*Publisher, 0, len(m.publishers))
 	for _, pub := range m.publishers {
@@ -873,7 +884,7 @@ func (m *Manager) Publish(plcName, tagName, typeName string, value interface{}, 
 	for _, pub := range pubs {
 		if pub.IsRunning() {
 			runningCount++
-			pub.Publish(plcName, tagName, typeName, value, writable, force)
+			pub.Publish(plcName, tagName, alias, address, typeName, value, writable, force)
 		}
 	}
 	if runningCount == 0 {

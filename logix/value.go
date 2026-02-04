@@ -12,6 +12,7 @@ type TagValue struct {
 	Name     string // Tag name as requested
 	DataType uint16 // CIP data type code
 	Bytes    []byte // Raw tag value bytes (little-endian)
+	Count    int    // Number of elements (0 or 1 for scalar, >1 for array)
 	Error    error  // Per-tag error (nil if successful)
 }
 
@@ -176,62 +177,90 @@ func (v *TagValue) GoValue() interface{} {
 	}
 
 	baseType := v.DataType & 0x0FFF
-	isArray := IsArray(v.DataType)
 
-	// Also detect arrays by checking if we have more data than a single element.
-	// Some PLCs (like Micro800) return the base type without the array flag,
-	// but the data contains multiple elements.
+	// Determine if this is an array
+	isArray := IsArray(v.DataType)
+	if v.Count > 1 {
+		isArray = true
+	}
+
+	// Detect arrays by data size if not already marked
 	if !isArray {
 		elemSize := TypeSize(baseType)
 		if elemSize > 0 && len(v.Bytes) > elemSize {
 			isArray = true
-		} else if baseType == TypeShortSTRING && len(v.Bytes) > 0 {
-			// For short strings, check if there's more data after the first string
-			firstStrLen := int(v.Bytes[0])
-			if len(v.Bytes) > 1+firstStrLen {
-				isArray = true
-			}
-		} else if baseType == TypeSTRING && len(v.Bytes) >= 4 {
-			// For Logix strings, check if there's more data after the first string
-			firstStrLen := int(binary.LittleEndian.Uint32(v.Bytes[:4]))
-			if len(v.Bytes) > 4+firstStrLen {
-				isArray = true
-			}
 		}
 	}
 
-	// Handle arrays of known types
+	// Handle arrays
 	if isArray {
 		return v.parseArray(baseType)
 	}
 
 	// Handle scalar values
+	return v.parseScalar(baseType)
+}
+
+// parseScalar parses a single Logix value based on type code.
+func (v *TagValue) parseScalar(baseType uint16) interface{} {
 	switch baseType {
 	case TypeBOOL:
-		if val, err := v.Bool(); err == nil {
+		if len(v.Bytes) >= 1 {
+			return v.Bytes[0] != 0
+		}
+	case TypeSINT:
+		if len(v.Bytes) >= 1 {
+			return int64(int8(v.Bytes[0]))
+		}
+	case TypeINT:
+		if len(v.Bytes) >= 2 {
+			return int64(int16(binary.LittleEndian.Uint16(v.Bytes)))
+		}
+	case TypeDINT:
+		if len(v.Bytes) >= 4 {
+			return int64(int32(binary.LittleEndian.Uint32(v.Bytes)))
+		}
+	case TypeLINT:
+		if len(v.Bytes) >= 8 {
+			return int64(binary.LittleEndian.Uint64(v.Bytes))
+		}
+	case TypeUSINT:
+		if len(v.Bytes) >= 1 {
+			return uint64(v.Bytes[0])
+		}
+	case TypeUINT:
+		if len(v.Bytes) >= 2 {
+			return uint64(binary.LittleEndian.Uint16(v.Bytes))
+		}
+	case TypeUDINT:
+		if len(v.Bytes) >= 4 {
+			return uint64(binary.LittleEndian.Uint32(v.Bytes))
+		}
+	case TypeULINT:
+		if len(v.Bytes) >= 8 {
+			return binary.LittleEndian.Uint64(v.Bytes)
+		}
+	case TypeREAL:
+		if len(v.Bytes) >= 4 {
+			bits := binary.LittleEndian.Uint32(v.Bytes)
+			return float64(math.Float32frombits(bits))
+		}
+	case TypeLREAL:
+		if len(v.Bytes) >= 8 {
+			bits := binary.LittleEndian.Uint64(v.Bytes)
+			return math.Float64frombits(bits)
+		}
+	case TypeSTRING:
+		if val, err := v.String(); err == nil {
 			return val
 		}
-	case TypeSINT, TypeINT, TypeDINT, TypeLINT:
-		if val, err := v.Int(); err == nil {
-			return val
-		}
-	case TypeUSINT, TypeUINT, TypeUDINT, TypeULINT:
-		if val, err := v.Uint(); err == nil {
-			return val
-		}
-	case TypeREAL, TypeLREAL:
-		if val, err := v.Float(); err == nil {
-			return val
-		}
-	case TypeSTRING, TypeShortSTRING:
+	case TypeShortSTRING:
 		if val, err := v.String(); err == nil {
 			return val
 		}
 	}
 
-	// For structs or unknown types, return as []int for JSON compatibility.
-	// This avoids base64 encoding that occurs with []byte and produces a readable
-	// integer array like [212, 153, 4, 0, ...] that can be easily parsed.
+	// Unknown type - return as byte array
 	return v.bytesToIntArray()
 }
 

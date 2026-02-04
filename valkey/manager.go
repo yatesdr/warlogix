@@ -165,7 +165,8 @@ func (m *Manager) AnyRunning() bool {
 }
 
 // Publish publishes a tag value to all running publishers.
-func (m *Manager) Publish(plcName, tagName, typeName string, value interface{}, writable bool) {
+// For S7 PLCs, alias is the user-defined name and address is the S7 address in uppercase.
+func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, value interface{}, writable bool) {
 	m.mu.RLock()
 	publishers := make([]*Publisher, len(m.publishers))
 	copy(publishers, m.publishers)
@@ -180,7 +181,7 @@ func (m *Manager) Publish(plcName, tagName, typeName string, value interface{}, 
 	for _, pub := range publishers {
 		if pub.IsRunning() {
 			runningCount++
-			if err := pub.Publish(plcName, tagName, typeName, value, writable); err != nil {
+			if err := pub.Publish(plcName, tagName, alias, address, typeName, value, writable); err != nil {
 				debugLog("Valkey publish error (%s): %v", pub.config.Name, err)
 			}
 		}

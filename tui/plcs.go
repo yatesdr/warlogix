@@ -299,6 +299,7 @@ type plcFormState struct {
 	slot        string
 	amsNetId    string
 	amsPort     string
+	pollRateMs  string // Poll rate in milliseconds (250-10000, empty = use global)
 	autoConnect bool
 }
 
@@ -306,9 +307,10 @@ var familyOptions = []string{"logix", "micro800", "s7", "beckhoff", "omron"}
 
 func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 	state := &plcFormState{
-		family:   0, // Default to logix
-		slot:     "0",
-		amsPort:  "851",
+		family:     0, // Default to logix
+		slot:       "0",
+		amsPort:    "851",
+		pollRateMs: "1000", // Default 1000ms
 	}
 
 	if dev != nil {
@@ -367,6 +369,15 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 		}, nil)
 	}
 
+	// Poll rate field (common to all families)
+	form.AddInputField("Poll Rate (ms):", state.pollRateMs, 10, func(text string, lastChar rune) bool {
+		if text == "" {
+			return true // Allow empty for "use global default"
+		}
+		_, err := strconv.Atoi(text)
+		return err == nil
+	}, nil)
+
 	form.AddCheckbox("Auto-connect:", state.autoConnect, nil)
 
 	form.AddButton("Add", func() {
@@ -380,12 +391,28 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 		slot, _ := strconv.Atoi(state.slot)
 		amsPort, _ := strconv.Atoi(state.amsPort)
 
+		// Parse poll rate (0 means use global default)
+		var pollRate time.Duration
+		if state.pollRateMs != "" {
+			pollMs, _ := strconv.Atoi(state.pollRateMs)
+			if pollMs > 0 {
+				// Clamp to valid range
+				if pollMs < 250 {
+					pollMs = 250
+				} else if pollMs > 10000 {
+					pollMs = 10000
+				}
+				pollRate = time.Duration(pollMs) * time.Millisecond
+			}
+		}
+
 		cfg := config.PLCConfig{
 			Name:     state.name,
 			Address:  state.address,
 			Slot:     byte(slot),
 			Family:   family,
 			Enabled:  state.autoConnect,
+			PollRate: pollRate,
 			AmsNetId: state.amsNetId,
 			AmsPort:  uint16(amsPort),
 		}
@@ -418,9 +445,9 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 	})
 
 	// Calculate form height based on number of fields
-	formHeight := 15 // Base height for common fields + buttons
+	formHeight := 17 // Base height for common fields + poll rate + buttons
 	if family == config.FamilyBeckhoff {
-		formHeight = 17 // Extra fields for Beckhoff
+		formHeight = 19 // Extra fields for Beckhoff
 	}
 
 	modal := tview.NewFlex().
@@ -453,6 +480,9 @@ func (t *PLCsTab) saveAddFormState(form *tview.Form, state *plcFormState, family
 	}
 	if item := form.GetFormItemByLabel("AMS Port:"); item != nil {
 		state.amsPort = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Poll Rate (ms):"); item != nil {
+		state.pollRateMs = item.(*tview.InputField).GetText()
 	}
 	if item := form.GetFormItemByLabel("Auto-connect:"); item != nil {
 		state.autoConnect = item.(*tview.Checkbox).IsChecked()
@@ -493,6 +523,12 @@ func (t *PLCsTab) showEditDialog() {
 		amsPort = strconv.Itoa(int(cfg.AmsPort))
 	}
 
+	// Convert poll rate to milliseconds string (default 1000 if not configured)
+	pollRateMs := "1000"
+	if cfg.PollRate > 0 {
+		pollRateMs = strconv.Itoa(int(cfg.PollRate.Milliseconds()))
+	}
+
 	state := &editFormState{
 		plcFormState: plcFormState{
 			family:      selectedFamily,
@@ -501,6 +537,7 @@ func (t *PLCsTab) showEditDialog() {
 			slot:        strconv.Itoa(int(cfg.Slot)),
 			amsNetId:    cfg.AmsNetId,
 			amsPort:     amsPort,
+			pollRateMs:  pollRateMs,
 			autoConnect: cfg.Enabled,
 		},
 		originalName: cfg.Name,
@@ -558,6 +595,15 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		}, nil)
 	}
 
+	// Poll rate field (common to all families)
+	form.AddInputField("Poll Rate (ms):", state.pollRateMs, 10, func(text string, lastChar rune) bool {
+		if text == "" {
+			return true // Allow empty for "use global default"
+		}
+		_, err := strconv.Atoi(text)
+		return err == nil
+	}, nil)
+
 	form.AddCheckbox("Auto-connect:", state.autoConnect, nil)
 
 	form.AddButton("Save", func() {
@@ -571,12 +617,28 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		slot, _ := strconv.Atoi(state.slot)
 		amsPort, _ := strconv.Atoi(state.amsPort)
 
+		// Parse poll rate (0 means use global default)
+		var pollRate time.Duration
+		if state.pollRateMs != "" {
+			pollMs, _ := strconv.Atoi(state.pollRateMs)
+			if pollMs > 0 {
+				// Clamp to valid range
+				if pollMs < 250 {
+					pollMs = 250
+				} else if pollMs > 10000 {
+					pollMs = 10000
+				}
+				pollRate = time.Duration(pollMs) * time.Millisecond
+			}
+		}
+
 		updated := config.PLCConfig{
 			Name:     state.name,
 			Address:  state.address,
 			Slot:     byte(slot),
 			Family:   family,
 			Enabled:  state.autoConnect,
+			PollRate: pollRate,
 			Tags:     state.tags,
 			AmsNetId: state.amsNetId,
 			AmsPort:  uint16(amsPort),
@@ -602,11 +664,7 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 					t.app.UpdateMQTTPLCNames()
 				}
 				if updatedCfg.Enabled {
-					if err := t.app.manager.Connect(newName); err == nil {
-						if plc := t.app.manager.GetPLC(newName); plc != nil {
-							DebugLog("PLC %s connected: %s", newName, plc.GetConnectionMode())
-						}
-					}
+					t.app.manager.Connect(newName)
 				}
 			}
 			t.app.QueueUpdateDraw(func() {
@@ -631,9 +689,9 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 	})
 
 	// Calculate form height based on number of fields
-	formHeight := 15 // Base height for common fields + buttons
+	formHeight := 17 // Base height for common fields + poll rate + buttons
 	if family == config.FamilyBeckhoff {
-		formHeight = 17 // Extra fields for Beckhoff
+		formHeight = 19 // Extra fields for Beckhoff
 	}
 
 	modal := tview.NewFlex().
@@ -666,6 +724,9 @@ func (t *PLCsTab) saveEditFormState(form *tview.Form, state *editFormState, fami
 	}
 	if item := form.GetFormItemByLabel("AMS Port:"); item != nil {
 		state.amsPort = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Poll Rate (ms):"); item != nil {
+		state.pollRateMs = item.(*tview.InputField).GetText()
 	}
 	if item := form.GetFormItemByLabel("Auto-connect:"); item != nil {
 		state.autoConnect = item.(*tview.Checkbox).IsChecked()
@@ -714,21 +775,8 @@ func (t *PLCsTab) connectSelected() {
 		t.app.SaveConfig()
 	}
 
-	go func() {
-		err := t.app.manager.Connect(name)
-		t.app.QueueUpdateDraw(func() {
-			if err != nil {
-				t.app.setStatus(fmt.Sprintf("Connection failed: %v", err))
-				DebugLogError("PLC %s connection failed: %v", name, err)
-			} else {
-				tags := plc.GetTags()
-				connMode := plc.GetConnectionMode()
-				t.app.setStatus(fmt.Sprintf("Connected to %s - %d tags discovered", name, len(tags)))
-				DebugLog("PLC %s connected: %s, %d tags discovered", name, connMode, len(tags))
-			}
-			t.Refresh()
-		})
-	}()
+	// Connect runs in background - manager will log success/failure
+	t.app.manager.Connect(name)
 }
 
 func (t *PLCsTab) disconnectSelected() {

@@ -22,7 +22,7 @@ const (
 
 // SupportsDiscovery returns true if the PLC family supports tag discovery.
 func (f PLCFamily) SupportsDiscovery() bool {
-	return f == FamilyLogix || f == "" || f == FamilyBeckhoff
+	return f == FamilyLogix || f == "" || f == FamilyMicro800 || f == FamilyBeckhoff
 }
 
 // String returns the string representation of the PLC family.
@@ -46,12 +46,13 @@ type Config struct {
 
 // PLCConfig stores configuration for a single PLC connection.
 type PLCConfig struct {
-	Name    string         `yaml:"name"`
-	Address string         `yaml:"address"`
-	Slot    byte           `yaml:"slot"`
-	Family  PLCFamily      `yaml:"family,omitempty"`
-	Enabled bool           `yaml:"enabled"`
-	Tags    []TagSelection `yaml:"tags,omitempty"`
+	Name     string         `yaml:"name"`
+	Address  string         `yaml:"address"`
+	Slot     byte           `yaml:"slot"`
+	Family   PLCFamily      `yaml:"family,omitempty"`
+	Enabled  bool           `yaml:"enabled"`
+	PollRate time.Duration  `yaml:"poll_rate,omitempty"` // Per-PLC poll rate (0 = use global)
+	Tags     []TagSelection `yaml:"tags,omitempty"`
 
 	// Beckhoff/TwinCAT-specific settings
 	AmsNetId string `yaml:"ams_net_id,omitempty"` // AMS Net ID (e.g., "192.168.1.100.1.1")

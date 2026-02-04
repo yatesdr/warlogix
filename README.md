@@ -554,7 +554,19 @@ The following PLC data types are fully supported for reading and writing:
 | ULINT  | 64-bit unsigned       | Full uint64 range              |
 | REAL   | 32-bit float          | IEEE 754 single precision      |
 | LREAL  | 64-bit float          | IEEE 754 double precision      |
-| STRING | String                | Up to 82 characters            |
+| STRING | String                | Up to 82 chars (Logix), 254 chars (S7) |
+
+### Byte Order by PLC Family
+
+Different PLC families use different byte orders for multi-byte values:
+
+| PLC Family | Byte Order | Notes |
+|------------|------------|-------|
+| **Siemens S7** | Big-endian | Most significant byte at lowest address |
+| **Allen-Bradley Logix** | Little-endian | Least significant byte at lowest address |
+| **Beckhoff TwinCAT** | Little-endian | Native x86 byte order |
+
+WarLogix automatically handles byte order conversion for each PLC family. When viewing raw bytes in the debug output, S7 bytes appear in big-endian order while Logix/Beckhoff bytes appear in little-endian order.
 
 ### Arrays
 
@@ -581,6 +593,170 @@ Structs and UDTs are published as byte arrays for manual decoding:
 ```
 
 Each element represents one byte (0-255). Decode using the UDT's field layout (little-endian byte order).
+
+## Siemens S7 Configuration
+
+### Rack and Slot
+
+The rack and slot settings determine where the CPU is located in the S7 system:
+
+| PLC Series | Rack | Slot | Notes |
+|------------|------|------|-------|
+| S7-1200 | 0 | 0 | CPU is in the integrated slot |
+| S7-1500 | 0 | 0 | CPU is in the integrated slot |
+| S7-300 | 0 | 2 | CPU typically in slot 2 (after power supply) |
+| S7-400 | 0 | varies | Depends on rack configuration |
+
+### S7 Addressing
+
+S7 PLCs use a different addressing scheme than Allen-Bradley. Addresses are based on byte offsets within memory areas.
+
+#### Address Format
+
+```
+<Area><Number>.<ByteOffset>[.BitNumber]
+```
+
+Or using the explicit DB format:
+
+```
+DB<Number>.DB<Type><ByteOffset>[.BitNumber]
+```
+
+#### Memory Areas
+
+| Area | Description | Example |
+|------|-------------|---------|
+| DB | Data Block | `DB1.DBD0`, `DB1.0` |
+| I | Inputs | `I0.0`, `IB0` |
+| Q | Outputs | `Q0.0`, `QB0` |
+| M | Markers (Memory) | `M0.0`, `MB0` |
+| T | Timers | `T0` |
+| C | Counters | `C0` |
+
+#### Data Type Suffixes (for DB addresses)
+
+| Suffix | Type | Size | Example |
+|--------|------|------|---------|
+| DBX | Bit (BOOL) | 1 bit | `DB1.DBX0.0` |
+| DBB | Byte | 1 byte | `DB1.DBB0` |
+| DBW | Word | 2 bytes | `DB1.DBW0` |
+| DBD | Double Word | 4 bytes | `DB1.DBD0` |
+
+#### Byte Offset Calculation
+
+S7 addresses are byte-based. When placing multiple values in a Data Block, calculate offsets based on the data type sizes:
+
+| Data Type | Size (bytes) | Example Layout |
+|-----------|--------------|----------------|
+| BOOL | 1 bit (packed 8 per byte) | Offset 0.0, 0.1, ... 0.7, 1.0 |
+| BYTE/SINT | 1 | Offset 0, 1, 2, ... |
+| WORD/INT | 2 | Offset 0, 2, 4, ... |
+| DWORD/DINT/REAL | 4 | Offset 0, 4, 8, ... |
+| LWORD/LINT/LREAL | 8 | Offset 0, 8, 16, ... |
+| STRING | 256 | Offset 0, 256, 512, ... |
+
+**Example Data Block Layout:**
+
+```
+DB1:
+  Offset 0:   DINT (4 bytes)   -> Address: DB1.DBD0 or DB1.0 with type DINT
+  Offset 4:   REAL (4 bytes)   -> Address: DB1.DBD4 or DB1.4 with type REAL
+  Offset 8:   BOOL (bit 0)     -> Address: DB1.DBX8.0
+  Offset 8:   BOOL (bit 1)     -> Address: DB1.DBX8.1
+  Offset 10:  INT (2 bytes)    -> Address: DB1.DBW10 or DB1.10 with type INT
+  Offset 12:  STRING (256 bytes) -> Address: DB1.12 with type STRING
+  Offset 268: DINT (4 bytes)   -> Address: DB1.DBD268 or DB1.268 with type DINT
+```
+
+### S7 Byte Order
+
+**Important:** Siemens S7 PLCs use **big-endian** byte order (most significant byte first), which is different from Allen-Bradley Logix PLCs (little-endian) and Beckhoff (little-endian).
+
+WarLogix automatically handles the byte order conversion for each PLC family:
+- **S7**: Data is read/written in big-endian format (native S7)
+- **Logix**: Data is read/written in little-endian format (native x86)
+- **Beckhoff**: Data is read/written in little-endian format (native x86)
+
+### S7 Data Types
+
+| Type | Size | S7 Name | Range |
+|------|------|---------|-------|
+| BOOL | 1 bit | BOOL | true/false |
+| BYTE | 1 byte | BYTE | 0 to 255 |
+| SINT | 1 byte | SINT | -128 to 127 |
+| WORD | 2 bytes | WORD | 0 to 65,535 |
+| INT | 2 bytes | INT | -32,768 to 32,767 |
+| DWORD | 4 bytes | DWORD | 0 to 4,294,967,295 |
+| DINT | 4 bytes | DINT | -2,147,483,648 to 2,147,483,647 |
+| REAL | 4 bytes | REAL | IEEE 754 single precision |
+| LWORD | 8 bytes | LWORD | 0 to 2^64-1 |
+| LINT | 8 bytes | LINT | Full int64 range |
+| LREAL | 8 bytes | LREAL | IEEE 754 double precision |
+| STRING | 256 bytes | STRING | Up to 254 characters |
+| WSTRING | 512 bytes | WSTRING | Up to 254 UTF-16 characters |
+
+### S7 String Format
+
+S7 strings have a specific format:
+- **STRING**: 1 byte max length + 1 byte actual length + up to 254 characters = 256 bytes total
+- **WSTRING**: 2 bytes max length + 2 bytes actual length + up to 508 bytes (254 UTF-16 chars) = 512 bytes total
+
+When reading STRING arrays, each element occupies 256 bytes regardless of the actual string content.
+
+### S7 Array Support
+
+Arrays can be specified by adding a count to the address:
+
+```yaml
+tags:
+  - name: DB1.0[10]     # Array of 10 DINTs starting at offset 0
+    data_type: DINT
+  - name: DB1.100[5]    # Array of 5 REALs starting at offset 100
+    data_type: REAL
+  - name: DB1.200[3]    # Array of 3 STRINGs starting at offset 200
+    data_type: STRING
+```
+
+### S7 Tag Aliases
+
+For S7 PLCs, you can assign user-friendly aliases to tags. The alias is used as the tag name in MQTT/Valkey/Kafka messages, while the address is preserved separately:
+
+```yaml
+tags:
+  - name: DB1.DBD0        # S7 address
+    alias: ProductCount   # Friendly name used in messages
+    data_type: DINT
+```
+
+Published message:
+```json
+{
+  "plc": "SiemensPLC",
+  "tag": "ProductCount",
+  "address": "DB1.DBD0",
+  "value": 42,
+  "type": "DINT"
+}
+```
+
+### S7 Connection Recovery
+
+WarLogix automatically detects S7 connection failures and attempts to reconnect:
+
+1. **Error Detection**: Read failures that indicate connection loss (timeout, EOF, connection reset) are detected automatically
+2. **Automatic Reconnection**: When a connection is lost, WarLogix waits 2 seconds then attempts to reconnect
+3. **Watchdog**: A background watchdog checks every 60 seconds for any PLCs that need reconnection
+4. **Status Display**: The PLCs tab shows the current connection status (Connected, Disconnected, Error, Connecting)
+
+### TIA Portal Configuration
+
+To communicate with S7-1200/1500 PLCs, ensure the following settings in TIA Portal:
+
+1. **Enable PUT/GET Access**: In the PLC properties under "Protection & Security", enable "Permit access with PUT/GET communication"
+2. **Data Block Settings**: For each DB you want to access:
+   - Disable "Optimized block access" (use standard/compatible access)
+   - This ensures the DB uses absolute addressing
 
 ## Beckhoff TwinCAT Configuration
 

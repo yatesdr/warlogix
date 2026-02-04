@@ -4,6 +4,7 @@ package plcman
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,7 +55,7 @@ type ManagedPLC struct {
 	Programs     []string
 	Tags         []logix.TagInfo  // Discovered tags (for discovery-capable PLCs)
 	ManualTags   []logix.TagInfo  // Tags from config (for non-discovery PLCs)
-	Values       map[string]*logix.TagValue
+	Values       map[string]*TagValue // Unified tag values (S7, Logix, ADS)
 	Status       ConnectionStatus
 	LastError    error
 	LastPoll     time.Time
@@ -109,10 +110,10 @@ func (m *ManagedPLC) GetError() error {
 }
 
 // GetValues returns a copy of the current tag values.
-func (m *ManagedPLC) GetValues() map[string]*logix.TagValue {
+func (m *ManagedPLC) GetValues() map[string]*TagValue {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	result := make(map[string]*logix.TagValue, len(m.Values))
+	result := make(map[string]*TagValue, len(m.Values))
 	for k, v := range m.Values {
 		result[k] = v
 	}
@@ -216,10 +217,13 @@ func (m *ManagedPLC) GetConnectionMode() string {
 // ValueChange represents a tag value that has changed.
 type ValueChange struct {
 	PLCName  string
-	TagName  string
+	TagName  string      // For S7: the address (e.g., "DB1.8"); for others: the tag name
+	Alias    string      // User-defined alias/name (especially useful for S7)
+	Address  string      // For S7: the address in uppercase; empty for other families
 	TypeName string
 	Value    interface{}
 	Writable bool
+	Family   string      // PLC family ("s7", "logix", "beckhoff", etc.)
 }
 
 // PollStats tracks polling statistics for debugging.
@@ -307,11 +311,17 @@ func (w *PLCWorker) poll() {
 	// Copy the tags to read while holding the lock to avoid race with UI
 	tagsToRead := make([]string, 0)
 	writableMap := make(map[string]bool)
+	aliasMap := make(map[string]string)   // Tag name -> alias
+	typeMap := make(map[string]string)    // Tag name -> configured data type
 	for _, sel := range cfg.Tags {
 		if sel.Enabled {
 			tagsToRead = append(tagsToRead, sel.Name)
 		}
 		writableMap[sel.Name] = sel.Writable
+		aliasMap[sel.Name] = sel.Alias
+		if sel.DataType != "" {
+			typeMap[sel.Name] = sel.DataType
+		}
 	}
 	oldValues := make(map[string]interface{})
 	for k, v := range plc.Values {
@@ -325,7 +335,7 @@ func (w *PLCWorker) poll() {
 	var hasConnection bool
 	switch family {
 	case config.FamilyS7:
-		hasConnection = s7Client != nil
+		hasConnection = s7Client != nil && s7Client.IsConnected()
 	case config.FamilyBeckhoff:
 		hasConnection = adsClient != nil
 	default:
@@ -333,6 +343,15 @@ func (w *PLCWorker) poll() {
 	}
 
 	if status != StatusConnected || !hasConnection {
+		// If S7 client exists but is not connected, trigger reconnection
+		if family == config.FamilyS7 && s7Client != nil && !s7Client.IsConnected() {
+			plc.mu.Lock()
+			plc.Status = StatusDisconnected
+			plc.S7Client = nil
+			plc.mu.Unlock()
+			w.manager.markStatusDirty()
+			go w.manager.scheduleReconnect(plcName)
+		}
 		w.statsMu.Lock()
 		w.tagsPolled = 0
 		w.changesFound = 0
@@ -351,22 +370,41 @@ func (w *PLCWorker) poll() {
 	}
 
 	// Read selected tags based on family type
-	var values []*logix.TagValue
+	var values []*TagValue
 	var err error
 
 	switch family {
 	case config.FamilyS7:
-		values, err = w.pollS7(s7Client, tagsToRead)
+		values, err = w.pollS7(s7Client, tagsToRead, typeMap)
 	case config.FamilyBeckhoff:
 		values, err = w.pollAds(adsClient, tagsToRead)
 	default:
-		values, err = client.Read(tagsToRead...)
+		var logixValues []*logix.TagValue
+		logixValues, err = client.Read(tagsToRead...)
+		if err == nil {
+			values = make([]*TagValue, len(logixValues))
+			for i, lv := range logixValues {
+				values[i] = FromLogixTagValue(lv)
+			}
+		}
 	}
 
 	if err != nil {
 		plc.mu.Lock()
 		plc.LastError = err
 		plc.Status = StatusError
+
+		// For S7, check if this is a connection error and mark client as disconnected
+		if family == config.FamilyS7 && s7Client != nil {
+			// The S7 client will have already marked itself disconnected if it detected
+			// a connection error, but we also trigger reconnection here
+			if !s7Client.IsConnected() {
+				plc.Status = StatusDisconnected
+				plc.S7Client = nil // Clear the dead client reference
+			}
+		}
+
+		plcNameForLog := plc.Config.Name
 		plc.mu.Unlock()
 
 		w.statsMu.Lock()
@@ -376,6 +414,13 @@ func (w *PLCWorker) poll() {
 		w.statsMu.Unlock()
 
 		w.manager.markStatusDirty()
+
+		// Trigger immediate reconnection attempt for connection errors
+		if family == config.FamilyS7 && (s7Client == nil || !s7Client.IsConnected()) {
+			w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
+			go w.manager.scheduleReconnect(plcNameForLog)
+		}
+
 		return
 	}
 
@@ -389,13 +434,20 @@ func (w *PLCWorker) poll() {
 			oldVal, existed := oldValues[v.Name]
 			// Check if value changed (or is new)
 			if !existed || fmt.Sprintf("%v", oldVal) != fmt.Sprintf("%v", newVal) {
-				changes = append(changes, ValueChange{
+				vc := ValueChange{
 					PLCName:  plcName,
 					TagName:  v.Name,
+					Alias:    aliasMap[v.Name],
 					TypeName: v.TypeName(),
 					Value:    newVal,
 					Writable: writableMap[v.Name],
-				})
+					Family:   string(family),
+				}
+				// For S7, set Address to uppercase version of TagName
+				if family == config.FamilyS7 {
+					vc.Address = strings.ToUpper(v.Name)
+				}
+				changes = append(changes, vc)
 			}
 		}
 		plc.Values[v.Name] = v
@@ -416,40 +468,89 @@ func (w *PLCWorker) poll() {
 	w.manager.markStatusDirty()
 }
 
-// pollS7 reads tags from an S7 PLC and converts them to logix.TagValue format.
-func (w *PLCWorker) pollS7(client *s7.Client, addresses []string) ([]*logix.TagValue, error) {
-	s7Values, err := client.Read(addresses...)
+// pollS7 reads tags from an S7 PLC and converts them to unified TagValue format.
+// typeMap contains user-configured data types used for address parsing and display.
+// The S7 package handles parsing with native big-endian byte order.
+func (w *PLCWorker) pollS7(client *s7.Client, addresses []string, typeMap map[string]string) ([]*TagValue, error) {
+	// Check for nil or disconnected client
+	if client == nil {
+		return nil, fmt.Errorf("S7 client is nil")
+	}
+	if !client.IsConnected() {
+		return nil, fmt.Errorf("S7 client is not connected")
+	}
+
+	// Build requests with type hints from configuration
+	requests := make([]s7.TagRequest, len(addresses))
+	for i, addr := range addresses {
+		requests[i] = s7.TagRequest{
+			Address:  addr,
+			TypeHint: typeMap[addr], // Pass configured type as hint
+		}
+	}
+
+	s7Values, err := client.ReadWithTypes(requests)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert S7 TagValues to logix TagValues for compatibility
-	results := make([]*logix.TagValue, len(s7Values))
+	// Convert S7 TagValues to unified TagValues
+	// The s7 package's GoValue() handles big-endian parsing natively
+	results := make([]*TagValue, len(s7Values))
 	for i, sv := range s7Values {
-		results[i] = &logix.TagValue{
+		// Use configured type if specified, otherwise use detected type
+		dataType := sv.DataType
+		if configuredType, ok := typeMap[sv.Name]; ok {
+			if s7Type, found := s7.TypeCodeFromName(configuredType); found {
+				dataType = s7Type
+			}
+		}
+
+		// Mark as array if Count > 1
+		count := sv.Count
+		if count < 1 {
+			count = 1
+		}
+		if count > 1 {
+			dataType = s7.MakeArrayType(dataType)
+		}
+
+		// Create unified TagValue using S7's native parsing
+		results[i] = &TagValue{
 			Name:     sv.Name,
-			DataType: sv.DataType,
-			Bytes:    sv.Bytes,
+			DataType: dataType,
+			Family:   "s7",
+			Value:    sv.GoValue(), // Uses big-endian (native S7 format)
+			Bytes: sv.Bytes,     // Keep original big-endian bytes
+			Count:    count,
 			Error:    sv.Error,
 		}
 	}
 	return results, nil
 }
 
-// pollAds reads tags from a Beckhoff TwinCAT PLC and converts them to logix.TagValue format.
-func (w *PLCWorker) pollAds(client *ads.Client, symbols []string) ([]*logix.TagValue, error) {
+// Each PLC family package now handles its own type parsing with native byte order.
+// S7: big-endian (native S7 format)
+// Logix: little-endian (native Logix format)
+// ADS: little-endian (native x86 format)
+
+// pollAds reads tags from a Beckhoff TwinCAT PLC and converts them to unified TagValue format.
+func (w *PLCWorker) pollAds(client *ads.Client, symbols []string) ([]*TagValue, error) {
 	adsValues, err := client.Read(symbols...)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert ADS TagValues to logix TagValues for compatibility
-	results := make([]*logix.TagValue, len(adsValues))
+	// Convert ADS TagValues to unified TagValues
+	results := make([]*TagValue, len(adsValues))
 	for i, av := range adsValues {
-		results[i] = &logix.TagValue{
+		results[i] = &TagValue{
 			Name:     av.Name,
 			DataType: av.DataType,
-			Bytes:    av.Bytes,
+			Family:   "beckhoff",
+			Value:    av.GoValue(),
+			Bytes: av.Bytes,
+			Count:    1, // ADS doesn't track count the same way
 			Error:    av.Error,
 		}
 	}
@@ -568,18 +669,42 @@ func (m *Manager) AddPLC(cfg *config.PLCConfig) error {
 	plc := &ManagedPLC{
 		Config: cfg,
 		Status: StatusDisconnected,
-		Values: make(map[string]*logix.TagValue),
+		Values: make(map[string]*TagValue),
 	}
 	m.plcs[cfg.Name] = plc
 
 	// If manager is running, start a worker for this PLC
 	if m.ctx != nil {
-		worker := newPLCWorker(plc, m, m.pollRate)
+		pollRate := m.getEffectivePollRate(cfg)
+		worker := newPLCWorker(plc, m, pollRate)
 		m.workers[cfg.Name] = worker
 		worker.Start()
 	}
 
 	return nil
+}
+
+// Polling rate limits
+const (
+	MinPollRate = 250 * time.Millisecond  // Minimum allowed poll rate
+	MaxPollRate = 10000 * time.Millisecond // Maximum allowed poll rate (10 seconds)
+)
+
+// getEffectivePollRate returns the poll rate for a PLC.
+// Uses the PLC's configured rate if set, otherwise falls back to the global rate.
+// Enforces minimum of 250ms to protect PLC from excessive polling.
+func (m *Manager) getEffectivePollRate(cfg *config.PLCConfig) time.Duration {
+	rate := m.pollRate // Start with global default
+	if cfg.PollRate > 0 {
+		rate = cfg.PollRate
+	}
+
+	// Enforce minimum poll rate to protect PLC
+	if rate < MinPollRate {
+		rate = MinPollRate
+	}
+
+	return rate
 }
 
 // RemovePLC removes a PLC from management and disconnects it.
@@ -703,13 +828,11 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 
 // connectS7PLC handles S7 PLC connections.
 func (m *Manager) connectS7PLC(plc *ManagedPLC, address string, slot int) error {
-	// S7-1200/1500 typically use rack 0, slot 0 or 1
-	// The slot in our config will be used as S7 slot
+	// S7-1200/1500: use rack 0, slot 0 (CPU is in the onboard slot)
+	// S7-300/400: use rack 0, slot 2 (or wherever CPU is in the rack)
+	// The slot in config directly maps to S7 slot number
 	rack := 0
-	s7Slot := slot
-	if s7Slot == 0 {
-		s7Slot = 1 // Default to slot 1 for S7-300/400 compatibility
-	}
+	s7Slot := slot // Use slot as-is - slot 0 is correct for S7-1200/1500
 
 	s7Client, err := s7.Connect(address, s7.WithRackSlot(rack, s7Slot))
 	if err != nil {
@@ -905,7 +1028,8 @@ func (m *Manager) Start() {
 
 	// Start workers for all existing PLCs
 	for name, plc := range m.plcs {
-		worker := newPLCWorker(plc, m, m.pollRate)
+		pollRate := m.getEffectivePollRate(plc.Config)
+		worker := newPLCWorker(plc, m, pollRate)
 		m.workers[name] = worker
 		worker.Start()
 	}
@@ -1124,8 +1248,56 @@ func (m *Manager) checkReconnections() {
 	}
 }
 
+// scheduleReconnect schedules a reconnection attempt for a PLC after a short delay.
+// This is called when a connection error is detected during polling.
+func (m *Manager) scheduleReconnect(name string) {
+	// Wait a short time before attempting reconnection to avoid rapid retries
+	time.Sleep(2 * time.Second)
+
+	m.mu.RLock()
+	plc, exists := m.plcs[name]
+	m.mu.RUnlock()
+
+	if !exists {
+		return
+	}
+
+	plc.mu.RLock()
+	status := plc.Status
+	enabled := plc.Config.Enabled
+	plc.mu.RUnlock()
+
+	// Only reconnect if still disconnected/error and enabled
+	if !enabled || status == StatusConnected || status == StatusConnecting {
+		return
+	}
+
+	// Check if reconnection is already in progress
+	m.reconnectingMu.Lock()
+	if m.reconnecting[name] {
+		m.reconnectingMu.Unlock()
+		return
+	}
+	m.reconnecting[name] = true
+	m.reconnectingMu.Unlock()
+
+	defer func() {
+		m.reconnectingMu.Lock()
+		delete(m.reconnecting, name)
+		m.reconnectingMu.Unlock()
+	}()
+
+	// Reset retry state and attempt reconnection
+	plc.mu.Lock()
+	plc.ConnRetries = 0
+	plc.RetryLimited = false
+	plc.mu.Unlock()
+
+	m.connectPLC(plc)
+}
+
 // ReadTag reads a single tag from a connected PLC.
-func (m *Manager) ReadTag(plcName, tagName string) (*logix.TagValue, error) {
+func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 	m.mu.RLock()
 	plc, exists := m.plcs[plcName]
 	m.mu.RUnlock()
@@ -1139,6 +1311,14 @@ func (m *Manager) ReadTag(plcName, tagName string) (*logix.TagValue, error) {
 	s7Client := plc.S7Client
 	adsClient := plc.AdsClient
 	family := plc.Config.GetFamily()
+	// Get configured type for this tag
+	var typeHint string
+	for _, sel := range plc.Config.Tags {
+		if sel.Name == tagName && sel.DataType != "" {
+			typeHint = sel.DataType
+			break
+		}
+	}
 	plc.mu.RUnlock()
 
 	switch family {
@@ -1146,16 +1326,36 @@ func (m *Manager) ReadTag(plcName, tagName string) (*logix.TagValue, error) {
 		if s7Client == nil {
 			return nil, nil
 		}
-		s7Values, err := s7Client.Read(tagName)
+		req := []s7.TagRequest{{Address: tagName, TypeHint: typeHint}}
+		s7Values, err := s7Client.ReadWithTypes(req)
 		if err != nil {
 			return nil, err
 		}
 		if len(s7Values) > 0 {
-			return &logix.TagValue{
-				Name:     s7Values[0].Name,
-				DataType: s7Values[0].DataType,
-				Bytes:    s7Values[0].Bytes,
-				Error:    s7Values[0].Error,
+			sv := s7Values[0]
+			// Use configured type if specified, otherwise use detected type
+			dataType := sv.DataType
+			if typeHint != "" {
+				if s7Type, found := s7.TypeCodeFromName(typeHint); found {
+					dataType = s7Type
+				}
+			}
+			// Mark as array if Count > 1
+			count := sv.Count
+			if count < 1 {
+				count = 1
+			}
+			if count > 1 {
+				dataType = s7.MakeArrayType(dataType)
+			}
+			return &TagValue{
+				Name:     sv.Name,
+				DataType: dataType,
+				Family:   "s7",
+				Value:    sv.GoValue(), // Uses big-endian (native S7 format)
+				Bytes: sv.Bytes,
+				Count:    count,
+				Error:    sv.Error,
 			}, nil
 		}
 		return nil, nil
@@ -1169,11 +1369,15 @@ func (m *Manager) ReadTag(plcName, tagName string) (*logix.TagValue, error) {
 			return nil, err
 		}
 		if len(adsValues) > 0 {
-			return &logix.TagValue{
-				Name:     adsValues[0].Name,
-				DataType: adsValues[0].DataType,
-				Bytes:    adsValues[0].Bytes,
-				Error:    adsValues[0].Error,
+			av := adsValues[0]
+			return &TagValue{
+				Name:     av.Name,
+				DataType: av.DataType,
+				Family:   "beckhoff",
+				Value:    av.GoValue(),
+				Bytes: av.Bytes,
+				Count:    1,
+				Error:    av.Error,
 			}, nil
 		}
 		return nil, nil
@@ -1188,7 +1392,7 @@ func (m *Manager) ReadTag(plcName, tagName string) (*logix.TagValue, error) {
 			return nil, err
 		}
 		if len(values) > 0 {
-			return values[0], nil
+			return FromLogixTagValue(values[0]), nil
 		}
 		return nil, nil
 	}
@@ -1296,20 +1500,30 @@ func (m *Manager) GetAllCurrentValues() []ValueChange {
 	for _, plc := range plcs {
 		plc.mu.RLock()
 		plcName := plc.Config.Name
-		// Build writable lookup map from config
+		family := plc.Config.GetFamily()
+		// Build lookup maps from config
 		writableMap := make(map[string]bool)
+		aliasMap := make(map[string]string)
 		for _, tag := range plc.Config.Tags {
 			writableMap[tag.Name] = tag.Writable
+			aliasMap[tag.Name] = tag.Alias
 		}
 		for tagName, val := range plc.Values {
 			if val != nil && val.Error == nil {
-				results = append(results, ValueChange{
+				vc := ValueChange{
 					PLCName:  plcName,
 					TagName:  tagName,
+					Alias:    aliasMap[tagName],
 					TypeName: val.TypeName(),
 					Value:    val.GoValue(),
 					Writable: writableMap[tagName],
-				})
+					Family:   string(family),
+				}
+				// For S7, set Address to uppercase version of TagName
+				if family == config.FamilyS7 {
+					vc.Address = strings.ToUpper(tagName)
+				}
+				results = append(results, vc)
 			}
 		}
 		plc.mu.RUnlock()
@@ -1403,6 +1617,13 @@ func (m *Manager) ReadTagValues(plcName string, tagNames []string) (map[string]i
 	adsClient := plc.AdsClient
 	status := plc.Status
 	family := plc.Config.GetFamily()
+	// Build type hints map from config
+	typeMap := make(map[string]string)
+	for _, sel := range plc.Config.Tags {
+		if sel.DataType != "" {
+			typeMap[sel.Name] = sel.DataType
+		}
+	}
 	plc.mu.RUnlock()
 
 	if status != StatusConnected {
@@ -1416,7 +1637,12 @@ func (m *Manager) ReadTagValues(plcName string, tagNames []string) (map[string]i
 		if s7Client == nil {
 			return nil, fmt.Errorf("S7 client not available")
 		}
-		s7Values, err := s7Client.Read(tagNames...)
+		// Build requests with type hints
+		requests := make([]s7.TagRequest, len(tagNames))
+		for i, name := range tagNames {
+			requests[i] = s7.TagRequest{Address: name, TypeHint: typeMap[name]}
+		}
+		s7Values, err := s7Client.ReadWithTypes(requests)
 		if err != nil {
 			return nil, err
 		}

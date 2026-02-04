@@ -47,6 +47,7 @@ type Address struct {
 	BitNum   int    // Bit number (0-7 for BOOL, -1 for other types)
 	DataType uint16 // Inferred data type
 	Size     int    // Size in bytes to read
+	Count    int    // Number of elements (1 for scalar, >1 for array)
 }
 
 // String returns the address as a formatted string.
@@ -94,6 +95,9 @@ var (
 	// DB addresses: DB1.DBX0.0 (bit), DB1.DBB0 (byte), DB1.DBW0 (word), DB1.DBD0 (dword)
 	reDB = regexp.MustCompile(`^DB(\d+)\.DB([XBWDL])(\d+)(?:\.(\d))?$`)
 
+	// Simple DB addresses: DB1.0 or DB1.0[6] (offset only, type from config, optional array count)
+	reDBSimple = regexp.MustCompile(`^DB(\d+)\.(\d+)(?:\[(\d+)\])?$`)
+
 	// I/Q/M addresses: M0.0 (bit), MB0 (byte), MW0 (word), MD0 (dword)
 	reIQM = regexp.MustCompile(`^([IQM])([XBWDL])?(\d+)(?:\.(\d))?$`)
 
@@ -103,6 +107,7 @@ var (
 
 // ParseAddress parses an S7 address string and returns an Address.
 // Supported formats:
+//   - DB1.0      - Data Block with offset (requires type hint for size)
 //   - DB1.DBX0.0 - Data Block bit
 //   - DB1.DBB0   - Data Block byte
 //   - DB1.DBW0   - Data Block word
@@ -121,7 +126,12 @@ func ParseAddress(addr string) (*Address, error) {
 		return nil, fmt.Errorf("empty address")
 	}
 
-	// Try DB address
+	// Try simple DB address first (DB1.0 format)
+	if m := reDBSimple.FindStringSubmatch(addr); m != nil {
+		return parseDBSimpleAddress(m)
+	}
+
+	// Try full DB address (DB1.DBD0 format)
 	if m := reDB.FindStringSubmatch(addr); m != nil {
 		return parseDBAddress(m)
 	}
@@ -139,6 +149,31 @@ func ParseAddress(addr string) (*Address, error) {
 	return nil, fmt.Errorf("invalid S7 address format: %s", addr)
 }
 
+// parseDBSimpleAddress parses simple DB addresses like "DB1.0" or "DB1.0[6]" for arrays.
+// Returns an address with no type/size - caller must set these based on configuration.
+func parseDBSimpleAddress(m []string) (*Address, error) {
+	dbNum, _ := strconv.Atoi(m[1])
+	offset, _ := strconv.Atoi(m[2])
+
+	count := 1
+	if m[3] != "" {
+		count, _ = strconv.Atoi(m[3])
+		if count < 1 {
+			count = 1
+		}
+	}
+
+	return &Address{
+		Area:     AreaDB,
+		DBNumber: dbNum,
+		Offset:   offset,
+		BitNum:   -1,
+		DataType: 0,     // Must be set by caller based on config
+		Size:     0,     // Must be set by caller based on config
+		Count:    count, // Number of elements (1 for scalar, >1 for array)
+	}, nil
+}
+
 func parseDBAddress(m []string) (*Address, error) {
 	dbNum, _ := strconv.Atoi(m[1])
 	typeLetter := m[2]
@@ -149,6 +184,7 @@ func parseDBAddress(m []string) (*Address, error) {
 		DBNumber: dbNum,
 		Offset:   offset,
 		BitNum:   -1,
+		Count:    1, // Scalar by default
 	}
 
 	switch typeLetter {
@@ -204,6 +240,7 @@ func parseIQMAddress(m []string) (*Address, error) {
 		Area:   area,
 		Offset: offset,
 		BitNum: -1,
+		Count:  1, // Scalar by default
 	}
 
 	switch typeLetter {
@@ -257,6 +294,7 @@ func parseTCAddress(m []string) (*Address, error) {
 		BitNum:   -1,
 		DataType: TypeWord, // Timers and counters are 16-bit
 		Size:     2,
+		Count:    1, // Scalar by default
 	}, nil
 }
 

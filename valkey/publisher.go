@@ -18,6 +18,7 @@ type TagMessage struct {
 	Factory   string      `json:"factory"`
 	PLC       string      `json:"plc"`
 	Tag       string      `json:"tag"`
+	Address   string      `json:"address,omitempty"` // S7 address in uppercase (empty for non-S7)
 	Value     interface{} `json:"value"`
 	Type      string      `json:"type"`
 	Writable  bool        `json:"writable"`
@@ -191,7 +192,8 @@ func (p *Publisher) Address() string {
 }
 
 // Publish stores a tag value in Valkey.
-func (p *Publisher) Publish(plcName, tagName, typeName string, value interface{}, writable bool) error {
+// For S7 PLCs, alias is the user-friendly name and address is the S7 address in uppercase.
+func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, value interface{}, writable bool) error {
 	p.mu.RLock()
 	if !p.running || p.client == nil {
 		p.mu.RUnlock()
@@ -205,11 +207,18 @@ func (p *Publisher) Publish(plcName, tagName, typeName string, value interface{}
 	// Note: tag names may contain : but that's OK since tag is always the last segment
 	key := fmt.Sprintf("%s:%s:tags:%s", cfg.Factory, plcName, tagName)
 
+	// For S7 with alias, use alias as "tag" and include address
+	displayTag := tagName
+	if alias != "" {
+		displayTag = alias
+	}
+
 	// Build message
 	msg := TagMessage{
 		Factory:   cfg.Factory,
 		PLC:       plcName,
-		Tag:       tagName,
+		Tag:       displayTag,
+		Address:   address, // Empty for non-S7, uppercase address for S7
 		Value:     value,
 		Type:      typeName,
 		Writable:  writable,

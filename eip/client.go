@@ -81,7 +81,7 @@ func NewEipClient(ipaddr string) *EipClient {
 		port:    44818,
 		conn:    nil,
 		session: 0,
-		timeout: time.Second * 2,
+		timeout: time.Second * 5, // 5 seconds matches pylogix default
 	}
 }
 
@@ -92,7 +92,7 @@ func NewEipClientWithPort(ipaddr string, port uint16) *EipClient {
 		port:    port,
 		conn:    nil,
 		session: 0,
-		timeout: time.Second * 2,
+		timeout: time.Second * 5, // 5 seconds matches pylogix default
 	}
 }
 

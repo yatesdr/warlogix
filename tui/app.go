@@ -297,6 +297,11 @@ func (a *App) Run() error {
 		})
 	})
 
+	// Set up manager logging to go to debug panel
+	a.manager.SetOnLog(func(format string, args ...interface{}) {
+		DebugLog(format, args...)
+	})
+
 	// Refresh all tabs to reflect current state after auto-connect/auto-start
 	a.plcsTab.Refresh()
 	a.browserTab.Refresh()
@@ -359,6 +364,7 @@ func (a *App) Shutdown() {
 	// Clear callbacks to prevent updates during shutdown
 	a.manager.SetOnChange(nil)
 	a.manager.SetOnValueChange(nil)
+	a.manager.SetOnLog(nil)
 
 	// Stop all triggers first
 	if a.triggerMgr != nil {
@@ -412,7 +418,7 @@ func (a *App) ForcePublishAllValues() {
 	values := a.manager.GetAllCurrentValues()
 	DebugLogMQTT("ForcePublishAllValues: publishing %d values", len(values))
 	for _, v := range values {
-		a.mqttMgr.Publish(v.PLCName, v.TagName, v.TypeName, v.Value, true)
+		a.mqttMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, true)
 	}
 }
 
@@ -422,7 +428,7 @@ func (a *App) ForcePublishAllValuesToValkey() {
 	values := a.manager.GetAllCurrentValues()
 	DebugLogValkey("ForcePublishAllValuesToValkey: publishing %d values", len(values))
 	for _, v := range values {
-		a.valkeyMgr.Publish(v.PLCName, v.TagName, v.TypeName, v.Value, v.Writable)
+		a.valkeyMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable)
 	}
 }
 
@@ -432,7 +438,7 @@ func (a *App) ForcePublishAllValuesToKafka() {
 	values := a.manager.GetAllCurrentValues()
 	DebugLog("ForcePublishAllValuesToKafka: publishing %d values", len(values))
 	for _, v := range values {
-		a.kafkaMgr.Publish(v.PLCName, v.TagName, v.TypeName, v.Value, v.Writable, true)
+		a.kafkaMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable, true)
 	}
 }
 
