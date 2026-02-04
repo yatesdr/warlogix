@@ -174,6 +174,7 @@ plcs:
     # poll_rate: omit to use global default
     tags:
       - name: DB1.0
+        alias: ProductCount
         data_type: DINT
         enabled: true
 
@@ -197,6 +198,7 @@ plcs:
     enabled: true
     tags:
       - name: DM100
+        alias: MotorSpeed
         data_type: DINT
         enabled: true
 
