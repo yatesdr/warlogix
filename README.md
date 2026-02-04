@@ -8,6 +8,9 @@ A TUI (Text User Interface) gateway application for industrial PLCs including Al
 
 WAR stands for "whispers across realms" - this application provides a gateway between industrial and IT applications, connecting PLCs from multiple vendors to REST / MQTT / Kafka / Valkey (Redis) formats.
 
+
+<img width="961" height="579" alt="image" src="https://github.com/user-attachments/assets/4bdbc47e-6ca1-41a1-992d-c46356d6415c" />
+
 ## Features
 
 - **Multi-PLC Support**: Connect to Allen-Bradley Logix, Siemens S7, Beckhoff TwinCAT, and Omron PLCs simultaneously
@@ -58,7 +61,10 @@ Or use `make all` to build for all platforms.
 - Use the Tag Browser to select tags for publishing
 - Configure MQTT/Valkey/Kafka connections for republishing
 
-<img width="822" height="537" alt="image" src="https://github.com/user-attachments/assets/e57a3ff9-bd15-4943-911a-ebb8567aadcc" />
+<img width="967" height="617" alt="image" src="https://github.com/user-attachments/assets/ee71d602-7880-4cfb-90d3-13a92010261f" />
+
+<img width="963" height="605" alt="image" src="https://github.com/user-attachments/assets/270f4ee9-2d5e-4245-8585-28a2a722f908" />
+
 
 ## Keyboard Shortcuts
 
