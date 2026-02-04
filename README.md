@@ -190,7 +190,26 @@ poll_rate: 1s
 | LREAL | 8 bytes | 64-bit float |
 | STRING | Variable | Null-terminated text |
 
-**Byte Order**: S7 and Omron use big-endian; Logix and Beckhoff use little-endian. WarLogix handles this automatically.
+### Byte Order Handling
+
+Different PLC families use different byte orders for multi-byte values:
+
+| PLC Family | Native Byte Order |
+|------------|-------------------|
+| Siemens S7 | Big-endian |
+| Omron FINS | Big-endian |
+| Allen-Bradley Logix | Little-endian |
+| Beckhoff TwinCAT | Little-endian |
+
+**Known data types** (BOOL, INT, DINT, REAL, STRING, etc.) are automatically converted to the correct values regardless of the PLC's native byte order. You'll see the same numeric value whether it comes from an S7 or a Logix PLC.
+
+**Unknown data types** (structs, UDTs, and unrecognized types) are returned as raw byte arrays in the PLC's native byte order. If you need to decode these manually:
+- For S7 and Omron: bytes are in big-endian order (most significant byte first)
+- For Logix and Beckhoff: bytes are in little-endian order (least significant byte first)
+
+Example of a raw byte array for a 4-byte integer value of 0x12345678:
+- Big-endian (S7/Omron): `[18, 52, 86, 120]` (0x12, 0x34, 0x56, 0x78)
+- Little-endian (Logix/Beckhoff): `[120, 86, 52, 18]` (0x78, 0x56, 0x34, 0x12)
 
 ## PLC Configuration Guide
 
