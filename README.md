@@ -86,6 +86,7 @@ plcs:
     family: logix
     slot: 0
     enabled: true
+    poll_rate: 500ms    # Per-PLC poll rate (overrides global)
     tags:
       - name: Program:MainProgram.Counter
         enabled: true
@@ -96,6 +97,8 @@ plcs:
     address: 192.168.1.101
     family: s7
     slot: 1
+    enabled: true
+    # poll_rate: omit to use global default
     tags:
       - name: DB1.0
         data_type: DINT
@@ -107,6 +110,7 @@ plcs:
     family: beckhoff
     ams_net_id: 192.168.1.102.1.1
     ams_port: 851
+    enabled: true
     tags:
       - name: MAIN.Temperature
         enabled: true
@@ -117,6 +121,7 @@ plcs:
     family: omron
     fins_port: 9600
     fins_node: 0
+    enabled: true
     tags:
       - name: DM100
         data_type: DINT
@@ -154,7 +159,7 @@ triggers:
     kafka_cluster: LocalKafka
     topic: production-events
 
-poll_rate: 1s
+poll_rate: 1s  # Global default (used when per-PLC poll_rate not set)
 ```
 
 ## REST API
