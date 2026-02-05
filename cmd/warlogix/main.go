@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"warlogix/api"
 	"warlogix/config"
@@ -400,9 +401,27 @@ func runDaemonMode(cfg *config.Config) {
 	sig := <-sigChan
 	fmt.Printf("\nReceived %v, shutting down...\n", sig)
 
-	// Graceful shutdown
-	app.Shutdown()
-	sshServer.Stop()
+	// Graceful shutdown with timeout
+	shutdownDone := make(chan struct{})
+	go func() {
+		// First disconnect all SSH sessions and stop the server
+		// This will cause PTY I/O to fail and unblock the TUI
+		sshServer.DisconnectAllSessions()
+		sshServer.Stop()
+
+		// Now shutdown the app (TUI should exit quickly since PTY is closed)
+		app.Shutdown()
+
+		close(shutdownDone)
+	}()
+
+	// Wait for shutdown with timeout
+	select {
+	case <-shutdownDone:
+		// Clean shutdown
+	case <-time.After(5 * time.Second):
+		fmt.Println("Shutdown timed out, forcing exit...")
+	}
 
 	if fileLogger != nil {
 		fileLogger.Close()
