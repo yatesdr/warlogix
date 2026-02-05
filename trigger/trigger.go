@@ -184,7 +184,18 @@ func (t *Trigger) Stop() {
 	}
 	t.mu.Unlock()
 
-	t.wg.Wait()
+	// Wait for monitor loop to finish with timeout
+	// (don't block forever if a Kafka write is in progress)
+	done := make(chan struct{})
+	go func() {
+		t.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		// Timeout - proceed anyway, goroutine will finish eventually
+	}
 
 	t.mu.Lock()
 	t.ctx = nil

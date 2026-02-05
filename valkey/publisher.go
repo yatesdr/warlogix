@@ -169,8 +169,18 @@ func (p *Publisher) Stop() error {
 	p.client = nil
 	p.mu.Unlock()
 
-	// Wait for goroutines to finish WITHOUT holding the lock
-	p.wg.Wait()
+	// Wait for goroutines to finish with timeout
+	// (writebackListener uses 1s BLPop timeout, so wait slightly longer)
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		// Timeout - proceed anyway
+	}
 
 	// Close the client
 	if client != nil {

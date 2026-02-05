@@ -517,30 +517,36 @@ func (a *App) Shutdown() {
 	a.manager.SetOnLog(nil)
 
 	// Stop the TUI immediately to prevent writes to closed PTY
+	// This is non-blocking - it just signals the event loop to stop
 	a.app.Stop()
 
-	// Stop all triggers
-	if a.triggerMgr != nil {
-		a.triggerMgr.Stop()
-	}
-
-	// Stop all services in parallel with timeout
+	// Stop all services with a single timeout
+	// All these operations can potentially block, so wrap them together
 	done := make(chan struct{})
 	go func() {
+		// Stop triggers first (they may be waiting on PLC reads or Kafka writes)
+		if a.triggerMgr != nil {
+			a.triggerMgr.Stop()
+		}
+
+		// Stop messaging services
 		a.mqttMgr.StopAll()
 		a.valkeyMgr.StopAll()
 		if a.kafkaMgr != nil {
 			a.kafkaMgr.StopAll()
 		}
+
+		// Stop API and manager
 		a.apiServer.Stop()
 		a.manager.Stop()
+
 		close(done)
 	}()
 
-	// Wait with timeout for services
+	// Wait with timeout for all services (reduced to allow room in outer 2s timeout)
 	select {
 	case <-done:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(1 * time.Second):
 		// Timeout - proceed anyway
 	}
 

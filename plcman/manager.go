@@ -1455,12 +1455,32 @@ func (m *Manager) Stop() {
 	m.workers = make(map[string]*PLCWorker)
 	m.mu.Unlock()
 
-	// Stop workers outside of lock
-	for _, w := range workers {
-		w.Stop()
+	// Stop workers outside of lock with timeout
+	// Workers may be blocked on PLC reads, so don't wait forever
+	workersDone := make(chan struct{})
+	go func() {
+		for _, w := range workers {
+			w.Stop()
+		}
+		close(workersDone)
+	}()
+	select {
+	case <-workersDone:
+	case <-time.After(500 * time.Millisecond):
+		// Timeout - proceed anyway
 	}
 
-	m.wg.Wait()
+	// Wait for manager goroutines with timeout
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		// Timeout - proceed anyway
+	}
 
 	m.mu.Lock()
 	m.ctx = nil

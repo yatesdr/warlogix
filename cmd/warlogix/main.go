@@ -404,12 +404,11 @@ func runDaemonMode(cfg *config.Config) {
 	// Graceful shutdown with timeout
 	shutdownDone := make(chan struct{})
 	go func() {
-		// First disconnect all SSH sessions and stop the server
-		// This will cause PTY I/O to fail and unblock the TUI
+		// Close PTY first to unblock TUI's event loop
 		sshServer.DisconnectAllSessions()
 		sshServer.Stop()
 
-		// Now shutdown the app (TUI should exit quickly since PTY is closed)
+		// Now shutdown the app (TUI exits quickly since PTY is closed)
 		app.Shutdown()
 
 		close(shutdownDone)
@@ -419,8 +418,8 @@ func runDaemonMode(cfg *config.Config) {
 	select {
 	case <-shutdownDone:
 		// Clean shutdown
-	case <-time.After(2 * time.Second):
-		fmt.Println("Shutdown timed out, forcing exit...")
+	case <-time.After(1 * time.Second):
+		// Timeout - proceed to exit anyway
 	}
 
 	if fileLogger != nil {

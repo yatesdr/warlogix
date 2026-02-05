@@ -306,12 +306,15 @@ func (s *Server) DisconnectAllSessions() {
 	}
 	s.sessionsMu.Unlock()
 
+	// Close sessions in goroutines to avoid blocking
 	for _, session := range sessions {
-		tui.DebugLogSSH("Closing session from %s", session.RemoteAddr().String())
-		session.Close()
+		go func(sess ssh.Session) {
+			tui.DebugLogSSH("Closing session from %s", sess.RemoteAddr().String())
+			sess.Close()
+		}(session)
 	}
 
 	if len(sessions) > 0 {
-		tui.DebugLogSSH("Disconnected %d session(s)", len(sessions))
+		tui.DebugLogSSH("Disconnecting %d session(s)", len(sessions))
 	}
 }
