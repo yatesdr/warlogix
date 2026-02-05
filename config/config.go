@@ -46,13 +46,14 @@ type Config struct {
 
 // PLCConfig stores configuration for a single PLC connection.
 type PLCConfig struct {
-	Name     string         `yaml:"name"`
-	Address  string         `yaml:"address"`
-	Slot     byte           `yaml:"slot"`
-	Family   PLCFamily      `yaml:"family,omitempty"`
-	Enabled  bool           `yaml:"enabled"`
-	PollRate time.Duration  `yaml:"poll_rate,omitempty"` // Per-PLC poll rate (0 = use global)
-	Tags     []TagSelection `yaml:"tags,omitempty"`
+	Name               string         `yaml:"name"`
+	Address            string         `yaml:"address"`
+	Slot               byte           `yaml:"slot"`
+	Family             PLCFamily      `yaml:"family,omitempty"`
+	Enabled            bool           `yaml:"enabled"`
+	HealthCheckEnabled *bool          `yaml:"health_check_enabled,omitempty"` // Publish health status (default true)
+	PollRate           time.Duration  `yaml:"poll_rate,omitempty"`            // Per-PLC poll rate (0 = use global)
+	Tags               []TagSelection `yaml:"tags,omitempty"`
 
 	// Beckhoff/TwinCAT-specific settings
 	AmsNetId string `yaml:"ams_net_id,omitempty"` // AMS Net ID (e.g., "192.168.1.100.1.1")
@@ -73,13 +74,49 @@ func (p *PLCConfig) GetFamily() PLCFamily {
 	return p.Family
 }
 
+// IsHealthCheckEnabled returns whether health check publishing is enabled (defaults to true).
+func (p *PLCConfig) IsHealthCheckEnabled() bool {
+	if p.HealthCheckEnabled == nil {
+		return true
+	}
+	return *p.HealthCheckEnabled
+}
+
 // TagSelection represents a tag selected for republishing.
 type TagSelection struct {
-	Name     string `yaml:"name"`
-	Alias    string `yaml:"alias,omitempty"`
-	DataType string `yaml:"data_type,omitempty"` // Manual type: BOOL, INT, DINT, REAL, etc.
-	Enabled  bool   `yaml:"enabled"`
-	Writable bool   `yaml:"writable,omitempty"`
+	Name          string   `yaml:"name"`
+	Alias         string   `yaml:"alias,omitempty"`
+	DataType      string   `yaml:"data_type,omitempty"` // Manual type: BOOL, INT, DINT, REAL, etc.
+	Enabled       bool     `yaml:"enabled"`
+	Writable      bool     `yaml:"writable,omitempty"`
+	IgnoreChanges []string `yaml:"ignore_changes,omitempty"` // UDT member names to ignore for change detection
+}
+
+// ShouldIgnoreMember returns true if the given member name is in the ignore list.
+func (t *TagSelection) ShouldIgnoreMember(memberName string) bool {
+	for _, ignored := range t.IgnoreChanges {
+		if ignored == memberName {
+			return true
+		}
+	}
+	return false
+}
+
+// AddIgnoreMember adds a member name to the ignore list if not already present.
+func (t *TagSelection) AddIgnoreMember(memberName string) {
+	if !t.ShouldIgnoreMember(memberName) {
+		t.IgnoreChanges = append(t.IgnoreChanges, memberName)
+	}
+}
+
+// RemoveIgnoreMember removes a member name from the ignore list.
+func (t *TagSelection) RemoveIgnoreMember(memberName string) {
+	for i, ignored := range t.IgnoreChanges {
+		if ignored == memberName {
+			t.IgnoreChanges = append(t.IgnoreChanges[:i], t.IgnoreChanges[i+1:]...)
+			return
+		}
+	}
 }
 
 // RESTConfig holds REST API server configuration.

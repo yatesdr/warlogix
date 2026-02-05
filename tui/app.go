@@ -402,6 +402,9 @@ func (a *App) Run() error {
 	// Start periodic refresh goroutine for MQTT, Valkey, and Debug tabs
 	go a.periodicRefresh()
 
+	// Start health publishing goroutine (publishes every 10 seconds)
+	go a.publishHealthLoop()
+
 	return a.app.Run()
 }
 
@@ -444,6 +447,56 @@ func (a *App) periodicRefresh() {
 					a.triggersTab.Refresh()
 				}
 			})
+		}
+	}
+}
+
+// publishHealthLoop publishes PLC health status to all services every 10 seconds.
+func (a *App) publishHealthLoop() {
+	// Wait for initial services to start
+	time.Sleep(2 * time.Second)
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	// Publish immediately on start, then every 10 seconds
+	a.publishAllHealth()
+
+	for {
+		select {
+		case <-a.stopChan:
+			return
+		case <-ticker.C:
+			a.publishAllHealth()
+		}
+	}
+}
+
+// publishAllHealth publishes health status for all PLCs to MQTT, Valkey, and Kafka.
+func (a *App) publishAllHealth() {
+	plcs := a.manager.ListPLCs()
+	DebugLog("Publishing health for %d PLCs", len(plcs))
+	for _, plc := range plcs {
+		// Skip PLCs with health check disabled
+		if !plc.Config.IsHealthCheckEnabled() {
+			continue
+		}
+
+		health := plc.GetHealthStatus()
+
+		// Publish to MQTT
+		if a.mqttMgr != nil {
+			a.mqttMgr.PublishHealth(plc.Config.Name, health.Online, health.Status, health.Error)
+		}
+
+		// Publish to Valkey
+		if a.valkeyMgr != nil {
+			a.valkeyMgr.PublishHealth(plc.Config.Name, health.Online, health.Status, health.Error)
+		}
+
+		// Publish to Kafka
+		if a.kafkaMgr != nil {
+			a.kafkaMgr.PublishHealth(plc.Config.Name, health.Online, health.Status, health.Error)
 		}
 	}
 }

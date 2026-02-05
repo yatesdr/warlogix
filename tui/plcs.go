@@ -301,16 +301,19 @@ type plcFormState struct {
 	amsPort     string
 	pollRateMs  string // Poll rate in milliseconds (250-10000, empty = use global)
 	autoConnect bool
+	healthCheck bool // Publish health status
 }
 
 var familyOptions = []string{"logix", "micro800", "s7", "beckhoff", "omron"}
 
 func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 	state := &plcFormState{
-		family:     0, // Default to logix
-		slot:       "0",
-		amsPort:    "851",
-		pollRateMs: "1000", // Default 1000ms
+		family:      0,     // Default to logix
+		slot:        "0",
+		amsPort:     "851",
+		pollRateMs:  "1000", // Default 1000ms
+		autoConnect: true,   // Default to enabled
+		healthCheck: true,   // Default to enabled
 	}
 
 	if dev != nil {
@@ -379,6 +382,7 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 	}, nil)
 
 	form.AddCheckbox("Auto-connect:", state.autoConnect, nil)
+	form.AddCheckbox("Health check:", state.healthCheck, nil)
 
 	form.AddButton("Add", func() {
 		t.saveAddFormState(form, state, family)
@@ -406,15 +410,17 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			}
 		}
 
+		healthCheck := state.healthCheck
 		cfg := config.PLCConfig{
-			Name:     state.name,
-			Address:  state.address,
-			Slot:     byte(slot),
-			Family:   family,
-			Enabled:  state.autoConnect,
-			PollRate: pollRate,
-			AmsNetId: state.amsNetId,
-			AmsPort:  uint16(amsPort),
+			Name:               state.name,
+			Address:            state.address,
+			Slot:               byte(slot),
+			Family:             family,
+			Enabled:            state.autoConnect,
+			HealthCheckEnabled: &healthCheck,
+			PollRate:           pollRate,
+			AmsNetId:           state.amsNetId,
+			AmsPort:            uint16(amsPort),
 		}
 
 		t.app.config.AddPLC(cfg)
@@ -445,9 +451,9 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 	})
 
 	// Calculate form height based on number of fields
-	formHeight := 17 // Base height for common fields + poll rate + buttons
+	formHeight := 19 // Base height for common fields + poll rate + health check + buttons
 	if family == config.FamilyBeckhoff {
-		formHeight = 19 // Extra fields for Beckhoff
+		formHeight = 21 // Extra fields for Beckhoff
 	}
 
 	modal := tview.NewFlex().
@@ -486,6 +492,9 @@ func (t *PLCsTab) saveAddFormState(form *tview.Form, state *plcFormState, family
 	}
 	if item := form.GetFormItemByLabel("Auto-connect:"); item != nil {
 		state.autoConnect = item.(*tview.Checkbox).IsChecked()
+	}
+	if item := form.GetFormItemByLabel("Health check:"); item != nil {
+		state.healthCheck = item.(*tview.Checkbox).IsChecked()
 	}
 }
 
@@ -539,6 +548,7 @@ func (t *PLCsTab) showEditDialog() {
 			amsPort:     amsPort,
 			pollRateMs:  pollRateMs,
 			autoConnect: cfg.Enabled,
+			healthCheck: cfg.IsHealthCheckEnabled(),
 		},
 		originalName: cfg.Name,
 		tags:         cfg.Tags,
@@ -605,6 +615,7 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 	}, nil)
 
 	form.AddCheckbox("Auto-connect:", state.autoConnect, nil)
+	form.AddCheckbox("Health check:", state.healthCheck, nil)
 
 	form.AddButton("Save", func() {
 		t.saveEditFormState(form, state, family)
@@ -632,16 +643,18 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 			}
 		}
 
+		healthCheck := state.healthCheck
 		updated := config.PLCConfig{
-			Name:     state.name,
-			Address:  state.address,
-			Slot:     byte(slot),
-			Family:   family,
-			Enabled:  state.autoConnect,
-			PollRate: pollRate,
-			Tags:     state.tags,
-			AmsNetId: state.amsNetId,
-			AmsPort:  uint16(amsPort),
+			Name:               state.name,
+			Address:            state.address,
+			Slot:               byte(slot),
+			Family:             family,
+			Enabled:            state.autoConnect,
+			HealthCheckEnabled: &healthCheck,
+			PollRate:           pollRate,
+			Tags:               state.tags,
+			AmsNetId:           state.amsNetId,
+			AmsPort:            uint16(amsPort),
 		}
 
 		t.app.config.UpdatePLC(state.originalName, updated)
@@ -689,9 +702,9 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 	})
 
 	// Calculate form height based on number of fields
-	formHeight := 17 // Base height for common fields + poll rate + buttons
+	formHeight := 19 // Base height for common fields + poll rate + health check + buttons
 	if family == config.FamilyBeckhoff {
-		formHeight = 19 // Extra fields for Beckhoff
+		formHeight = 21 // Extra fields for Beckhoff
 	}
 
 	modal := tview.NewFlex().
@@ -730,6 +743,9 @@ func (t *PLCsTab) saveEditFormState(form *tview.Form, state *editFormState, fami
 	}
 	if item := form.GetFormItemByLabel("Auto-connect:"); item != nil {
 		state.autoConnect = item.(*tview.Checkbox).IsChecked()
+	}
+	if item := form.GetFormItemByLabel("Health check:"); item != nil {
+		state.healthCheck = item.(*tview.Checkbox).IsChecked()
 	}
 }
 
