@@ -547,6 +547,11 @@ Example of a raw byte array for a 4-byte integer value of 0x12345678:
 3. **Firewall**: Ensure port 48898 (ADS) is open for TCP traffic
 4. **PLC must be in RUN mode** for symbol access
 
+** Adding the Route for WarLogix
+<img width="637" height="482" alt="image" src="https://github.com/user-attachments/assets/21c34603-f4bf-477f-8caf-69aa89e31e5c" />
+
+The AMS Net ID and IP Address should correspond to the IP address that you are running WarLogix from.   Do not select Secure ADS.
+
 **WarLogix Configuration:**
 - `address`: PLC IP address
 - `ams_net_id`: PLC's AMS Net ID (e.g., `192.168.1.100.1.1`)
