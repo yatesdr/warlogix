@@ -1,46 +1,26 @@
 # WarLogix
 
-A TUI (Text User Interface) gateway application for industrial PLCs including Allen-Bradley ControlLogix/CompactLogix, Siemens S7, Beckhoff TwinCAT, and Omron FINS. Browse tags, monitor values in real-time, and republish data via REST API, MQTT brokers, Kafka, and Redis/Valkey.
+A TUI (Text User Interface) gateway for industrial PLCs. Connect to Allen-Bradley, Siemens, Beckhoff, and Omron PLCs and republish data via REST API, MQTT, Kafka, and Redis/Valkey.
 
-> **BETA PROJECT** - This software is under active development. Allen-Bradley Logix and Siemens S7 support is reasonably well-tested with a variety of hardware and tags. Beckhoff TwinCAT and Omron FINS support are works in progress and may have bugs or missing features. Please report issues on GitHub.
+> **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff and Omron support are works in progress.
 
-## The name
-
-WAR stands for "whispers across realms" - this application provides a gateway between industrial and IT applications, connecting PLCs from multiple vendors to REST / MQTT / Kafka / Valkey (Redis) formats.
-
-
-<img width="961" height="579" alt="image" src="https://github.com/user-attachments/assets/4bdbc47e-6ca1-41a1-992d-c46356d6415c" />
+<img width="961" height="579" alt="WarLogix TUI" src="https://github.com/user-attachments/assets/4bdbc47e-6ca1-41a1-992d-c46356d6415c" />
 
 ## Features
 
-- **Multi-PLC Support**: Connect to Allen-Bradley Logix, Siemens S7, Beckhoff TwinCAT, and Omron PLCs simultaneously
-- **Tag Browser**: Browse controller tags with real-time value updates (automatic discovery for Logix/Beckhoff)
-- **UDT/Structure Support**: Automatic member unpacking with change detection filtering for volatile members
-- **Health Monitoring**: Periodic health status publishing to REST, MQTT, Valkey, and Kafka (configurable per-PLC)
-- **REST API**: Expose PLC tag values and health status via HTTP
-- **MQTT Publishing**: Publish tag values and health to MQTT brokers with optional write-back, authentication, and TLS
-- **Valkey/Redis**: Store tag values and health with Pub/Sub notifications and write-back queue support
-- **Kafka**: Publish tag changes, health status, and event triggers to Apache Kafka topics
-- **Event Triggers**: Capture data snapshots on PLC events and publish to Kafka with acknowledgment
-- **Array Support**: Arrays of known types are published as native JSON arrays
-- **Auto-Reconnection**: Automatic connection recovery with watchdog monitoring
-- **Daemon Mode**: Run as a background service with SSH access for remote TUI control
+- **Multi-PLC Support** - Connect to multiple PLCs from different vendors simultaneously
+- **Tag Browser** - Browse and select tags with real-time value updates
+- **UDT Support** - Automatic structure unpacking with change detection filtering
+- **Health Monitoring** - Periodic health publishing (REST, MQTT, Valkey, Kafka)
+- **REST API** - HTTP endpoints for tag values and writes
+- **MQTT** - Publish tags with optional write-back
+- **Valkey/Redis** - Key storage with Pub/Sub and write-back queue
+- **Kafka** - Tag changes and event triggers
+- **Daemon Mode** - Background service with SSH access
 
-## Warnings
+## Quick Start
 
-- This software allows reading and writing to industrial PLCs, which can present hazards if done poorly.
-- No warranty or liability is assumed - use at your own risk.
-
-## Supported PLCs
-
-| Family | Models | Tag Discovery | Notes |
-|--------|--------|---------------|-------|
-| **Allen-Bradley** | ControlLogix (1756), CompactLogix (1769), Micro800 | Automatic | Full EtherNet/IP support |
-| **Siemens** | S7-300/400/1200/1500 | Manual | Requires PUT/GET enabled |
-| **Beckhoff** | TwinCAT 2/3 | Automatic | Requires AMS Net ID configuration |
-| **Omron** | CJ/CS/CP/NJ/NX Series | Manual | FINS/UDP protocol |
-
-## Installation
+### Install
 
 ```bash
 git clone https://github.com/yatesdr/warlogix.git
@@ -48,112 +28,36 @@ cd warlogix
 go build -o warlogix ./cmd/warlogix
 ```
 
-Or use `make all` to build for all platforms.
-
-## Usage
-
-### Local Mode (Default)
+### Run
 
 ```bash
-./warlogix                          # Default config (~/.warlogix/config.yaml)
-./warlogix -config /path/to/config  # Custom config file
-./warlogix --log /var/log/warlogix.log  # Enable file logging
+./warlogix                    # Uses ~/.warlogix/config.yaml
+./warlogix -config myconfig.yaml
 ```
 
-### Daemon Mode (Remote Access via SSH)
+### Basic Navigation
 
-Run WarLogix as a daemon that serves the TUI over SSH, allowing remote access while keeping services running continuously:
+- `Shift+Tab` - Switch tabs
+- `?` - Help
+- `Q` - Quit
 
-```bash
-# Start daemon with password authentication
-./warlogix -d -p 2222 --ssh-password "secret"
+## Adding PLCs
 
-# Start daemon with public key authentication
-./warlogix -d -p 2222 --ssh-keys ~/.ssh/authorized_keys
+Press `a` in the PLCs tab or use `d` to discover PLCs on your network.
 
-# Start daemon with both auth methods and file logging
-./warlogix -d -p 2222 --ssh-password "secret" --ssh-keys ./keys --log /var/log/warlogix.log
+### Supported PLCs
 
-# Connect from remote machine
-ssh -p 2222 localhost
-```
+| Family | Discovery | Config |
+|--------|-----------|--------|
+| Allen-Bradley Logix | Automatic | `family: logix` |
+| Allen-Bradley Micro800 | Automatic | `family: micro800` |
+| Siemens S7 | Manual tags | `family: s7` |
+| Beckhoff TwinCAT | Automatic | `family: beckhoff` |
+| Omron FINS | Manual tags | `family: omron` |
 
-**Daemon Mode Features:**
-- Multiple SSH clients share the same TUI view (PTY multiplexing)
-- All clients see the same screen and can interact with it
-- Services (PLC polling, MQTT, Valkey, Kafka) continue running even with no SSH connections
-- Graceful shutdown with SIGTERM/SIGINT
-- Host keys automatically generated and stored at `~/.warlogix/host_key`
+## Configuration Basics
 
-**Stopping the Daemon:**
-
-From the terminal where the daemon is running:
-```bash
-Ctrl+C
-```
-
-From another terminal:
-```bash
-# Find the process ID
-pgrep warlogix
-
-# Send SIGTERM for graceful shutdown
-kill <pid>
-
-# Or use pkill
-pkill warlogix
-```
-
-The daemon performs a graceful shutdown: stops all SSH sessions, disconnects MQTT/Valkey/Kafka, stops the REST API, and disconnects all PLCs.
-
-**Note:** `Shift+Q` from within an SSH session only disconnects that client—it does not stop the daemon.
-
-**CLI Flags:**
-| Flag | Description |
-|------|-------------|
-| `-d` | Enable daemon mode |
-| `-p <port>` | SSH port (default: 2222) |
-| `--ssh-password <pass>` | Password for SSH authentication |
-| `--ssh-keys <path>` | Path to authorized_keys file or directory |
-| `--log <path>` | Write debug logs to file (works in both modes) |
-| `-config <path>` | Configuration file path |
-| `-version` | Show version and exit |
-
-## Basic Usage
-
-- Navigate between tabs with `Shift+Tab`
-- Press `a` to add PLCs, `d` to discover (same broadcast domain only)
-- Use the Tag Browser to select tags for publishing
-- Configure MQTT/Valkey/Kafka connections for republishing
-
-<img width="967" height="617" alt="image" src="https://github.com/user-attachments/assets/ee71d602-7880-4cfb-90d3-13a92010261f" />
-
-<img width="963" height="605" alt="image" src="https://github.com/user-attachments/assets/270f4ee9-2d5e-4245-8585-28a2a722f908" />
-
-
-## Keyboard Shortcuts
-
-| Tab | Key | Action |
-|-----|-----|--------|
-| Global | `Shift+Tab` | Switch tabs |
-| Global | `?` | Help |
-| Global | `Q` | Quit (local) / Disconnect (daemon) |
-| PLCs | `d/a/e/r` | Discover/Add/Edit/Remove |
-| PLCs | `c/C` | Connect/Disconnect |
-| PLCs | `i` | Show PLC info |
-| Browser | `/` | Focus filter |
-| Browser | `Space/w` | Toggle publish/writable |
-| Browser | `i` | Toggle ignore for UDT member changes |
-| MQTT/Valkey/Kafka | `a/e/r/c/C` | Add/Edit/Remove/Connect/Disconnect |
-| Triggers | `a/e/r` | Add/Edit/Remove trigger |
-| Triggers | `t/x` | Add/Remove data tag |
-| Triggers | `s/S/T` | Start/Stop/Test trigger |
-
-**Note:** In daemon mode, `Shift+Q` disconnects your SSH session but leaves the daemon running. Use `kill <pid>` or `Ctrl+C` in the daemon's terminal to stop the daemon entirely.
-
-## Configuration
-
-Configuration is stored in YAML at `~/.warlogix/config.yaml`:
+Config file: `~/.warlogix/config.yaml`
 
 ```yaml
 plcs:
@@ -162,50 +66,35 @@ plcs:
     address: 192.168.1.100
     family: logix
     slot: 0
-    enabled: true                    # Auto-connect on startup
-    health_check_enabled: true       # Publish health status (default: true)
-    poll_rate: 500ms                 # Per-PLC poll rate (overrides global)
+    enabled: true              # Auto-connect on startup
+    health_check_enabled: true # Publish health (default: true)
     tags:
       - name: Program:MainProgram.Counter
-        enabled: true
-        writable: true
+        enabled: true          # Publish this tag
+        writable: true         # Allow writes
       - name: Program:MainProgram.MachineStatus
         enabled: true
-        ignore_changes: [Timestamp, HeartbeatCount]  # Don't republish on these member changes
+        ignore_changes: [Timestamp, HeartbeatCount]  # Ignore volatile UDT members
 
-  # Siemens S7 (manual tags with byte offsets)
+  # Siemens S7 (manual tags with data_type)
   - name: SiemensPLC
     address: 192.168.1.101
     family: s7
-    slot: 1
-    enabled: true
-    health_check_enabled: false      # Disable health publishing for this PLC
+    slot: 0
     tags:
-      - name: DB1.0
-        alias: ProductCount
-        data_type: DINT
+      - name: DB1.0            # Address format: DB<n>.<offset>
+        alias: ProductCount    # Friendly name for publishing
+        data_type: DINT        # Required for S7
         enabled: true
+        writable: true
 
-  # Beckhoff TwinCAT (automatic symbol discovery)
-  - name: TwinCAT
-    address: 192.168.1.102
-    family: beckhoff
-    ams_net_id: 192.168.1.102.1.1
-    ams_port: 851
-    enabled: true
-    tags:
-      - name: MAIN.Temperature
-        enabled: true
-
-  # Omron FINS (manual tags with memory areas)
+  # Omron (manual tags)
   - name: OmronPLC
-    address: 192.168.1.103
+    address: 192.168.1.102
     family: omron
     fins_port: 9600
-    fins_node: 0
-    enabled: true
     tags:
-      - name: DM100
+      - name: DM100            # Memory area + address
         alias: MotorSpeed
         data_type: DINT
         enabled: true
@@ -215,538 +104,92 @@ rest:
   port: 8080
 
 mqtt:
-  - name: LocalBroker
+  - name: Broker1
+    enabled: true
     broker: localhost
     port: 1883
     root_topic: factory
-    # Optional: username, password, use_tls
 
 valkey:
-  - name: LocalValkey
+  - name: Redis1
+    enabled: true
     address: localhost:6379
     factory: factory
-    # Optional: password, use_tls, key_ttl, enable_writeback
+    publish_changes: true
+    enable_writeback: true
 
-kafka:
-  - name: LocalKafka
-    brokers: [localhost:9092]
-    topic: plc-events
-
-triggers:
-  - name: ProductComplete
-    plc: MainPLC
-    trigger_tag: Program:MainProgram.ProductReady
-    condition: { operator: "==", value: true }
-    ack_tag: Program:MainProgram.ProductAck
-    tags: [ProductID, BatchNumber, Quantity]
-    kafka_cluster: LocalKafka
-    topic: production-events
-
-poll_rate: 1s  # Global default (used when per-PLC poll_rate not set)
+poll_rate: 1s
 ```
 
-## REST API
+## Tag Configuration
 
-### Read Endpoints
+| Field | Description |
+|-------|-------------|
+| `name` | Tag name or address |
+| `alias` | Friendly name (for S7/Omron address-based tags) |
+| `data_type` | Required for S7/Omron: BOOL, INT, DINT, REAL, STRING, etc. |
+| `enabled` | Enable publishing |
+| `writable` | Allow write operations |
+| `ignore_changes` | UDT members to ignore for change detection |
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | List all PLCs with status |
-| `/{plc}` | GET | PLC details and identity |
-| `/{plc}/tags` | GET | All enabled tags with current values |
-| `/{plc}/tags/{tag}` | GET | Single tag value |
-| `/{plc}/health` | GET | PLC health status |
-| `/{plc}/programs` | GET | List programs (Logix only) |
+### S7 Addressing
 
-**Health Response:**
-```json
-{
-  "plc": "MainPLC",
-  "online": true,
-  "status": "connected",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
+- `DB1.0` - Data block 1, byte 0
+- `DB1.4.0` - Bit 0 at byte 4
+- `DB1.0[10]` - Array of 10 elements
+- `I0`, `Q0`, `M0` - Inputs, outputs, markers
 
-### Write Endpoint
+### Omron Addressing
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/{plc}/write` | POST | Write a value to a tag |
+- `DM100` - Data memory
+- `CIO50` - Core I/O
+- `DM100.5` - Bit access
+- `DM100[10]` - Array
 
-**Write Request:**
-```json
-{
-  "plc": "MainPLC",
-  "tag": "Program:MainProgram.Counter",
-  "value": 100
-}
-```
+## Keyboard Shortcuts
 
-**Write Response:**
-```json
-{
-  "plc": "MainPLC",
-  "tag": "Program:MainProgram.Counter",
-  "value": 100,
-  "success": true,
-  "timestamp": "2024-01-15T10:30:05Z"
-}
-```
+| Tab | Key | Action |
+|-----|-----|--------|
+| Global | `Shift+Tab` | Switch tabs |
+| Global | `?` | Help |
+| Global | `Q` | Quit |
+| PLCs | `d/a/e/r` | Discover/Add/Edit/Remove |
+| PLCs | `c/C/i` | Connect/Disconnect/Info |
+| Browser | `/` | Filter tags |
+| Browser | `Space` | Toggle publish |
+| Browser | `w` | Toggle writable |
+| Browser | `i` | Toggle ignore (UDT members) |
+| MQTT/Valkey/Kafka | `a/e/r/c/C` | Add/Edit/Remove/Connect/Disconnect |
+| Triggers | `a/e/r/t/x` | Add/Edit/Remove/Add tag/Remove tag |
+| Triggers | `s/S/T` | Start/Stop/Test |
 
-**Error Response:**
-```json
-{
-  "plc": "MainPLC",
-  "tag": "Program:MainProgram.Counter",
-  "value": 100,
-  "success": false,
-  "error": "tag is not writable",
-  "timestamp": "2024-01-15T10:30:05Z"
-}
-```
+## Daemon Mode
 
-**Write Error Conditions:**
-| HTTP Status | Error |
-|-------------|-------|
-| 400 | Invalid JSON or PLC name mismatch |
-| 403 | Tag is not marked as writable |
-| 404 | Tag not found |
-| 500 | Write failed or timeout |
-| 503 | PLC not connected |
+Run as a background service with SSH access:
 
-**Note:** Tags must be marked as `writable: true` in the configuration to accept writes.
-
-## MQTT Topics
-
-### Tag Publishing
-Tags are published to: `{root_topic}/{plc}/tags/{tag}`
-
-```json
-{
-  "topic": "factory",
-  "plc": "MainPLC",
-  "tag": "Counter",
-  "value": 42,
-  "type": "DINT",
-  "writable": true,
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Health Publishing
-Health status is published every 10 seconds to: `{root_topic}/{plc}/health`
-
-```json
-{
-  "topic": "factory",
-  "plc": "MainPLC",
-  "online": true,
-  "status": "connected",
-  "error": "",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-**Note:** Health publishing can be disabled per-PLC with `health_check_enabled: false`.
-
-### Write Requests
-Send write requests to: `{root_topic}/{plc}/write`
-
-**Request format:**
-```json
-{
-  "topic": "factory",
-  "plc": "MainPLC",
-  "tag": "Counter",
-  "value": 100
-}
-```
-
-**Response** (published to `{root_topic}/{plc}/write/response`):
-```json
-{
-  "topic": "factory",
-  "plc": "MainPLC",
-  "tag": "Counter",
-  "value": 100,
-  "success": true,
-  "timestamp": "2024-01-15T10:30:05Z"
-}
-```
-
-**Notes:**
-- The `topic` field must match the broker's `root_topic` configuration
-- Tags must be marked as `writable: true` in the configuration
-- Values are automatically converted to the tag's data type (JSON numbers become DINT/REAL, etc.)
-- Write responses include `"success": false` and an `"error"` field on failure
-
-## Valkey/Redis
-
-### Key Storage
-Tags are stored with the key pattern: `{factory}:{plc}:tags:{tag}`
-
-```json
-{
-  "factory": "factory",
-  "plc": "MainPLC",
-  "tag": "Counter",
-  "value": 42,
-  "type": "DINT",
-  "writable": true,
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-### Health Keys
-Health status is stored every 10 seconds at: `{factory}:{plc}:health`
-
-```json
-{
-  "factory": "factory",
-  "plc": "MainPLC",
-  "online": true,
-  "status": "connected",
-  "error": "",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-**Note:** Health publishing can be disabled per-PLC with `health_check_enabled: false`.
-
-### Pub/Sub Channels
-When `publish_changes: true`, changes are published to:
-- `{factory}:{plc}:changes` - Per-PLC change notifications
-- `{factory}:_all:changes` - All changes across all PLCs
-
-### Write-back Queue
-When `enable_writeback: true`, write requests can be sent via a LIST queue.
-
-**Queue key:** `{factory}:writes`
-
-**Send a write request:**
 ```bash
-redis-cli RPUSH factory:writes '{"factory":"factory","plc":"MainPLC","tag":"Counter","value":100}'
+./warlogix -d -p 2222 --ssh-password "secret"
+ssh -p 2222 localhost
 ```
 
-**Request format:**
-```json
-{
-  "factory": "factory",
-  "plc": "MainPLC",
-  "tag": "Counter",
-  "value": 100
-}
-```
+See [detailed documentation](docs/) for more options.
 
-**Response channel:** `{factory}:write:responses` (Pub/Sub)
+## Documentation
 
-Subscribe to receive write responses:
-```bash
-redis-cli SUBSCRIBE factory:write:responses
-```
+- [Configuration Reference](docs/configuration.md) - Complete config.yaml options
+- [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
+- [REST API](docs/rest-api.md) - HTTP endpoints
+- [MQTT](docs/mqtt.md) - Topics and write-back
+- [Valkey/Redis](docs/valkey.md) - Keys, Pub/Sub, write-back queue
+- [Kafka](docs/kafka.md) - Topics and authentication
+- [Triggers](docs/triggers.md) - Event-driven data capture
+- [Data Types](docs/data-types.md) - Types, byte order, UDT support
 
-**Response format:**
-```json
-{
-  "factory": "factory",
-  "plc": "MainPLC",
-  "tag": "Counter",
-  "value": 100,
-  "success": true,
-  "timestamp": "2024-01-15T10:30:05Z"
-}
-```
+## Warnings
 
-**Notes:**
-- Tags must be marked as `writable: true` in the configuration
-- The `factory` field must match the server's `factory` configuration
-- Use `key_ttl` to automatically expire keys for stale data detection
-
-## Kafka
-
-Kafka is **publish-only** (no write-back support). Tag changes, health status, and trigger events are published to configured topics.
-
-**Tag change message format** (when `publish_changes: true`):
-```json
-{
-  "plc": "MainPLC",
-  "tag": "Counter",
-  "value": 42,
-  "type": "DINT",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-**Health status message** (published every 10 seconds):
-```json
-{
-  "plc": "MainPLC",
-  "online": true,
-  "status": "connected",
-  "error": "",
-  "timestamp": "2024-01-15T10:30:00Z"
-}
-```
-
-**Note:** Health publishing can be disabled per-PLC with `health_check_enabled: false`.
-
-**Trigger event format** (see Event Triggers section for details):
-```json
-{
-  "trigger": "ProductComplete",
-  "timestamp": "2024-01-15T10:30:00.123456789Z",
-  "sequence": 42,
-  "plc": "MainPLC",
-  "metadata": {"line": "Line1"},
-  "data": {"ProductID": 12345, "Quantity": 100}
-}
-```
-
-## Supported Data Types
-
-| Type | Size | Description |
-|------|------|-------------|
-| BOOL | 1 bit | Boolean |
-| SINT/BYTE | 1 byte | 8-bit signed/unsigned |
-| INT/WORD | 2 bytes | 16-bit signed/unsigned |
-| DINT/DWORD | 4 bytes | 32-bit signed/unsigned |
-| LINT/LWORD | 8 bytes | 64-bit signed/unsigned |
-| REAL | 4 bytes | 32-bit float |
-| LREAL | 8 bytes | 64-bit float |
-| STRING | Variable | Null-terminated text |
-
-### Byte Order Handling
-
-Different PLC families use different byte orders for multi-byte values:
-
-| PLC Family | Native Byte Order |
-|------------|-------------------|
-| Siemens S7 | Big-endian |
-| Omron FINS | Big-endian |
-| Allen-Bradley Logix | Little-endian |
-| Beckhoff TwinCAT | Little-endian |
-
-**Known data types** (BOOL, INT, DINT, REAL, STRING, etc.) are automatically converted to the correct values regardless of the PLC's native byte order. You'll see the same numeric value whether it comes from an S7 or a Logix PLC.
-
-**Unknown data types** (structs, UDTs, and unrecognized types) are returned as raw byte arrays in the PLC's native byte order. If you need to decode these manually:
-- For S7 and Omron: bytes are in big-endian order (most significant byte first)
-- For Logix and Beckhoff: bytes are in little-endian order (least significant byte first)
-
-Example of a raw byte array for a 4-byte integer value of 0x12345678:
-- Big-endian (S7/Omron): `[18, 52, 86, 120]` (0x12, 0x34, 0x56, 0x78)
-- Little-endian (Logix/Beckhoff): `[120, 86, 52, 18]` (0x78, 0x56, 0x34, 0x12)
-
-## UDT/Structure Support
-
-WarLogix automatically unpacks UDT (User-Defined Type) and structure members when the template is known. Each member is published as a separate value with its full path (e.g., `MyUDT.Temperature`, `MyUDT.Status`).
-
-### Change Detection Filtering
-
-UDTs often contain volatile members like timestamps, heartbeats, or sequence counters that change frequently but aren't meaningful for data capture. You can exclude these from change detection:
-
-**Via Configuration:**
-```yaml
-tags:
-  - name: Program:MainProgram.MachineStatus
-    enabled: true
-    ignore_changes: [Timestamp, HeartbeatCount, SequenceNum]
-```
-
-**Via Tag Browser:**
-Press `i` on a UDT member to toggle ignore status. Ignored members appear with an `[I]` indicator.
-
-**Auto-Detection:**
-When enabling a UDT tag, WarLogix automatically detects and ignores common volatile members (timers, timestamps, counters) to reduce unnecessary republishing.
-
-**Note:** Ignored members are still published - they just don't trigger republishing when only they change. If a non-ignored member changes, the entire UDT (including ignored members) is republished with current values.
-
-## PLC Configuration Guide
-
-### Allen-Bradley ControlLogix/CompactLogix
-
-**PLC-Side Setup:**
-- No special configuration required - EtherNet/IP is enabled by default
-- Ensure the PLC has an IP address configured (via RSLogix/Studio 5000 or DHCP)
-- The EtherNet/IP port (TCP 44818) must be accessible from WarLogix
-
-**WarLogix Configuration:**
-- `address`: PLC IP address
-- `slot`: CPU slot number (typically 0 for CompactLogix, varies for ControlLogix)
-- Tags are discovered automatically; select which to publish in the Tag Browser
-
-**Troubleshooting:**
-- Verify network connectivity with ping
-- Check that no firewall blocks port 44818
-- For ControlLogix in remote chassis, ensure routing path is correct
-
-### Siemens S7-1200/1500
-
-**PLC-Side Setup (TIA Portal):**
-1. Open your project in TIA Portal
-2. Select the PLC and open **Properties** > **Protection & Security**
-3. Enable **Permit access with PUT/GET communication from remote partner**
-4. For each Data Block you want to access:
-   - Open DB properties > **Attributes**
-   - Uncheck **Optimized block access** (enables absolute addressing)
-5. Download the project to the PLC
-
-**WarLogix Configuration:**
-- `address`: PLC IP address
-- `slot`: Rack/slot - use `0` for S7-1200/1500 integrated CPU
-- `family`: `s7`
-- Tags must be configured manually with byte offsets
-
-**Addressing Format:**
-- `DB<n>.<offset>` with `data_type` field (e.g., `DB1.0` with `data_type: DINT`)
-- Bit access: `DB<n>.<offset>.<bit>` (e.g., `DB1.4.0` for bit 0 at byte 4)
-- Other areas: `I<offset>`, `Q<offset>`, `M<offset>` (inputs, outputs, markers)
-- Arrays: `DB1.0[10]` for 10 elements starting at byte 0
-
-**Troubleshooting:**
-- "Connection refused" - PUT/GET not enabled or wrong IP
-- "Access denied" - DB has optimized access enabled
-- Wrong values - check byte offsets match your DB layout
-
-### Siemens S7-300/400
-
-**PLC-Side Setup:**
-- No special configuration typically required
-- Ensure the CP (Communications Processor) or integrated Ethernet port has an IP address
-
-**WarLogix Configuration:**
-- `address`: PLC IP address
-- `slot`: CPU slot (typically `2` for S7-300, varies for S7-400)
-- `rack`: Rack number (typically `0`)
-
-### Beckhoff TwinCAT
-
-**PLC-Side Setup:**
-1. **Configure AMS Net ID**: In TwinCAT System Manager, note your PLC's AMS Net ID (usually `<IP>.1.1`)
-2. **Add a Route** for the WarLogix machine (see detailed instructions below)
-3. **Firewall**: Ensure port 48898 (ADS) is open for TCP traffic
-4. **PLC must be in RUN mode** for symbol access
-
-**Adding a Route for WarLogix (Important for non-TwinCAT clients):**
-
-Since WarLogix runs without a local TwinCAT installation, you must add a route on the PLC that allows connections from your machine:
-
-1. Open TwinCAT XAE and connect to your PLC
-2. Go to **SYSTEM > Routes** and click **Add**
-3. Configure the route:
-   - **Route Name**: WarLogix (or any identifier)
-   - **AMS Net Id**: Your machine's IP + `.1.1` (e.g., `192.168.1.50.1.1`)
-   - **Transport Type**: TCP/IP
-   - **Address Info**: Your machine's IP address (e.g., `192.168.1.50`)
-   - **Target Route**: Select **Static** (persists across reboots)
-   - **Remote Route**: Select **None / Server** (WarLogix doesn't have a TwinCAT router)
-   - **Do not select Secure ADS**
-4. Click **Add Route**
-
-<img width="350" alt="TwinCAT Route Configuration" src="https://github.com/user-attachments/assets/21c34603-f4bf-477f-8caf-69aa89e31e5c" />
-
-**WarLogix Configuration:**
-- `address`: PLC IP address
-- `ams_net_id`: PLC's AMS Net ID (e.g., `192.168.1.100.1.1`)
-- `ams_port`: Runtime port - `851` for TwinCAT 3 Runtime 1, `801` for TwinCAT 2
-- `family`: `beckhoff`
-- Tags are discovered automatically from the symbol table
-
-**Symbol Naming:**
-- `MAIN.Variable` - Variable in MAIN program
-- `GVL.GlobalVar` - Global Variable List
-- `FB_Instance.Member` - Function block members
-
-**Troubleshooting:**
-- "Connection reset by peer" - Route not configured or incorrect AMS Net ID. Ensure the route's AMS Net Id matches your machine's IP + `.1.1`
-- "No route" - Add a route in TwinCAT for the WarLogix machine
-- "Port not found" - Check AMS port matches your runtime (851 vs 801)
-- No symbols - Ensure PLC is in RUN mode and project is activated
-- TwinCAT 3.1 Build 4024+ has stricter security defaults - ensure routes are configured correctly
-
-### Omron FINS (CJ/CS/CP/NJ/NX Series)
-
-**PLC-Side Setup:**
-1. **Configure IP Address**: Set via CX-Programmer, Sysmac Studio, or rotary switches
-2. **FINS Port**: Default UDP 9600 (usually no change needed)
-3. **Node Address**: Configure in PLC settings; often matches last octet of IP address
-4. **Firewall**: Ensure UDP port 9600 is open
-
-**WarLogix Configuration:**
-- `address`: PLC IP address
-- `fins_port`: UDP port (default `9600`)
-- `fins_node`: PLC's FINS node number (often `0` or last IP octet)
-- `fins_network`: FINS network number (usually `0` for local)
-- `fins_unit`: CPU unit number (usually `0`)
-- `family`: `omron`
-- Tags must be configured manually
-
-**Addressing Format:**
-- **Memory Areas**: DM (data), CIO (I/O), WR (work), HR (holding), AR (auxiliary)
-- Word access: `DM100`, `CIO50`, `HR10`
-- Bit access: `DM100.5` (bit 5 of DM100)
-- Arrays: `DM100[10]` for 10 consecutive words
-
-**Troubleshooting:**
-- Timeout errors - Check IP, port, and that PLC is powered on
-- Wrong node - Verify FINS node address matches PLC configuration
-- No response - Ensure UDP 9600 is not blocked by firewall
-
-### Tag Aliases
-
-For S7 and Omron PLCs (which use address-based tags), assign friendly names:
-```yaml
-- name: DB1.0
-  alias: ProductCount
-  data_type: DINT
-```
-The alias appears in MQTT/Valkey/Kafka messages instead of the raw address.
-
-## Event Triggers
-
-Triggers capture data snapshots when PLC conditions are met and publish to Kafka:
-
-1. Monitor a trigger tag (e.g., `ProductReady`)
-2. When condition met (rising edge), capture configured data tags
-3. Publish JSON message to Kafka with timestamp and sequence number
-4. Optionally write acknowledgment (1=success, -1=error) to PLC
-
-**Condition operators**: `==`, `!=`, `>`, `<`, `>=`, `<=`
-
-## Limitations
-
-- UDTs with unknown templates are published as raw byte arrays
-- BETA release - improvements ongoing
+- This software reads/writes to industrial PLCs - use caution
+- No warranty - use at your own risk
 
 ## License
 
 Apache License 2.0
-
-## Acknowledgements
-
-This project builds on excellent open source libraries:
-
-**PLC Communication:**
-- [gos7](https://github.com/robinson/gos7) - Siemens S7 protocol implementation
-- [fins](https://github.com/xiaotushaoxia/fins) - Omron FINS/UDP protocol
-- [pylogix](https://github.com/dmroeder/pylogix) - Reference for Allen-Bradley EtherNet/IP
-
-**Infrastructure:**
-- [paho.mqtt.golang](https://github.com/eclipse/paho.mqtt.golang) - Eclipse MQTT client
-- [go-redis](https://github.com/redis/go-redis) - Redis/Valkey client
-- [kafka-go](https://github.com/segmentio/kafka-go) - Apache Kafka client
-
-**User Interface:**
-- [tview](https://github.com/rivo/tview) - Terminal UI framework
-- [tcell](https://github.com/gdamore/tcell) - Terminal cell library
-
-**Remote Access:**
-- [gliderlabs/ssh](https://github.com/gliderlabs/ssh) - Go SSH server library
-- [creack/pty](https://github.com/creack/pty) - PTY handling for terminal multiplexing
-
-**Utilities:**
-- [yaml.v3](https://github.com/go-yaml/yaml) - YAML parsing
-
-## Contributing
-
-Contributions welcome! Please submit a Pull Request.
