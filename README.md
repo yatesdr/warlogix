@@ -6,6 +6,21 @@ A TUI (Text User Interface) gateway for industrial PLCs. Connect to Allen-Bradle
 
 <img width="961" height="579" alt="WarLogix TUI" src="https://github.com/user-attachments/assets/4bdbc47e-6ca1-41a1-992d-c46356d6415c" />
 
+## Why WarLogix?
+
+**WAR** stands for *"Whispers Across Realms"* - bridging the gap between industrial automation and modern IT infrastructure.
+
+Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwhile, your data platforms expect REST, MQTT, Kafka, and Redis. WarLogix translates between these worlds, letting you stream PLC data to dashboards, databases, and analytics pipelines without writing custom integration code.
+
+**Use cases:**
+- Real-time production monitoring and OEE dashboards
+- Historical data collection for analytics and ML
+- Event-driven alerts and notifications
+- Bidirectional control from IT systems to PLCs
+- Multi-vendor PLC consolidation into unified data streams
+
+No expensive middleware. No vendor lock-in. Just a single binary that runs anywhere.
+
 ## Features
 
 - **Multi-PLC Support** - Connect to multiple PLCs from different vendors simultaneously
