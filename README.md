@@ -554,7 +554,10 @@ Since WarLogix runs without a local TwinCAT installation, you must add a route o
    - **Address Info**: Your machine's IP address (e.g., `192.168.1.50`)
    - **Target Route**: Select **Static** (persists across reboots)
    - **Remote Route**: Select **None / Server** (WarLogix doesn't have a TwinCAT router)
+   - **Do not select Secure ADS**
 4. Click **Add Route**
+
+<img width="350" alt="TwinCAT Route Configuration" src="https://github.com/user-attachments/assets/21c34603-f4bf-477f-8caf-69aa89e31e5c" />
 
 **WarLogix Configuration:**
 - `address`: PLC IP address
