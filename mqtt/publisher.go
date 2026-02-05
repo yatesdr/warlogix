@@ -443,6 +443,7 @@ func (p *Publisher) subscribeWriteTopics() {
 // since DINT is the most common integer type in PLCs.
 // PLC type codes (from logix package, duplicated to avoid import cycle)
 const (
+	// Logix type codes
 	plcTypeBOOL  uint16 = 0x00C1
 	plcTypeSINT  uint16 = 0x00C2
 	plcTypeINT   uint16 = 0x00C3
@@ -454,6 +455,22 @@ const (
 	plcTypeULINT uint16 = 0x00C9
 	plcTypeREAL  uint16 = 0x00CA
 	plcTypeLREAL uint16 = 0x00CB
+
+	// ADS/Beckhoff type codes
+	adsTypeBOOL   uint16 = 0x0021
+	adsTypeSINT   uint16 = 0x0010
+	adsTypeBYTE   uint16 = 0x0011
+	adsTypeINT    uint16 = 0x0002
+	adsTypeWORD   uint16 = 0x0012
+	adsTypeDINT   uint16 = 0x0003
+	adsTypeDWORD  uint16 = 0x0013
+	adsTypeLINT   uint16 = 0x0014
+	adsTypeLWORD  uint16 = 0x0015
+	adsTypeLTIME  uint16 = 0x0016
+	adsTypeREAL   uint16 = 0x0004
+	adsTypeLREAL  uint16 = 0x0005
+	adsTypeSTRING uint16 = 0x001E
+	adsTypeWSTRING uint16 = 0x001F
 )
 
 // convertValueForType converts a JSON value to the appropriate Go type for the PLC tag.
@@ -485,7 +502,7 @@ func convertValueForType(value interface{}, dataType uint16) (interface{}, error
 	}
 
 	switch baseType {
-	case plcTypeBOOL:
+	case plcTypeBOOL, adsTypeBOOL:
 		if isBool {
 			return boolVal, nil
 		}
@@ -494,7 +511,7 @@ func convertValueForType(value interface{}, dataType uint16) (interface{}, error
 		}
 		return nil, fmt.Errorf("cannot convert %T to BOOL", value)
 
-	case plcTypeSINT: // int8
+	case plcTypeSINT, adsTypeSINT: // int8
 		if !isNumber {
 			return nil, fmt.Errorf("cannot convert %T to SINT", value)
 		}
@@ -503,7 +520,16 @@ func convertValueForType(value interface{}, dataType uint16) (interface{}, error
 		}
 		return int8(numVal), nil
 
-	case plcTypeINT: // int16
+	case adsTypeBYTE: // uint8 (BYTE in ADS)
+		if !isNumber {
+			return nil, fmt.Errorf("cannot convert %T to BYTE", value)
+		}
+		if numVal < 0 || numVal > 255 || numVal != float64(uint8(numVal)) {
+			return nil, fmt.Errorf("value %v out of range for BYTE (0 to 255)", numVal)
+		}
+		return uint8(numVal), nil
+
+	case plcTypeINT, adsTypeINT: // int16
 		if !isNumber {
 			return nil, fmt.Errorf("cannot convert %T to INT", value)
 		}
@@ -512,7 +538,16 @@ func convertValueForType(value interface{}, dataType uint16) (interface{}, error
 		}
 		return int16(numVal), nil
 
-	case plcTypeDINT: // int32
+	case adsTypeWORD: // uint16 (WORD in ADS)
+		if !isNumber {
+			return nil, fmt.Errorf("cannot convert %T to WORD", value)
+		}
+		if numVal < 0 || numVal > 65535 || numVal != float64(uint16(numVal)) {
+			return nil, fmt.Errorf("value %v out of range for WORD (0 to 65535)", numVal)
+		}
+		return uint16(numVal), nil
+
+	case plcTypeDINT, adsTypeDINT: // int32
 		if !isNumber {
 			return nil, fmt.Errorf("cannot convert %T to DINT", value)
 		}
@@ -521,7 +556,16 @@ func convertValueForType(value interface{}, dataType uint16) (interface{}, error
 		}
 		return int32(numVal), nil
 
-	case plcTypeLINT: // int64
+	case adsTypeDWORD: // uint32 (DWORD in ADS)
+		if !isNumber {
+			return nil, fmt.Errorf("cannot convert %T to DWORD", value)
+		}
+		if numVal < 0 || numVal > 4294967295 || numVal != float64(uint32(numVal)) {
+			return nil, fmt.Errorf("value %v out of range for DWORD", numVal)
+		}
+		return uint32(numVal), nil
+
+	case plcTypeLINT, adsTypeLINT: // int64
 		if !isNumber {
 			return nil, fmt.Errorf("cannot convert %T to LINT", value)
 		}
@@ -529,6 +573,24 @@ func convertValueForType(value interface{}, dataType uint16) (interface{}, error
 			return nil, fmt.Errorf("value %v cannot be represented as LINT", numVal)
 		}
 		return int64(numVal), nil
+
+	case adsTypeLWORD: // uint64 (LWORD in ADS)
+		if !isNumber {
+			return nil, fmt.Errorf("cannot convert %T to LWORD", value)
+		}
+		if numVal < 0 || numVal != float64(uint64(numVal)) {
+			return nil, fmt.Errorf("value %v out of range for LWORD", numVal)
+		}
+		return uint64(numVal), nil
+
+	case adsTypeLTIME: // uint64 (LTIME in ADS - nanoseconds)
+		if !isNumber {
+			return nil, fmt.Errorf("cannot convert %T to LTIME", value)
+		}
+		if numVal < 0 || numVal != float64(uint64(numVal)) {
+			return nil, fmt.Errorf("value %v out of range for LTIME", numVal)
+		}
+		return uint64(numVal), nil
 
 	case plcTypeUSINT: // uint8
 		if !isNumber {
@@ -566,17 +628,23 @@ func convertValueForType(value interface{}, dataType uint16) (interface{}, error
 		}
 		return uint64(numVal), nil
 
-	case plcTypeREAL: // float32
+	case plcTypeREAL, adsTypeREAL: // float32
 		if !isNumber {
 			return nil, fmt.Errorf("cannot convert %T to REAL", value)
 		}
 		return float32(numVal), nil
 
-	case plcTypeLREAL: // float64
+	case plcTypeLREAL, adsTypeLREAL: // float64
 		if !isNumber {
 			return nil, fmt.Errorf("cannot convert %T to LREAL", value)
 		}
 		return numVal, nil
+
+	case adsTypeSTRING, adsTypeWSTRING: // STRING types
+		if isString {
+			return strVal, nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to STRING", value)
 
 	default:
 		// For strings or unknown types, try to use as-is
@@ -595,6 +663,7 @@ func convertValueForType(value interface{}, dataType uint16) (interface{}, error
 func getTypeName(dataType uint16) string {
 	baseType := dataType & 0x0FFF
 	switch baseType {
+	// Logix types
 	case plcTypeBOOL:
 		return "BOOL"
 	case plcTypeSINT:
@@ -617,6 +686,35 @@ func getTypeName(dataType uint16) string {
 		return "REAL"
 	case plcTypeLREAL:
 		return "LREAL"
+	// ADS/Beckhoff types
+	case adsTypeBOOL:
+		return "BOOL"
+	case adsTypeSINT:
+		return "SINT"
+	case adsTypeBYTE:
+		return "BYTE"
+	case adsTypeINT:
+		return "INT"
+	case adsTypeWORD:
+		return "WORD"
+	case adsTypeDINT:
+		return "DINT"
+	case adsTypeDWORD:
+		return "DWORD"
+	case adsTypeLINT:
+		return "LINT"
+	case adsTypeLWORD:
+		return "LWORD"
+	case adsTypeLTIME:
+		return "LTIME"
+	case adsTypeREAL:
+		return "REAL"
+	case adsTypeLREAL:
+		return "LREAL"
+	case adsTypeSTRING:
+		return "STRING"
+	case adsTypeWSTRING:
+		return "WSTRING"
 	default:
 		return fmt.Sprintf("UNKNOWN(0x%04X)", dataType)
 	}

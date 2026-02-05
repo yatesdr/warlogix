@@ -8,6 +8,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
+	"warlogix/ads"
 	"warlogix/config"
 	"warlogix/logix"
 	"warlogix/plcman"
@@ -221,7 +222,8 @@ func (t *BrowserTab) getTypeName(typeCode uint16) string {
 		switch cfg.GetFamily() {
 		case config.FamilyS7:
 			return s7.TypeName(typeCode)
-		// Note: Beckhoff/ADS could be added here when implemented
+		case config.FamilyBeckhoff:
+			return ads.TypeName(typeCode)
 		}
 	}
 	return logix.TypeName(typeCode)

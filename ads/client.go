@@ -508,6 +508,19 @@ func (c *Client) readSymbol(name string) (*TagValue, error) {
 		count = int(length) / elemSize
 	}
 
+	// Special handling for string/wstring arrays - parse from TypeName
+	if count == 1 && (entry.Info.TypeCode == TypeString || entry.Info.TypeCode == TypeWString) {
+		// Check if TypeName indicates an array (e.g., "ARRAY [0..4] OF STRING")
+		typeName := strings.ToUpper(entry.Info.TypeName)
+		if strings.Contains(typeName, "ARRAY") {
+			// Try to extract array bounds from TypeName
+			arrayCount := parseArrayCountFromTypeName(typeName)
+			if arrayCount > 1 {
+				count = arrayCount
+			}
+		}
+	}
+
 	return &TagValue{
 		Name:     name,
 		DataType: entry.Info.TypeCode,
@@ -710,7 +723,77 @@ func parseSymbolInfo(data []byte) (*TagInfo, error) {
 		}
 	}
 
+	// If type code is unknown, try to determine from TypeName
+	if info.TypeCode == TypeUnknown && info.TypeName != "" {
+		info.TypeCode = mapTypeFromName(info.TypeName, info.Size)
+	}
+
 	return info, nil
+}
+
+// mapTypeFromName attempts to determine the type code from the type name string.
+// This is used as a fallback when the ADS type code is unknown (e.g., LTIME, TOD).
+func mapTypeFromName(typeName string, size uint32) uint16 {
+	// Normalize to uppercase for matching
+	upper := strings.ToUpper(typeName)
+
+	// Handle array types by extracting the base type
+	if strings.HasPrefix(upper, "ARRAY") {
+		// Extract base type from "ARRAY [x..y] OF TYPE"
+		if idx := strings.Index(upper, " OF "); idx != -1 {
+			upper = strings.TrimSpace(upper[idx+4:])
+		}
+	}
+
+	// Match known type names
+	switch upper {
+	case "LTIME":
+		return TypeLTime
+	case "TIME":
+		return TypeTime
+	case "DATE":
+		return TypeDate
+	case "TIME_OF_DAY", "TOD":
+		return TypeTimeOfDay
+	case "DATE_AND_TIME", "DT":
+		return TypeDateTime
+	case "BOOL":
+		return TypeBool
+	case "BYTE", "USINT":
+		return TypeByte
+	case "SINT":
+		return TypeSByte
+	case "WORD", "UINT":
+		return TypeWord
+	case "INT":
+		return TypeInt16
+	case "DWORD", "UDINT":
+		return TypeDWord
+	case "DINT":
+		return TypeInt32
+	case "LWORD", "ULINT":
+		return TypeLWord
+	case "LINT":
+		return TypeInt64
+	case "REAL":
+		return TypeReal
+	case "LREAL":
+		return TypeLReal
+	case "STRING":
+		return TypeString
+	case "WSTRING":
+		return TypeWString
+	}
+
+	// Check if type name starts with STRING (e.g., "STRING(80)")
+	if strings.HasPrefix(upper, "STRING") {
+		return TypeString
+	}
+	if strings.HasPrefix(upper, "WSTRING") {
+		return TypeWString
+	}
+
+	return TypeUnknown
 }
 
 // mapAdsType maps TwinCAT ADST_* type enum to our type codes.
@@ -748,6 +831,35 @@ func mapAdsType(adsType uint32) uint16 {
 		// For complex types, return TypeUnknown
 		return TypeUnknown
 	}
+}
+
+// parseArrayCountFromTypeName extracts array element count from TwinCAT type names.
+// Examples: "ARRAY [0..4] OF STRING" -> 5, "ARRAY [1..10] OF INT" -> 10
+func parseArrayCountFromTypeName(typeName string) int {
+	// Look for pattern like "[0..4]" or "[1..10]"
+	startIdx := strings.Index(typeName, "[")
+	endIdx := strings.Index(typeName, "]")
+	if startIdx == -1 || endIdx == -1 || endIdx <= startIdx {
+		return 1
+	}
+
+	bounds := typeName[startIdx+1 : endIdx]
+	// Split by ".." to get lower and upper bounds
+	parts := strings.Split(bounds, "..")
+	if len(parts) != 2 {
+		return 1
+	}
+
+	// Parse bounds - handle both "0..4" and "1..5" styles
+	lower := 0
+	upper := 0
+	fmt.Sscanf(strings.TrimSpace(parts[0]), "%d", &lower)
+	fmt.Sscanf(strings.TrimSpace(parts[1]), "%d", &upper)
+
+	if upper >= lower {
+		return upper - lower + 1
+	}
+	return 1
 }
 
 // acquireHandle gets a handle for a symbol name.
