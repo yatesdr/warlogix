@@ -381,15 +381,6 @@ func (a *App) Run() error {
 	// Set up manager change callback to trigger UI updates
 	a.manager.SetOnChange(func() {
 		a.app.QueueUpdateDraw(func() {
-			// Skip refresh if a modal dialog is open to avoid interference with form input
-			frontPage, _ := a.pages.GetFrontPage()
-			isModalOpen := frontPage != TabPLCs && frontPage != TabBrowser &&
-				frontPage != TabREST && frontPage != TabMQTT &&
-				frontPage != TabValkey && frontPage != TabKafka &&
-				frontPage != TabTriggers && frontPage != TabDebug
-			if isModalOpen {
-				return
-			}
 			a.plcsTab.Refresh()
 			a.browserTab.Refresh()
 		})
@@ -426,21 +417,20 @@ func (a *App) periodicRefresh() {
 			return
 		case <-time.After(1 * time.Second):
 			a.app.QueueUpdateDraw(func() {
-				// Skip ALL refreshes if a modal dialog is open to avoid interference with form input
-				// This prevents crashes on Windows/Linux when typing in form fields
+				// Skip refresh if a modal dialog is open to avoid interference with form input
 				frontPage, _ := a.pages.GetFrontPage()
 				isModalOpen := frontPage != TabPLCs && frontPage != TabBrowser &&
 					frontPage != TabREST && frontPage != TabMQTT &&
 					frontPage != TabValkey && frontPage != TabKafka &&
 					frontPage != TabTriggers && frontPage != TabDebug
 
-				if isModalOpen {
-					return
-				}
-
-				// Only refresh if tabs are initialized
+				// Only refresh if tabs are initialized and no modal is open
 				if a.debugTab != nil {
 					a.debugTab.Refresh()
+				}
+				// Skip table refreshes when a modal dialog is open
+				if isModalOpen {
+					return
 				}
 				if a.mqttTab != nil && a.currentTab == 3 {
 					a.mqttTab.Refresh()
