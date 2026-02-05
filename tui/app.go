@@ -208,8 +208,12 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	// List of known tab pages - anything else is considered a modal
 	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabREST || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabKafka || frontPage == TabTriggers || frontPage == TabDebug
 
-	// Handle quit and tab switching even if we're not sure about the page state
-	// Check for quit: Shift+Q (uppercase Q)
+	// Don't intercept keys (including Shift-Q) when a modal/form is open
+	if !isMainTab {
+		return event
+	}
+
+	// Handle quit: Shift+Q (uppercase Q) - only when not in a modal
 	if event.Rune() == 'Q' {
 		if a.daemonMode {
 			// In daemon mode, Shift-Q disconnects the session, not quits the daemon
@@ -226,11 +230,6 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	if event.Key() == tcell.KeyBacktab {
 		a.nextTab()
 		return nil
-	}
-
-	// Don't intercept other keys when a modal/form is open
-	if !isMainTab {
-		return event
 	}
 
 	// Check for help
