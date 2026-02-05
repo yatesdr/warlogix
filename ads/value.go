@@ -50,6 +50,12 @@ func (v *TagValue) GoValue() interface{} {
 		}
 	}
 
+	// Special handling for STRING/WSTRING arrays - they have variable element size
+	// but Count > 1 indicates an array
+	if !isArray && v.Count > 1 && (baseType == TypeString || baseType == TypeWString) {
+		isArray = true
+	}
+
 	// Handle arrays
 	if isArray {
 		return v.parseArray(baseType)
@@ -109,7 +115,7 @@ func (v *TagValue) parseScalar(baseType uint16) interface{} {
 			return int64(binary.LittleEndian.Uint64(v.Bytes))
 		}
 
-	case TypeLWord:
+	case TypeLWord, TypeLTime:
 		if len(v.Bytes) >= 8 {
 			return binary.LittleEndian.Uint64(v.Bytes)
 		}
@@ -239,7 +245,7 @@ func (v *TagValue) parseArray(baseType uint16) interface{} {
 		}
 		return result
 
-	case TypeLWord:
+	case TypeLWord, TypeLTime:
 		result := make([]uint64, count)
 		for i := 0; i < count; i++ {
 			offset := i * 8

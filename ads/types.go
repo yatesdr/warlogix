@@ -24,10 +24,11 @@ const (
 	TypeLReal  uint16 = 0x05 // LREAL (8 bytes double)
 	TypeString uint16 = 0x1E // STRING
 	TypeWString uint16 = 0x1F // WSTRING
-	TypeTime   uint16 = 0x30 // TIME
-	TypeDate   uint16 = 0x31 // DATE
+	TypeTime      uint16 = 0x30 // TIME (32-bit, milliseconds)
+	TypeLTime     uint16 = 0x16 // LTIME (64-bit, nanoseconds)
+	TypeDate      uint16 = 0x31 // DATE
 	TypeTimeOfDay uint16 = 0x32 // TIME_OF_DAY
-	TypeDateTime uint16 = 0x33 // DATE_AND_TIME
+	TypeDateTime  uint16 = 0x33 // DATE_AND_TIME
 
 	// Pseudo-types for internal use
 	TypeUnknown uint16 = 0xFFFF
@@ -84,6 +85,8 @@ func TypeName(typeCode uint16) string {
 		return "WSTRING"
 	case TypeTime:
 		return "TIME"
+	case TypeLTime:
+		return "LTIME"
 	case TypeDate:
 		return "DATE"
 	case TypeTimeOfDay:
@@ -129,6 +132,8 @@ func TypeCodeFromName(name string) (uint16, bool) {
 		return TypeWString, true
 	case "TIME":
 		return TypeTime, true
+	case "LTIME":
+		return TypeLTime, true
 	case "DATE":
 		return TypeDate, true
 	case "TIME_OF_DAY", "TOD":
@@ -150,7 +155,7 @@ func TypeSize(typeCode uint16) int {
 		return 2
 	case TypeDWord, TypeInt32, TypeReal, TypeTime, TypeDate, TypeTimeOfDay:
 		return 4
-	case TypeLWord, TypeInt64, TypeLReal, TypeDateTime:
+	case TypeLWord, TypeInt64, TypeLReal, TypeDateTime, TypeLTime:
 		return 8
 	default:
 		return 0 // Variable or unknown
@@ -203,7 +208,7 @@ func DecodeValue(typeCode uint16, data []byte) interface{} {
 		}
 		return int32(binary.LittleEndian.Uint32(data))
 
-	case TypeLWord:
+	case TypeLWord, TypeLTime:
 		if len(data) < 8 {
 			return uint64(0)
 		}

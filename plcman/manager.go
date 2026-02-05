@@ -357,29 +357,57 @@ func (w *PLCWorker) poll() {
 	}
 
 	if status != StatusConnected || !hasConnection {
+		// Check if auto-connect is enabled and we should attempt reconnection
+		plc.mu.RLock()
+		autoConnect := plc.Config.Enabled
+		plc.mu.RUnlock()
+
+		needsReconnect := autoConnect && (status == StatusDisconnected || status == StatusError)
+
 		// If S7 client exists but is not connected, trigger reconnection
-		if family == config.FamilyS7 && s7Client != nil && !s7Client.IsConnected() {
+		if family == config.FamilyS7 && (needsReconnect || (s7Client != nil && !s7Client.IsConnected())) {
 			plc.mu.Lock()
 			plc.Status = StatusDisconnected
-			plc.S7Client = nil
+			if plc.S7Client != nil {
+				plc.S7Client.Close()
+				plc.S7Client = nil
+			}
 			plc.mu.Unlock()
 			w.manager.markStatusDirty()
 			go w.manager.scheduleReconnect(plcName)
 		}
 		// If ADS client exists but is not connected, trigger reconnection
-		if family == config.FamilyBeckhoff && adsClient != nil && !adsClient.IsConnected() {
+		if family == config.FamilyBeckhoff && (needsReconnect || (adsClient != nil && !adsClient.IsConnected())) {
 			plc.mu.Lock()
 			plc.Status = StatusDisconnected
-			plc.AdsClient = nil
+			if plc.AdsClient != nil {
+				plc.AdsClient.Close()
+				plc.AdsClient = nil
+			}
 			plc.mu.Unlock()
 			w.manager.markStatusDirty()
 			go w.manager.scheduleReconnect(plcName)
 		}
 		// If FINS client exists but is not connected, trigger reconnection
-		if family == config.FamilyOmron && finsClient != nil && !finsClient.IsConnected() {
+		if family == config.FamilyOmron && (needsReconnect || (finsClient != nil && !finsClient.IsConnected())) {
 			plc.mu.Lock()
 			plc.Status = StatusDisconnected
-			plc.FinsClient = nil
+			if plc.FinsClient != nil {
+				plc.FinsClient.Close()
+				plc.FinsClient = nil
+			}
+			plc.mu.Unlock()
+			w.manager.markStatusDirty()
+			go w.manager.scheduleReconnect(plcName)
+		}
+		// If Logix/Micro800 client is not connected, trigger reconnection
+		if (family == config.FamilyLogix || family == config.FamilyMicro800) && needsReconnect {
+			plc.mu.Lock()
+			plc.Status = StatusDisconnected
+			if plc.Client != nil {
+				plc.Client.Close()
+				plc.Client = nil
+			}
 			plc.mu.Unlock()
 			w.manager.markStatusDirty()
 			go w.manager.scheduleReconnect(plcName)
@@ -426,36 +454,43 @@ func (w *PLCWorker) poll() {
 	if err != nil {
 		plc.mu.Lock()
 		plc.LastError = err
-		plc.Status = StatusError
+		autoConnect := plc.Config.Enabled
+
+		// Determine if client detected disconnection
+		clientDisconnected := false
 
 		// For S7, check if this is a connection error and mark client as disconnected
 		if family == config.FamilyS7 && s7Client != nil {
-			// The S7 client will have already marked itself disconnected if it detected
-			// a connection error, but we also trigger reconnection here
 			if !s7Client.IsConnected() {
-				plc.Status = StatusDisconnected
-				plc.S7Client = nil // Clear the dead client reference
+				clientDisconnected = true
+				plc.S7Client.Close()
+				plc.S7Client = nil
 			}
 		}
 
 		// For Beckhoff, check if this is a connection error and mark client as disconnected
 		if family == config.FamilyBeckhoff && adsClient != nil {
-			// The ADS client will have already marked itself disconnected if it detected
-			// a connection error, but we also trigger reconnection here
 			if !adsClient.IsConnected() {
-				plc.Status = StatusDisconnected
-				plc.AdsClient = nil // Clear the dead client reference
+				clientDisconnected = true
+				plc.AdsClient.Close()
+				plc.AdsClient = nil
 			}
 		}
 
 		// For Omron FINS, check if this is a connection error and mark client as disconnected
 		if family == config.FamilyOmron && finsClient != nil {
-			// The FINS client will have already marked itself disconnected if it detected
-			// a connection error, but we also trigger reconnection here
 			if !finsClient.IsConnected() {
-				plc.Status = StatusDisconnected
-				plc.FinsClient = nil // Clear the dead client reference
+				clientDisconnected = true
+				plc.FinsClient.Close()
+				plc.FinsClient = nil
 			}
+		}
+
+		// Set status based on whether client detected disconnection
+		if clientDisconnected {
+			plc.Status = StatusDisconnected
+		} else {
+			plc.Status = StatusError
 		}
 
 		plcNameForLog := plc.Config.Name
@@ -469,18 +504,25 @@ func (w *PLCWorker) poll() {
 
 		w.manager.markStatusDirty()
 
-		// Trigger immediate reconnection attempt for connection errors
-		if family == config.FamilyS7 && (s7Client == nil || !s7Client.IsConnected()) {
-			w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
-			go w.manager.scheduleReconnect(plcNameForLog)
-		}
-		if family == config.FamilyBeckhoff && (adsClient == nil || !adsClient.IsConnected()) {
-			w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
-			go w.manager.scheduleReconnect(plcNameForLog)
-		}
-		if family == config.FamilyOmron && (finsClient == nil || !finsClient.IsConnected()) {
-			w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
-			go w.manager.scheduleReconnect(plcNameForLog)
+		// Schedule reconnection if auto-connect is enabled and client detected disconnection
+		// OR if there's a repeated error (let scheduleReconnect handle deduplication)
+		shouldReconnect := autoConnect && (clientDisconnected || isLikelyConnectionError(err))
+
+		if shouldReconnect {
+			switch family {
+			case config.FamilyS7:
+				w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
+				go w.manager.scheduleReconnect(plcNameForLog)
+			case config.FamilyBeckhoff:
+				w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
+				go w.manager.scheduleReconnect(plcNameForLog)
+			case config.FamilyOmron:
+				w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
+				go w.manager.scheduleReconnect(plcNameForLog)
+			case config.FamilyLogix, config.FamilyMicro800:
+				w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
+				go w.manager.scheduleReconnect(plcNameForLog)
+			}
 		}
 
 		return
@@ -701,6 +743,27 @@ func (w *PLCWorker) pollFins(client *fins.Client, addresses []string, typeMap ma
 		}
 	}
 	return results, nil
+}
+
+// isLikelyConnectionError checks if an error message suggests a connection problem.
+// This is used to trigger reconnection attempts when the client's internal detection
+// might not have caught the error (e.g., protocol-level errors vs TCP errors).
+func isLikelyConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	// Common connection-related error patterns
+	return strings.Contains(errStr, "connection") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "reset by peer") ||
+		strings.Contains(errStr, "eof") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "refused") ||
+		strings.Contains(errStr, "closed") ||
+		strings.Contains(errStr, "not connected") ||
+		strings.Contains(errStr, "nil client") ||
+		strings.Contains(errStr, "dial")
 }
 
 // Manager manages multiple PLC connections and polling.

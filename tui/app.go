@@ -417,9 +417,20 @@ func (a *App) periodicRefresh() {
 			return
 		case <-time.After(1 * time.Second):
 			a.app.QueueUpdateDraw(func() {
-				// Only refresh if tabs are initialized
+				// Skip refresh if a modal dialog is open to avoid interference with form input
+				frontPage, _ := a.pages.GetFrontPage()
+				isModalOpen := frontPage != TabPLCs && frontPage != TabBrowser &&
+					frontPage != TabREST && frontPage != TabMQTT &&
+					frontPage != TabValkey && frontPage != TabKafka &&
+					frontPage != TabTriggers && frontPage != TabDebug
+
+				// Only refresh if tabs are initialized and no modal is open
 				if a.debugTab != nil {
 					a.debugTab.Refresh()
+				}
+				// Skip table refreshes when a modal dialog is open
+				if isModalOpen {
+					return
 				}
 				if a.mqttTab != nil && a.currentTab == 3 {
 					a.mqttTab.Refresh()
