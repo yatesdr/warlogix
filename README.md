@@ -31,120 +31,29 @@ go build -o warlogix ./cmd/warlogix
 ### Run
 
 ```bash
-./warlogix                    # Uses ~/.warlogix/config.yaml
-./warlogix -config myconfig.yaml
+./warlogix
 ```
 
-### Basic Navigation
+Configuration is stored at `~/.warlogix/config.yaml` and created automatically on first run.
+
+### Navigation
 
 - `Shift+Tab` - Switch tabs
 - `?` - Help
 - `Q` - Quit
 
-## Adding PLCs
+## Supported PLCs
 
-Press `a` in the PLCs tab or use `d` to discover PLCs on your network.
+| Family | Models | Tag Discovery | Support Level |
+|--------|--------|---------------|---------------|
+| Allen-Bradley | ControlLogix, CompactLogix, Micro800 | Automatic | Well tested |
+| Siemens | S7-300/400/1200/1500 | Manual | Moderately tested |
+| Beckhoff | TwinCAT 2/3 | Automatic | Moderately tested |
+| Omron | CJ/CS/CP/NJ/NX Series | Manual | Experimental |
 
-### Supported PLCs
+**Note:** Allen-Bradley Logix has the most complete support. Siemens and Beckhoff are functional but less tested. Omron FINS support is experimental and may have bugs.
 
-| Family | Discovery | Config |
-|--------|-----------|--------|
-| Allen-Bradley Logix | Automatic | `family: logix` |
-| Allen-Bradley Micro800 | Automatic | `family: micro800` |
-| Siemens S7 | Manual tags | `family: s7` |
-| Beckhoff TwinCAT | Automatic | `family: beckhoff` |
-| Omron FINS | Manual tags | `family: omron` |
-
-## Configuration Basics
-
-Config file: `~/.warlogix/config.yaml`
-
-```yaml
-plcs:
-  # Allen-Bradley (automatic tag discovery)
-  - name: MainPLC
-    address: 192.168.1.100
-    family: logix
-    slot: 0
-    enabled: true              # Auto-connect on startup
-    health_check_enabled: true # Publish health (default: true)
-    tags:
-      - name: Program:MainProgram.Counter
-        enabled: true          # Publish this tag
-        writable: true         # Allow writes
-      - name: Program:MainProgram.MachineStatus
-        enabled: true
-        ignore_changes: [Timestamp, HeartbeatCount]  # Ignore volatile UDT members
-
-  # Siemens S7 (manual tags with data_type)
-  - name: SiemensPLC
-    address: 192.168.1.101
-    family: s7
-    slot: 0
-    tags:
-      - name: DB1.0            # Address format: DB<n>.<offset>
-        alias: ProductCount    # Friendly name for publishing
-        data_type: DINT        # Required for S7
-        enabled: true
-        writable: true
-
-  # Omron (manual tags)
-  - name: OmronPLC
-    address: 192.168.1.102
-    family: omron
-    fins_port: 9600
-    tags:
-      - name: DM100            # Memory area + address
-        alias: MotorSpeed
-        data_type: DINT
-        enabled: true
-
-rest:
-  enabled: true
-  port: 8080
-
-mqtt:
-  - name: Broker1
-    enabled: true
-    broker: localhost
-    port: 1883
-    root_topic: factory
-
-valkey:
-  - name: Redis1
-    enabled: true
-    address: localhost:6379
-    factory: factory
-    publish_changes: true
-    enable_writeback: true
-
-poll_rate: 1s
-```
-
-## Tag Configuration
-
-| Field | Description |
-|-------|-------------|
-| `name` | Tag name or address |
-| `alias` | Friendly name (for S7/Omron address-based tags) |
-| `data_type` | Required for S7/Omron: BOOL, INT, DINT, REAL, STRING, etc. |
-| `enabled` | Enable publishing |
-| `writable` | Allow write operations |
-| `ignore_changes` | UDT members to ignore for change detection |
-
-### S7 Addressing
-
-- `DB1.0` - Data block 1, byte 0
-- `DB1.4.0` - Bit 0 at byte 4
-- `DB1.0[10]` - Array of 10 elements
-- `I0`, `Q0`, `M0` - Inputs, outputs, markers
-
-### Omron Addressing
-
-- `DM100` - Data memory
-- `CIO50` - Core I/O
-- `DM100.5` - Bit access
-- `DM100[10]` - Array
+Press `d` to discover PLCs on your network, or `a` to add manually.
 
 ## Keyboard Shortcuts
 
@@ -172,11 +81,9 @@ Run as a background service with SSH access:
 ssh -p 2222 localhost
 ```
 
-See [detailed documentation](docs/) for more options.
-
 ## Documentation
 
-- [Configuration Reference](docs/configuration.md) - Complete config.yaml options
+- [Configuration Reference](docs/configuration.md) - Config file format and options
 - [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
 - [REST API](docs/rest-api.md) - HTTP endpoints
 - [MQTT](docs/mqtt.md) - Topics and write-back
@@ -193,3 +100,23 @@ See [detailed documentation](docs/) for more options.
 ## License
 
 Apache License 2.0
+
+## Acknowledgements
+
+This project builds on excellent open source libraries:
+
+**PLC Communication:**
+- [gos7](https://github.com/robinson/gos7) - Siemens S7 protocol
+- [fins](https://github.com/xiaotushaoxia/fins) - Omron FINS/UDP protocol
+- [pylogix](https://github.com/dmroeder/pylogix) - Allen-Bradley EtherNet/IP reference
+
+**Infrastructure:**
+- [paho.mqtt.golang](https://github.com/eclipse/paho.mqtt.golang) - MQTT client
+- [go-redis](https://github.com/redis/go-redis) - Redis/Valkey client
+- [kafka-go](https://github.com/segmentio/kafka-go) - Kafka client
+
+**User Interface:**
+- [tview](https://github.com/rivo/tview) - Terminal UI framework
+- [tcell](https://github.com/gdamore/tcell) - Terminal cell library
+- [gliderlabs/ssh](https://github.com/gliderlabs/ssh) - SSH server
+- [creack/pty](https://github.com/creack/pty) - PTY handling
