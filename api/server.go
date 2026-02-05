@@ -147,6 +147,15 @@ type TagResponse struct {
 	Timestamp string      `json:"timestamp,omitempty"`
 }
 
+// HealthResponse is the JSON structure for PLC health status.
+type HealthResponse struct {
+	PLC       string `json:"plc"`
+	Online    bool   `json:"online"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	// Parse path: /, /{name}, /{name}/programs, /{name}/tags, /{name}/tags/{tagname}
 	path := strings.TrimPrefix(r.URL.Path, "/")
@@ -208,6 +217,12 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleWrite(w, r, plc)
+	case "health":
+		if r.Method != http.MethodGet {
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handlePLCHealth(w, plc)
 	default:
 		s.writeError(w, http.StatusNotFound, "not found")
 	}
@@ -496,6 +511,20 @@ func (s *Server) handleWrite(w http.ResponseWriter, r *http.Request, plc *plcman
 	if writeErr != nil {
 		resp.Error = writeErr.Error()
 		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	s.writeJSON(w, resp)
+}
+
+func (s *Server) handlePLCHealth(w http.ResponseWriter, plc *plcman.ManagedPLC) {
+	health := plc.GetHealthStatus()
+
+	resp := HealthResponse{
+		PLC:       plc.Config.Name,
+		Online:    health.Online,
+		Status:    health.Status,
+		Error:     health.Error,
+		Timestamp: health.Timestamp.Format(time.RFC3339),
 	}
 
 	s.writeJSON(w, resp)

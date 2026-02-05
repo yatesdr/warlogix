@@ -169,3 +169,29 @@ func TypeCodeFromName(name string) (uint16, bool) {
 func SupportedTypeNames() []string {
 	return []string{"BOOL", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "REAL", "LREAL", "STRING"}
 }
+
+// VolatileTypePatterns contains patterns that identify volatile/time-related types.
+// These types change frequently and are often ignored for change detection in UDTs.
+var VolatileTypePatterns = []string{
+	"TIMER",
+	"COUNTER",
+	"TIME",
+	"LTIME",
+	"DATE",
+	"DATE_AND_TIME",
+	"TIME_OF_DAY",
+	"TOD",
+	"DT",
+}
+
+// IsVolatileTypeName returns true if the type name matches a volatile/time-related pattern.
+// This is used to auto-populate ignore lists for UDT members.
+func IsVolatileTypeName(typeName string) bool {
+	upperName := strings.ToUpper(typeName)
+	for _, pattern := range VolatileTypePatterns {
+		if strings.Contains(upperName, pattern) {
+			return true
+		}
+	}
+	return false
+}

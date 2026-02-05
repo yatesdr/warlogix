@@ -9,13 +9,14 @@ import (
 // TagValue is a unified wrapper that holds tag data from any PLC family.
 // It stores pre-computed Go values and type information for display.
 type TagValue struct {
-	Name     string      // Tag name
-	DataType uint16      // Native type code (Logix or S7)
-	Family   string      // PLC family ("logix", "s7", "beckhoff", etc.)
-	Value    interface{} // Pre-computed Go value from GoValue()
-	Bytes    []byte      // Original raw bytes (native byte order)
-	Count    int         // Number of elements (1 for scalar, >1 for array)
-	Error    error       // Per-tag error (nil if successful)
+	Name        string      // Tag name
+	DataType    uint16      // Native type code (Logix or S7)
+	Family      string      // PLC family ("logix", "s7", "beckhoff", etc.)
+	Value       interface{} // Pre-computed Go value from GoValue()
+	StableValue interface{} // Value with ignored members removed (for change detection)
+	Bytes       []byte      // Original raw bytes (native byte order)
+	Count       int         // Number of elements (1 for scalar, >1 for array)
+	Error       error       // Per-tag error (nil if successful)
 }
 
 // GoValue returns the pre-computed Go value.
@@ -45,14 +46,16 @@ func FromLogixTagValue(lv *logix.TagValue) *TagValue {
 	if lv == nil {
 		return nil
 	}
+	value := lv.GoValue()
 	return &TagValue{
-		Name:     lv.Name,
-		DataType: lv.DataType,
-		Family:   "logix",
-		Value:    lv.GoValue(),
-		Bytes:    lv.Bytes,
-		Count:    lv.Count,
-		Error:    lv.Error,
+		Name:        lv.Name,
+		DataType:    lv.DataType,
+		Family:      "logix",
+		Value:       value,
+		StableValue: value,
+		Bytes:       lv.Bytes,
+		Count:       lv.Count,
+		Error:       lv.Error,
 	}
 }
 
@@ -73,14 +76,55 @@ func FromLogixTagValueDecoded(lv *logix.TagValue, client *logix.Client) *TagValu
 	}
 
 	return &TagValue{
-		Name:     lv.Name,
-		DataType: lv.DataType,
-		Family:   "logix",
-		Value:    value,
-		Bytes:    lv.Bytes,
-		Count:    lv.Count,
-		Error:    lv.Error,
+		Name:        lv.Name,
+		DataType:    lv.DataType,
+		Family:      "logix",
+		Value:       value,
+		StableValue: value, // Will be updated by SetIgnoreList if needed
+		Bytes:       lv.Bytes,
+		Count:       lv.Count,
+		Error:       lv.Error,
 	}
+}
+
+// ComputeStableValue returns a copy of the value with ignored members removed.
+// For map values (decoded UDTs), this filters out keys in the ignore list.
+// For other value types, returns the value unchanged.
+func ComputeStableValue(value interface{}, ignoreList []string) interface{} {
+	if len(ignoreList) == 0 {
+		return value
+	}
+
+	// Check if value is a map (decoded UDT)
+	mapVal, ok := value.(map[string]interface{})
+	if !ok {
+		return value
+	}
+
+	// Create ignore set for O(1) lookup
+	ignoreSet := make(map[string]bool, len(ignoreList))
+	for _, name := range ignoreList {
+		ignoreSet[name] = true
+	}
+
+	// Create filtered copy
+	filtered := make(map[string]interface{}, len(mapVal))
+	for key, val := range mapVal {
+		if !ignoreSet[key] {
+			filtered[key] = val
+		}
+	}
+
+	return filtered
+}
+
+// SetIgnoreList computes and sets the StableValue based on the ignore list.
+// This should be called after the TagValue is created to filter out volatile members.
+func (v *TagValue) SetIgnoreList(ignoreList []string) {
+	if v == nil {
+		return
+	}
+	v.StableValue = ComputeStableValue(v.Value, ignoreList)
 }
 
 // FromS7TagValue creates a unified TagValue from an s7.TagValue.
@@ -93,14 +137,16 @@ func FromS7TagValue(sv *s7.TagValue, family config.PLCFamily) *TagValue {
 	if sv.Count > 1 {
 		dataType = s7.MakeArrayType(dataType)
 	}
+	value := sv.GoValue() // Uses big-endian (native S7 format)
 	return &TagValue{
-		Name:     sv.Name,
-		DataType: dataType,
-		Family:   "s7",
-		Value:    sv.GoValue(), // Uses big-endian (native S7 format)
-		Bytes:    sv.Bytes,
-		Count:    sv.Count,
-		Error:    sv.Error,
+		Name:        sv.Name,
+		DataType:    dataType,
+		Family:      "s7",
+		Value:       value,
+		StableValue: value,
+		Bytes:       sv.Bytes,
+		Count:       sv.Count,
+		Error:       sv.Error,
 	}
 }
 

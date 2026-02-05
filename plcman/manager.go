@@ -41,6 +41,14 @@ func (s ConnectionStatus) String() string {
 	}
 }
 
+// HealthStatus represents the health state of a PLC for publishing.
+type HealthStatus struct {
+	Online    bool      `json:"online"`
+	Status    string    `json:"status"`
+	Error     string    `json:"error,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // MaxConnectRetries is the maximum number of connection attempts before giving up.
 const MaxConnectRetries = 5
 
@@ -110,6 +118,51 @@ func (m *ManagedPLC) GetError() error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.LastError
+}
+
+// GetHealthStatus returns the current health status for publishing.
+func (m *ManagedPLC) GetHealthStatus() HealthStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	health := HealthStatus{
+		Timestamp: time.Now().UTC(),
+	}
+
+	// Check if PLC is enabled
+	if m.Config != nil && !m.Config.Enabled {
+		health.Online = false
+		health.Status = "disabled"
+		return health
+	}
+
+	// Map connection status to health
+	switch m.Status {
+	case StatusConnected:
+		health.Online = true
+		health.Status = "connected"
+	case StatusConnecting:
+		health.Online = false
+		health.Status = "connecting"
+	case StatusDisconnected:
+		health.Online = false
+		health.Status = "disconnected"
+	case StatusError:
+		health.Online = false
+		health.Status = "error"
+	default:
+		health.Online = false
+		health.Status = "unknown"
+	}
+
+	// Include error message if present
+	if m.LastError != nil {
+		health.Error = m.LastError.Error()
+	} else if !health.Online && health.Status != "disabled" && health.Status != "connecting" {
+		health.Error = "unknown error"
+	}
+
+	return health
 }
 
 // GetValues returns a copy of the current tag values.
@@ -323,8 +376,9 @@ func (w *PLCWorker) poll() {
 	// Copy the tags to read while holding the lock to avoid race with UI
 	tagsToRead := make([]string, 0)
 	writableMap := make(map[string]bool)
-	aliasMap := make(map[string]string)   // Tag name -> alias
-	typeMap := make(map[string]string)    // Tag name -> configured data type
+	aliasMap := make(map[string]string)      // Tag name -> alias
+	typeMap := make(map[string]string)       // Tag name -> configured data type
+	ignoreMap := make(map[string][]string)   // Tag name -> list of members to ignore for change detection
 	for _, sel := range cfg.Tags {
 		if sel.Enabled {
 			tagsToRead = append(tagsToRead, sel.Name)
@@ -334,11 +388,14 @@ func (w *PLCWorker) poll() {
 		if sel.DataType != "" {
 			typeMap[sel.Name] = sel.DataType
 		}
+		if len(sel.IgnoreChanges) > 0 {
+			ignoreMap[sel.Name] = sel.IgnoreChanges
+		}
 	}
-	oldValues := make(map[string]interface{})
+	oldStableValues := make(map[string]interface{})
 	for k, v := range plc.Values {
 		if v != nil && v.Error == nil {
-			oldValues[k] = v.GoValue()
+			oldStableValues[k] = v.StableValue
 		}
 	}
 	plc.mu.RUnlock()
@@ -436,10 +493,34 @@ func (w *PLCWorker) poll() {
 	switch family {
 	case config.FamilyS7:
 		values, err = w.pollS7(s7Client, tagsToRead, typeMap)
+		// Apply ignore lists for S7 values
+		if err == nil {
+			for _, v := range values {
+				if ignoreList, ok := ignoreMap[v.Name]; ok {
+					v.SetIgnoreList(ignoreList)
+				}
+			}
+		}
 	case config.FamilyBeckhoff:
 		values, err = w.pollAds(adsClient, tagsToRead)
+		// Apply ignore lists for Beckhoff values
+		if err == nil {
+			for _, v := range values {
+				if ignoreList, ok := ignoreMap[v.Name]; ok {
+					v.SetIgnoreList(ignoreList)
+				}
+			}
+		}
 	case config.FamilyOmron:
 		values, err = w.pollFins(finsClient, tagsToRead, typeMap)
+		// Apply ignore lists for Omron values
+		if err == nil {
+			for _, v := range values {
+				if ignoreList, ok := ignoreMap[v.Name]; ok {
+					v.SetIgnoreList(ignoreList)
+				}
+			}
+		}
 	default:
 		var logixValues []*logix.TagValue
 		logixValues, err = client.Read(tagsToRead...)
@@ -448,6 +529,10 @@ func (w *PLCWorker) poll() {
 			for i, lv := range logixValues {
 				// Use decoded version to get UDT member names in output
 				values[i] = FromLogixTagValueDecoded(lv, client)
+				// Apply ignore list for change detection
+				if ignoreList, ok := ignoreMap[lv.Name]; ok {
+					values[i].SetIgnoreList(ignoreList)
+				}
 			}
 		}
 	}
@@ -536,9 +621,11 @@ func (w *PLCWorker) poll() {
 	for _, v := range values {
 		if v.Error == nil {
 			newVal := v.GoValue()
-			oldVal, existed := oldValues[v.Name]
-			// Check if value changed (or is new)
-			if !existed || fmt.Sprintf("%v", oldVal) != fmt.Sprintf("%v", newVal) {
+			// Use StableValue for change detection (excludes ignored members)
+			newStableVal := v.StableValue
+			oldStableVal, existed := oldStableValues[v.Name]
+			// Check if stable value changed (or is new)
+			if !existed || fmt.Sprintf("%v", oldStableVal) != fmt.Sprintf("%v", newStableVal) {
 				vc := ValueChange{
 					PLCName:  plcName,
 					TagName:  v.Name,
@@ -621,14 +708,16 @@ func (w *PLCWorker) pollS7(client *s7.Client, addresses []string, typeMap map[st
 		}
 
 		// Create unified TagValue using S7's native parsing
+		value := sv.GoValue() // Uses big-endian (native S7 format)
 		results[i] = &TagValue{
-			Name:     sv.Name,
-			DataType: dataType,
-			Family:   "s7",
-			Value:    sv.GoValue(), // Uses big-endian (native S7 format)
-			Bytes: sv.Bytes,     // Keep original big-endian bytes
-			Count:    count,
-			Error:    sv.Error,
+			Name:        sv.Name,
+			DataType:    dataType,
+			Family:      "s7",
+			Value:       value,
+			StableValue: value, // Default StableValue equals Value; ignore list applied later
+			Bytes:       sv.Bytes, // Keep original big-endian bytes
+			Count:       count,
+			Error:       sv.Error,
 		}
 	}
 	return results, nil
@@ -671,14 +760,16 @@ func (w *PLCWorker) pollAds(client *ads.Client, symbols []string) ([]*TagValue, 
 			dataType = ads.MakeArrayType(dataType)
 		}
 
+		value := av.GoValue() // Uses little-endian (native x86/TwinCAT format)
 		results[i] = &TagValue{
-			Name:     av.Name,
-			DataType: dataType,
-			Family:   "beckhoff",
-			Value:    av.GoValue(), // Uses little-endian (native x86/TwinCAT format)
-			Bytes:    av.Bytes,
-			Count:    count,
-			Error:    av.Error,
+			Name:        av.Name,
+			DataType:    dataType,
+			Family:      "beckhoff",
+			Value:       value,
+			StableValue: value, // Default StableValue equals Value; ignore list applied later
+			Bytes:       av.Bytes,
+			Count:       count,
+			Error:       av.Error,
 		}
 	}
 	return results, nil
@@ -733,14 +824,16 @@ func (w *PLCWorker) pollFins(client *fins.Client, addresses []string, typeMap ma
 		}
 
 		// Create unified TagValue using FINS's native parsing
+		value := fv.GoValue() // Uses big-endian (native Omron format)
 		results[i] = &TagValue{
-			Name:     fv.Name,
-			DataType: dataType,
-			Family:   "omron",
-			Value:    fv.GoValue(), // Uses big-endian (native Omron format)
-			Bytes:    fv.Bytes,
-			Count:    count,
-			Error:    fv.Error,
+			Name:        fv.Name,
+			DataType:    dataType,
+			Family:      "omron",
+			Value:       value,
+			StableValue: value, // Default StableValue equals Value; ignore list applied later
+			Bytes:       fv.Bytes,
+			Count:       count,
+			Error:       fv.Error,
 		}
 	}
 	return results, nil

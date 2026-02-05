@@ -32,16 +32,18 @@ type BrowserTab struct {
 	tagNodes          map[string]*tview.TreeNode // Tag name -> tree node for quick lookup
 	enabledTags       map[string]bool            // Tag name -> enabled for current PLC
 	writableTags      map[string]bool            // Tag name -> writable for current PLC
+	ignoredMembers    map[string]map[string]bool // Parent tag -> member name -> ignored for change detection
 	filterText        string                     // Current filter text (lowercase)
 }
 
 // NewBrowserTab creates a new browser tab.
 func NewBrowserTab(app *App) *BrowserTab {
 	t := &BrowserTab{
-		app:          app,
-		tagNodes:     make(map[string]*tview.TreeNode),
-		enabledTags:  make(map[string]bool),
-		writableTags: make(map[string]bool),
+		app:            app,
+		tagNodes:       make(map[string]*tview.TreeNode),
+		enabledTags:    make(map[string]bool),
+		writableTags:   make(map[string]bool),
+		ignoredMembers: make(map[string]map[string]bool),
 	}
 	t.setupUI()
 	return t
@@ -183,6 +185,13 @@ func (t *BrowserTab) handleTreeKeys(event *tcell.EventKey) *tcell.EventKey {
 		node := t.tree.GetCurrentNode()
 		if node != nil {
 			t.toggleNodeWritable(node)
+		}
+		return nil
+	case 'i':
+		// Toggle ignore for change detection (for UDT members)
+		node := t.tree.GetCurrentNode()
+		if node != nil {
+			t.toggleNodeIgnore(node)
 		}
 		return nil
 	case 'a':
@@ -361,6 +370,11 @@ func (t *BrowserTab) toggleNodeSelection(node *tview.TreeNode) {
 	// Update config
 	t.updateConfigTag(tagName, enabled, writable)
 
+	// If tag was just enabled and it's a UDT, auto-populate ignore list with volatile members
+	if enabled && !wasEnabled && logix.IsStructure(tagInfo.TypeCode) {
+		t.autoPopulateIgnoreList(tagName, tagInfo.TypeCode)
+	}
+
 	// If tag was just enabled, force publish its current value immediately
 	if enabled && !wasEnabled && t.selectedPLC != "" {
 		go t.app.ForcePublishTag(t.selectedPLC, tagName)
@@ -368,6 +382,86 @@ func (t *BrowserTab) toggleNodeSelection(node *tview.TreeNode) {
 
 	// Update status
 	t.updateStatus()
+}
+
+// autoPopulateIgnoreList automatically adds volatile members to the ignore list
+// when a UDT tag is first enabled. Volatile members include timers, timestamps,
+// and time-related types that change frequently and would cause unnecessary republishing.
+func (t *BrowserTab) autoPopulateIgnoreList(tagName string, typeCode uint16) {
+	plc := t.app.manager.GetPLC(t.selectedPLC)
+	if plc == nil {
+		return
+	}
+
+	client := plc.GetLogixClient()
+	if client == nil {
+		return
+	}
+
+	// Fetch the template for this UDT
+	tmpl, err := client.GetTemplate(typeCode)
+	if err != nil {
+		DebugLog("autoPopulateIgnoreList: failed to get template for %s: %v", tagName, err)
+		return
+	}
+
+	// Find volatile members
+	var volatileMembers []string
+	for _, member := range tmpl.Members {
+		if member.Hidden || member.Name == "" {
+			continue
+		}
+
+		// Check if member type is volatile (time-related)
+		memberTypeName := logix.TypeName(member.Type)
+		if logix.IsVolatileTypeName(memberTypeName) {
+			volatileMembers = append(volatileMembers, member.Name)
+		}
+
+		// Also check if the template name indicates a volatile type (for nested UDTs)
+		if member.IsStructure() {
+			// Try to get the nested template name
+			nestedTmpl, err := client.GetTemplate(member.Type)
+			if err == nil && logix.IsVolatileTypeName(nestedTmpl.Name) {
+				volatileMembers = append(volatileMembers, member.Name)
+			}
+		}
+	}
+
+	if len(volatileMembers) == 0 {
+		return
+	}
+
+	// Add volatile members to the ignore list in config
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg == nil {
+		return
+	}
+
+	for i := range cfg.Tags {
+		if cfg.Tags[i].Name == tagName {
+			// Add each volatile member to ignore list
+			for _, memberName := range volatileMembers {
+				cfg.Tags[i].AddIgnoreMember(memberName)
+				// Update local tracking
+				if t.ignoredMembers[tagName] == nil {
+					t.ignoredMembers[tagName] = make(map[string]bool)
+				}
+				t.ignoredMembers[tagName][memberName] = true
+			}
+			break
+		}
+	}
+
+	// Save config
+	t.app.SaveConfig()
+
+	// Notify user
+	if len(volatileMembers) == 1 {
+		t.app.setStatus(fmt.Sprintf("Auto-ignored volatile member: %s", volatileMembers[0]))
+	} else {
+		t.app.setStatus(fmt.Sprintf("Auto-ignored %d volatile members (timers, timestamps)", len(volatileMembers)))
+	}
 }
 
 func (t *BrowserTab) toggleNodeWritable(node *tview.TreeNode) {
@@ -398,6 +492,139 @@ func (t *BrowserTab) toggleNodeWritable(node *tview.TreeNode) {
 	t.updateStatus()
 }
 
+// toggleNodeIgnore toggles the ignore status for a UDT member.
+// This affects change detection - ignored members won't trigger republishing.
+func (t *BrowserTab) toggleNodeIgnore(node *tview.TreeNode) {
+	ref := node.GetReference()
+	if ref == nil {
+		return
+	}
+
+	tagInfo, ok := ref.(*logix.TagInfo)
+	if !ok {
+		return
+	}
+
+	tagPath := tagInfo.Name
+
+	// Find the parent tag and member name
+	parentTag, memberName := t.findParentTagAndMember(tagPath)
+	if parentTag == "" || memberName == "" {
+		// Not a UDT member or no parent tag configured
+		t.app.setStatus("Cannot toggle ignore: tag is not a UDT member")
+		return
+	}
+
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg == nil {
+		return
+	}
+
+	// Find the tag selection for the parent tag
+	var tagSel *config.TagSelection
+	for i := range cfg.Tags {
+		if cfg.Tags[i].Name == parentTag {
+			tagSel = &cfg.Tags[i]
+			break
+		}
+	}
+
+	if tagSel == nil {
+		// Parent tag not in config - the UDT hasn't been enabled yet
+		t.app.setStatus("Enable the parent tag first to configure ignore list")
+		return
+	}
+
+	// Toggle ignore status
+	wasIgnored := tagSel.ShouldIgnoreMember(memberName)
+	if wasIgnored {
+		tagSel.RemoveIgnoreMember(memberName)
+	} else {
+		tagSel.AddIgnoreMember(memberName)
+	}
+
+	// Update local tracking
+	if t.ignoredMembers[parentTag] == nil {
+		t.ignoredMembers[parentTag] = make(map[string]bool)
+	}
+	t.ignoredMembers[parentTag][memberName] = !wasIgnored
+
+	// Save config
+	t.app.SaveConfig()
+
+	// Update node text
+	enabled := t.enabledTags[tagPath]
+	writable := t.writableTags[tagPath]
+	t.updateNodeText(node, tagInfo, enabled, writable)
+
+	// Status message
+	if wasIgnored {
+		t.app.setStatus(fmt.Sprintf("Changes to %s will now be published", memberName))
+	} else {
+		t.app.setStatus(fmt.Sprintf("Changes to %s will be ignored", memberName))
+	}
+}
+
+// findParentTagAndMember finds the configured parent tag and the relative member path.
+// For "Robot1.Position.Timestamp", if "Robot1" is configured, returns ("Robot1", "Position.Timestamp").
+// Returns ("", "") if no parent tag is configured or if this is not a member path.
+func (t *BrowserTab) findParentTagAndMember(tagPath string) (string, string) {
+	// Check if this looks like a UDT member path (contains a dot)
+	dotIdx := strings.Index(tagPath, ".")
+	if dotIdx < 0 {
+		return "", ""
+	}
+
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg == nil {
+		return "", ""
+	}
+
+	// Try progressively shorter prefixes to find the configured parent tag
+	// For "Robot1.Position.Timestamp", try:
+	//   1. "Robot1.Position" (member would be "Timestamp")
+	//   2. "Robot1" (member would be "Position.Timestamp")
+	parts := strings.Split(tagPath, ".")
+	for i := len(parts) - 1; i > 0; i-- {
+		candidate := strings.Join(parts[:i], ".")
+		for _, sel := range cfg.Tags {
+			if sel.Name == candidate {
+				memberName := strings.Join(parts[i:], ".")
+				return candidate, memberName
+			}
+		}
+	}
+
+	return "", ""
+}
+
+// isMemberIgnored checks if a member is in the ignore list for change detection.
+func (t *BrowserTab) isMemberIgnored(tagPath string) bool {
+	parentTag, memberName := t.findParentTagAndMember(tagPath)
+	if parentTag == "" || memberName == "" {
+		return false
+	}
+
+	// Check local cache first
+	if ignored, ok := t.ignoredMembers[parentTag][memberName]; ok {
+		return ignored
+	}
+
+	// Check config
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg == nil {
+		return false
+	}
+
+	for _, sel := range cfg.Tags {
+		if sel.Name == parentTag {
+			return sel.ShouldIgnoreMember(memberName)
+		}
+	}
+
+	return false
+}
+
 func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, enabled, writable bool) {
 	checkbox := CheckboxUnchecked
 	if enabled {
@@ -408,6 +635,12 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 	writeIndicator := ""
 	if writable {
 		writeIndicator = "[red]W[-] "
+	}
+
+	// Ignore indicator (for UDT members)
+	ignoreIndicator := ""
+	if t.isMemberIgnored(tag.Name) {
+		ignoreIndicator = "[red]I[-] "
 	}
 
 	// UDT expandable indicator
@@ -438,12 +671,12 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 
 	var text string
 	if enabled {
-		text = fmt.Sprintf("%s %s%s%s  [gray]%s[-]", checkbox, udtIndicator, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("%s %s%s%s%s  [gray]%s[-]", checkbox, udtIndicator, ignoreIndicator, writeIndicator, shortName, typeName)
 		node.SetColor(tcell.ColorWhite)
 	} else {
 		// Don't use inline color tags - let node.SetColor handle it
 		// This allows proper color inversion when the node is selected
-		text = fmt.Sprintf("%s %s%s%s  %s", checkbox, udtIndicator, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("%s %s%s%s%s  %s", checkbox, udtIndicator, ignoreIndicator, writeIndicator, shortName, typeName)
 		node.SetColor(tcell.ColorDarkGray)
 	}
 	node.SetText(text)
@@ -530,7 +763,27 @@ func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
 		sb.WriteString("\n[gray]  Read-only[-]")
 	}
 
-	sb.WriteString("\n\n[blue]Space[white] toggle  [blue]w[white] writable  [blue]d[white] details[-]")
+	// Show ignore list for UDT tags
+	if enabled && logix.IsStructure(tag.TypeCode) {
+		if cfg != nil {
+			for _, sel := range cfg.Tags {
+				if sel.Name == tag.Name && len(sel.IgnoreChanges) > 0 {
+					sb.WriteString("\n\n[red]I Ignored for changes:[-]")
+					for _, member := range sel.IgnoreChanges {
+						sb.WriteString("\n  - " + member)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Show if this member is ignored (for UDT member nodes)
+	if t.isMemberIgnored(tag.Name) {
+		sb.WriteString("\n[red]I Ignored for change detection[-]")
+	}
+
+	sb.WriteString("\n\n[blue]Space[white] toggle  [blue]w[white] writable  [blue]i[white] ignore  [blue]d[white] details[-]")
 
 	t.details.SetText(sb.String())
 }
@@ -729,7 +982,17 @@ func (t *BrowserTab) updateStatus() {
 			count++
 		}
 	}
-	baseStatus := fmt.Sprintf(" %d tags selected | [yellow]/[white] filter  [yellow]c[white] clear  [yellow]p[white] PLC  [yellow]Space[white] toggle  [yellow]w[white] writable  [yellow]d[white] details", count)
+
+	// Check PLC connection status
+	statusPrefix := ""
+	if t.selectedPLC != "" {
+		plc := t.app.manager.GetPLC(t.selectedPLC)
+		if plc == nil || plc.GetStatus() != plcman.StatusConnected {
+			statusPrefix = "[red]OFFLINE[-] | "
+		}
+	}
+
+	baseStatus := fmt.Sprintf(" %s%d tags selected | [yellow]/[white] filter  [yellow]c[white] clear  [yellow]p[white] PLC  [yellow]Space[white] toggle  [yellow]w[white] writable  [yellow]i[white] ignore  [yellow]d[white] details", statusPrefix, count)
 
 	// Add manual tag keys for non-discovery PLCs
 	if t.isManualPLC() {
@@ -764,14 +1027,11 @@ func (t *BrowserTab) Refresh() {
 	selectedIdx := -1
 
 	for _, plc := range plcs {
-		// Show connected PLCs, or manual PLCs (even if not connected, so tags can be configured)
-		isManual := !plc.Config.GetFamily().SupportsDiscovery()
-		if plc.GetStatus() == plcman.StatusConnected || isManual {
-			if plc.Config.Name == t.selectedPLC {
-				selectedIdx = len(options) // Index in options, not in plcs
-			}
-			options = append(options, plc.Config.Name)
+		// Show all configured PLCs in the dropdown
+		if plc.Config.Name == t.selectedPLC {
+			selectedIdx = len(options)
 		}
+		options = append(options, plc.Config.Name)
 	}
 
 	// Check if options have changed before updating
@@ -829,6 +1089,7 @@ func (t *BrowserTab) clearTree() {
 	t.tagNodes = make(map[string]*tview.TreeNode)
 	t.enabledTags = make(map[string]bool)
 	t.writableTags = make(map[string]bool)
+	t.ignoredMembers = make(map[string]map[string]bool)
 	t.details.SetText("")
 	t.statusBar.SetText(" No PLC selected")
 }
@@ -838,6 +1099,7 @@ func (t *BrowserTab) loadTags() {
 	t.tagNodes = make(map[string]*tview.TreeNode)
 	t.enabledTags = make(map[string]bool)
 	t.writableTags = make(map[string]bool)
+	t.ignoredMembers = make(map[string]map[string]bool)
 
 	if t.selectedPLC == "" {
 		return
@@ -878,12 +1140,28 @@ func (t *BrowserTab) loadTags() {
 		}
 	}
 
-	// Load enabled and writable tags from config
+	// Load enabled, writable, and ignore lists from config
 	if cfg != nil {
 		for _, sel := range cfg.Tags {
 			t.enabledTags[sel.Name] = sel.Enabled
 			t.writableTags[sel.Name] = sel.Writable
+			// Load ignore list for this tag
+			if len(sel.IgnoreChanges) > 0 {
+				t.ignoredMembers[sel.Name] = make(map[string]bool)
+				for _, member := range sel.IgnoreChanges {
+					t.ignoredMembers[sel.Name][member] = true
+				}
+			}
 		}
+	}
+
+	// Show offline notice if PLC is not connected
+	isOffline := plc == nil || plc.GetStatus() != plcman.StatusConnected
+	if isOffline {
+		offlineNode := tview.NewTreeNode("[red]PLC OFFLINE[-] - Tags can still be configured").
+			SetColor(tcell.ColorRed).
+			SetSelectable(false)
+		t.treeRoot.AddChild(offlineNode)
 	}
 
 	// For manual PLCs, show a different tree structure
@@ -1028,6 +1306,12 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 		writeIndicator = "[red]W[-] "
 	}
 
+	// Ignore indicator (for UDT members)
+	ignoreIndicator := ""
+	if t.isMemberIgnored(tag.Name) {
+		ignoreIndicator = "[red]I[-] "
+	}
+
 	// Error indicator
 	errorIndicator := ""
 	if hasError {
@@ -1062,11 +1346,11 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 
 	var text string
 	if enabled {
-		text = fmt.Sprintf("%s %s%s%s%s  [gray]%s[-]", checkbox, udtIndicator, errorIndicator, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("%s %s%s%s%s%s  [gray]%s[-]", checkbox, udtIndicator, ignoreIndicator, errorIndicator, writeIndicator, shortName, typeName)
 	} else {
 		// Don't use inline color tags - let node.SetColor handle it
 		// This allows proper color inversion when the node is selected
-		text = fmt.Sprintf("%s %s%s%s%s  %s", checkbox, udtIndicator, errorIndicator, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("%s %s%s%s%s%s  %s", checkbox, udtIndicator, ignoreIndicator, errorIndicator, writeIndicator, shortName, typeName)
 	}
 
 	node := tview.NewTreeNode(text).

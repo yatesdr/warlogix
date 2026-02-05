@@ -19,6 +19,15 @@ type TagMessage struct {
 	Timestamp string      `json:"timestamp"`
 }
 
+// HealthMessage is the JSON structure published to Kafka for PLC health status.
+type HealthMessage struct {
+	PLC       string `json:"plc"`
+	Online    bool   `json:"online"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
 // publishJob represents a pending Kafka publish operation.
 type publishJob struct {
 	producer *Producer
@@ -383,6 +392,60 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 		default:
 			// Queue full, drop the message and log
 			logKafka("Publish queue full, dropping message for %s", cacheKey)
+		}
+	}
+}
+
+// PublishHealth publishes PLC health status to all connected Kafka clusters.
+func (m *Manager) PublishHealth(plcName string, online bool, status, errMsg string) {
+	m.startWorkers()
+
+	m.mu.RLock()
+	producers := make([]*Producer, 0, len(m.producers))
+	for _, p := range m.producers {
+		producers = append(producers, p)
+	}
+	m.mu.RUnlock()
+
+	for _, p := range producers {
+		// Skip if not connected or no topic configured
+		if p.GetStatus() != StatusConnected {
+			continue
+		}
+		if !p.config.PublishChanges || p.config.Topic == "" {
+			continue
+		}
+
+		msg := HealthMessage{
+			PLC:       plcName,
+			Online:    online,
+			Status:    status,
+			Error:     errMsg,
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+		}
+
+		payload, err := json.Marshal(msg)
+		if err != nil {
+			continue
+		}
+
+		// Use health topic: base topic with .health suffix
+		healthTopic := p.config.Topic + ".health"
+		key := []byte(plcName)
+
+		job := publishJob{
+			producer: p,
+			topic:    healthTopic,
+			key:      key,
+			payload:  payload,
+			cacheKey: fmt.Sprintf("%s/%s/health", p.config.Name, plcName),
+			value:    nil, // Health messages are always published
+		}
+		select {
+		case m.publishQueue <- job:
+			// Job queued successfully
+		default:
+			logKafka("Publish queue full, dropping health message for %s", plcName)
 		}
 	}
 }

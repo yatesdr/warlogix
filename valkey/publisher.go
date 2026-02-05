@@ -44,6 +44,16 @@ type WriteResponse struct {
 	Timestamp time.Time   `json:"timestamp"`
 }
 
+// HealthMessage represents a PLC health status message stored in Valkey.
+type HealthMessage struct {
+	Factory   string    `json:"factory"`
+	PLC       string    `json:"plc"`
+	Online    bool      `json:"online"`
+	Status    string    `json:"status"`
+	Error     string    `json:"error,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // Publisher handles publishing tag values to a Valkey server.
 type Publisher struct {
 	config  *config.ValkeyConfig
@@ -253,6 +263,56 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 		// Also publish to the all-changes channel
 		allChannel := fmt.Sprintf("%s:_all:changes", cfg.Factory)
 		client.Publish(ctx, allChannel, data)
+	}
+
+	return nil
+}
+
+// PublishHealth publishes PLC health status to Valkey.
+func (p *Publisher) PublishHealth(plcName string, online bool, status, errMsg string) error {
+	p.mu.RLock()
+	if !p.running || p.client == nil {
+		p.mu.RUnlock()
+		return nil
+	}
+	client := p.client
+	cfg := p.config
+	p.mu.RUnlock()
+
+	// Build key: factory:plc:health
+	key := fmt.Sprintf("%s:%s:health", cfg.Factory, plcName)
+
+	msg := HealthMessage{
+		Factory:   cfg.Factory,
+		PLC:       plcName,
+		Online:    online,
+		Status:    status,
+		Error:     errMsg,
+		Timestamp: time.Now().UTC(),
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal health status: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Set the key with optional TTL
+	if cfg.KeyTTL > 0 {
+		err = client.Set(ctx, key, data, cfg.KeyTTL).Err()
+	} else {
+		err = client.Set(ctx, key, data, 0).Err()
+	}
+	if err != nil {
+		return fmt.Errorf("failed to set health key: %w", err)
+	}
+
+	// Publish to health-specific Pub/Sub channel
+	if cfg.PublishChanges {
+		channel := fmt.Sprintf("%s:%s:health", cfg.Factory, plcName)
+		client.Publish(ctx, channel, data)
 	}
 
 	return nil

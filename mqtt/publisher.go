@@ -84,6 +84,16 @@ type TagMessage struct {
 	Timestamp string      `json:"timestamp"`
 }
 
+// HealthMessage is the JSON structure for PLC health status.
+type HealthMessage struct {
+	Topic     string `json:"topic"`
+	PLC       string `json:"plc"`
+	Online    bool   `json:"online"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
 // WriteRequest is the JSON structure for incoming write requests.
 type WriteRequest struct {
 	Topic string      `json:"topic"`
@@ -361,6 +371,45 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 	p.lastMu.Lock()
 	p.lastValues[cacheKey] = value
 	p.lastMu.Unlock()
+
+	return true
+}
+
+// PublishHealth publishes PLC health status to MQTT.
+func (p *Publisher) PublishHealth(plcName string, online bool, status, errMsg string) bool {
+	p.mu.RLock()
+	running := p.running
+	client := p.client
+	p.mu.RUnlock()
+
+	if !running || client == nil {
+		return false
+	}
+
+	topic := fmt.Sprintf("%s/%s/health", p.config.RootTopic, plcName)
+
+	msg := HealthMessage{
+		Topic:     p.config.RootTopic,
+		PLC:       plcName,
+		Online:    online,
+		Status:    status,
+		Error:     errMsg,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return false
+	}
+
+	token := client.Publish(topic, 1, true, payload)
+
+	if !token.WaitTimeout(2 * time.Second) {
+		return false
+	}
+	if token.Error() != nil {
+		return false
+	}
 
 	return true
 }
@@ -994,6 +1043,22 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 	}
 	if runningCount == 0 {
 		logMQTT("Manager.Publish: no publishers running")
+	}
+}
+
+// PublishHealth publishes PLC health status to all running MQTT brokers.
+func (m *Manager) PublishHealth(plcName string, online bool, status, errMsg string) {
+	m.mu.RLock()
+	pubs := make([]*Publisher, 0, len(m.publishers))
+	for _, pub := range m.publishers {
+		pubs = append(pubs, pub)
+	}
+	m.mu.RUnlock()
+
+	for _, pub := range pubs {
+		if pub.IsRunning() {
+			pub.PublishHealth(plcName, online, status, errMsg)
+		}
 	}
 }
 
