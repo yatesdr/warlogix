@@ -130,9 +130,24 @@ func Connect(address string, opts ...Option) (*Client, error) {
 		tcpConn.SetKeepAlivePeriod(30 * time.Second)
 	}
 
-	// Use a local AMS address (port 32768+ is typically for clients)
-	// The Net ID can be any valid ID; we use 0.0.0.0.1.1 for simplicity
-	localNetId := AmsNetId{0, 0, 0, 0, 1, 1}
+	// Derive local AMS Net ID from the connection's local IP address.
+	// This must match what the Beckhoff route expects (typically IP.1.1).
+	var localNetId AmsNetId
+	if localAddr, ok := conn.LocalAddr().(*net.TCPAddr); ok {
+		// Get IPv4 address (handles IPv6-mapped IPv4 addresses)
+		ip := localAddr.IP
+		if ip4 := ip.To4(); ip4 != nil {
+			ip = ip4
+		}
+		localNetId, err = AmsNetIdFromIP(ip.String())
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("Connect: cannot derive local AMS Net ID from %s: %w", ip.String(), err)
+		}
+	} else {
+		// Fallback to generic ID (may not work with strict routes)
+		localNetId = AmsNetId{0, 0, 0, 0, 1, 1}
+	}
 	localPort := uint16(32768 + (time.Now().UnixNano() % 1000)) // Random-ish port
 
 	adsConn := newAdsConnection(conn, localNetId, localPort)
@@ -233,7 +248,6 @@ func (c *Client) Reconnect() error {
 	c.symbolsMu.Unlock()
 
 	targetNetId := c.targetNetId
-	localNetId := c.localNetId
 	localPort := c.localPort
 	c.mu.Unlock()
 
@@ -253,10 +267,23 @@ func (c *Client) Reconnect() error {
 		tcpConn.SetKeepAlivePeriod(30 * time.Second)
 	}
 
+	// Derive local AMS Net ID from the connection's local IP address.
+	var localNetId AmsNetId
+	if localAddr, ok := conn.LocalAddr().(*net.TCPAddr); ok {
+		localNetId, err = AmsNetIdFromIP(localAddr.IP.String())
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("reconnect: cannot derive local AMS Net ID: %w", err)
+		}
+	} else {
+		localNetId = AmsNetId{0, 0, 0, 0, 1, 1}
+	}
+
 	adsConn := newAdsConnection(conn, localNetId, localPort)
 
 	c.mu.Lock()
 	c.conn = adsConn
+	c.localNetId = localNetId
 	c.connected = true
 	c.mu.Unlock()
 
@@ -290,6 +317,16 @@ func isConnectionError(err error) bool {
 		strings.Contains(errStr, "refused") ||
 		strings.Contains(errStr, "closed") ||
 		strings.Contains(errStr, "nil")
+}
+
+// ConnectionDetails returns a string describing the AMS addressing for debugging.
+func (c *Client) ConnectionDetails() string {
+	if c == nil {
+		return ""
+	}
+	return fmt.Sprintf("Target: %s:%d, Local: %s:%d",
+		c.targetNetId.String(), c.targetPort,
+		c.localNetId.String(), c.localPort)
 }
 
 // ConnectionMode returns a human-readable string describing the connection mode.

@@ -537,15 +537,24 @@ Example of a raw byte array for a 4-byte integer value of 0x12345678:
 
 **PLC-Side Setup:**
 1. **Configure AMS Net ID**: In TwinCAT System Manager, note your PLC's AMS Net ID (usually `<IP>.1.1`)
-2. **Add a Route** for the WarLogix machine:
-   - Open TwinCAT System Manager > SYSTEM > Routes
-   - Add Static Route:
-     - **Name**: WarLogix (or any identifier)
-     - **AMS Net ID**: Use the WarLogix machine's IP + `.1.1` (e.g., `192.168.1.50.1.1`)
-     - **Address**: WarLogix machine IP address
-     - **Transport**: TCP/IP
+2. **Add a Route** for the WarLogix machine (see detailed instructions below)
 3. **Firewall**: Ensure port 48898 (ADS) is open for TCP traffic
 4. **PLC must be in RUN mode** for symbol access
+
+**Adding a Route for WarLogix (Important for non-TwinCAT clients):**
+
+Since WarLogix runs without a local TwinCAT installation, you must add a route on the PLC that allows connections from your machine:
+
+1. Open TwinCAT XAE and connect to your PLC
+2. Go to **SYSTEM > Routes** and click **Add**
+3. Configure the route:
+   - **Route Name**: WarLogix (or any identifier)
+   - **AMS Net Id**: Your machine's IP + `.1.1` (e.g., `192.168.1.50.1.1`)
+   - **Transport Type**: TCP/IP
+   - **Address Info**: Your machine's IP address (e.g., `192.168.1.50`)
+   - **Target Route**: Select **Static** (persists across reboots)
+   - **Remote Route**: Select **None / Server** (WarLogix doesn't have a TwinCAT router)
+4. Click **Add Route**
 
 **WarLogix Configuration:**
 - `address`: PLC IP address
@@ -560,9 +569,11 @@ Example of a raw byte array for a 4-byte integer value of 0x12345678:
 - `FB_Instance.Member` - Function block members
 
 **Troubleshooting:**
+- "Connection reset by peer" - Route not configured or incorrect AMS Net ID. Ensure the route's AMS Net Id matches your machine's IP + `.1.1`
 - "No route" - Add a route in TwinCAT for the WarLogix machine
 - "Port not found" - Check AMS port matches your runtime (851 vs 801)
 - No symbols - Ensure PLC is in RUN mode and project is activated
+- TwinCAT 3.1 Build 4024+ has stricter security defaults - ensure routes are configured correctly
 
 ### Omron FINS (CJ/CS/CP/NJ/NX Series)
 
