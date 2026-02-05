@@ -337,10 +337,10 @@ func runDaemonMode(cfg *config.Config) {
 	})
 
 	// Set up daemon mode callbacks
-	// In PTY multiplexing mode, disconnect is a no-op since we can't disconnect individual sessions
-	// from within the TUI. The session ends when the SSH client disconnects.
+	// In PTY multiplexing mode, all sessions share the same view, so Shift-Q disconnects everyone
 	app.SetOnDisconnect(func() {
-		tui.DebugLogSSH("Disconnect requested (clients should close their SSH connection)")
+		tui.DebugLogSSH("Disconnect requested via Shift-Q")
+		sshServer.DisconnectAllSessions()
 	})
 
 	// Set up signal handling for graceful shutdown

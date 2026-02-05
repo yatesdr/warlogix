@@ -290,11 +290,23 @@ func (s *Server) multiplexPTYOutput() {
 	}
 }
 
-// DisconnectSession sends a signal to disconnect the current session.
-// This is called from the TUI when Shift-Q is pressed in daemon mode.
-// It writes a disconnect sequence that the session handler will recognize.
-func (s *Server) DisconnectSession() {
-	// In a multiplexed PTY setup, we can't disconnect individual sessions
-	// from within the TUI. The disconnect happens when the client closes
-	// the connection. This is a placeholder for potential future enhancement.
+// DisconnectAllSessions closes all active SSH sessions.
+// In a multiplexed PTY setup, all sessions share the same view, so when
+// one user requests disconnect (Shift-Q), all sessions are disconnected.
+func (s *Server) DisconnectAllSessions() {
+	s.sessionsMu.Lock()
+	sessions := make([]ssh.Session, 0, len(s.sessions))
+	for session := range s.sessions {
+		sessions = append(sessions, session)
+	}
+	s.sessionsMu.Unlock()
+
+	for _, session := range sessions {
+		tui.DebugLogSSH("Closing session from %s", session.RemoteAddr().String())
+		session.Close()
+	}
+
+	if len(sessions) > 0 {
+		tui.DebugLogSSH("Disconnected %d session(s)", len(sessions))
+	}
 }
