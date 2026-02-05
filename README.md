@@ -15,10 +15,12 @@ WAR stands for "whispers across realms" - this application provides a gateway be
 
 - **Multi-PLC Support**: Connect to Allen-Bradley Logix, Siemens S7, Beckhoff TwinCAT, and Omron PLCs simultaneously
 - **Tag Browser**: Browse controller tags with real-time value updates (automatic discovery for Logix/Beckhoff)
-- **REST API**: Expose PLC tag values via HTTP for integration with other systems
-- **MQTT Publishing**: Publish tag values to MQTT brokers with optional write-back, authentication, and TLS
-- **Valkey/Redis**: Store tag values with Pub/Sub notifications and write-back queue support
-- **Kafka**: Publish tag changes and event triggers to Apache Kafka topics
+- **UDT/Structure Support**: Automatic member unpacking with change detection filtering for volatile members
+- **Health Monitoring**: Periodic health status publishing to REST, MQTT, Valkey, and Kafka (configurable per-PLC)
+- **REST API**: Expose PLC tag values and health status via HTTP
+- **MQTT Publishing**: Publish tag values and health to MQTT brokers with optional write-back, authentication, and TLS
+- **Valkey/Redis**: Store tag values and health with Pub/Sub notifications and write-back queue support
+- **Kafka**: Publish tag changes, health status, and event triggers to Apache Kafka topics
 - **Event Triggers**: Capture data snapshots on PLC events and publish to Kafka with acknowledgment
 - **Array Support**: Arrays of known types are published as native JSON arrays
 - **Auto-Reconnection**: Automatic connection recovery with watchdog monitoring
@@ -138,8 +140,10 @@ The daemon performs a graceful shutdown: stops all SSH sessions, disconnects MQT
 | Global | `Q` | Quit (local) / Disconnect (daemon) |
 | PLCs | `d/a/e/r` | Discover/Add/Edit/Remove |
 | PLCs | `c/C` | Connect/Disconnect |
+| PLCs | `i` | Show PLC info |
 | Browser | `/` | Focus filter |
 | Browser | `Space/w` | Toggle publish/writable |
+| Browser | `i` | Toggle ignore for UDT member changes |
 | MQTT/Valkey/Kafka | `a/e/r/c/C` | Add/Edit/Remove/Connect/Disconnect |
 | Triggers | `a/e/r` | Add/Edit/Remove trigger |
 | Triggers | `t/x` | Add/Remove data tag |
@@ -158,12 +162,16 @@ plcs:
     address: 192.168.1.100
     family: logix
     slot: 0
-    enabled: true
-    poll_rate: 500ms    # Per-PLC poll rate (overrides global)
+    enabled: true                    # Auto-connect on startup
+    health_check_enabled: true       # Publish health status (default: true)
+    poll_rate: 500ms                 # Per-PLC poll rate (overrides global)
     tags:
       - name: Program:MainProgram.Counter
         enabled: true
         writable: true
+      - name: Program:MainProgram.MachineStatus
+        enabled: true
+        ignore_changes: [Timestamp, HeartbeatCount]  # Don't republish on these member changes
 
   # Siemens S7 (manual tags with byte offsets)
   - name: SiemensPLC
@@ -171,7 +179,7 @@ plcs:
     family: s7
     slot: 1
     enabled: true
-    # poll_rate: omit to use global default
+    health_check_enabled: false      # Disable health publishing for this PLC
     tags:
       - name: DB1.0
         alias: ProductCount
@@ -247,7 +255,18 @@ poll_rate: 1s  # Global default (used when per-PLC poll_rate not set)
 | `/{plc}` | GET | PLC details and identity |
 | `/{plc}/tags` | GET | All enabled tags with current values |
 | `/{plc}/tags/{tag}` | GET | Single tag value |
+| `/{plc}/health` | GET | PLC health status |
 | `/{plc}/programs` | GET | List programs (Logix only) |
+
+**Health Response:**
+```json
+{
+  "plc": "MainPLC",
+  "online": true,
+  "status": "connected",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
 
 ### Write Endpoint
 
@@ -300,10 +319,9 @@ poll_rate: 1s  # Global default (used when per-PLC poll_rate not set)
 
 ## MQTT Topics
 
-### Publishing (Read)
+### Tag Publishing
 Tags are published to: `{root_topic}/{plc}/tags/{tag}`
 
-Published message format:
 ```json
 {
   "topic": "factory",
@@ -315,6 +333,22 @@ Published message format:
   "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
+
+### Health Publishing
+Health status is published every 10 seconds to: `{root_topic}/{plc}/health`
+
+```json
+{
+  "topic": "factory",
+  "plc": "MainPLC",
+  "online": true,
+  "status": "connected",
+  "error": "",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+**Note:** Health publishing can be disabled per-PLC with `health_check_enabled: false`.
 
 ### Write Requests
 Send write requests to: `{root_topic}/{plc}/write`
@@ -352,7 +386,6 @@ Send write requests to: `{root_topic}/{plc}/write`
 ### Key Storage
 Tags are stored with the key pattern: `{factory}:{plc}:tags:{tag}`
 
-Stored value format:
 ```json
 {
   "factory": "factory",
@@ -364,6 +397,22 @@ Stored value format:
   "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
+
+### Health Keys
+Health status is stored every 10 seconds at: `{factory}:{plc}:health`
+
+```json
+{
+  "factory": "factory",
+  "plc": "MainPLC",
+  "online": true,
+  "status": "connected",
+  "error": "",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+**Note:** Health publishing can be disabled per-PLC with `health_check_enabled: false`.
 
 ### Pub/Sub Channels
 When `publish_changes: true`, changes are published to:
@@ -416,7 +465,7 @@ redis-cli SUBSCRIBE factory:write:responses
 
 ## Kafka
 
-Kafka is **publish-only** (no write-back support). Tag changes and trigger events are published to configured topics.
+Kafka is **publish-only** (no write-back support). Tag changes, health status, and trigger events are published to configured topics.
 
 **Tag change message format** (when `publish_changes: true`):
 ```json
@@ -428,6 +477,19 @@ Kafka is **publish-only** (no write-back support). Tag changes and trigger event
   "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
+
+**Health status message** (published every 10 seconds):
+```json
+{
+  "plc": "MainPLC",
+  "online": true,
+  "status": "connected",
+  "error": "",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+**Note:** Health publishing can be disabled per-PLC with `health_check_enabled: false`.
 
 **Trigger event format** (see Event Triggers section for details):
 ```json
@@ -474,6 +536,30 @@ Different PLC families use different byte orders for multi-byte values:
 Example of a raw byte array for a 4-byte integer value of 0x12345678:
 - Big-endian (S7/Omron): `[18, 52, 86, 120]` (0x12, 0x34, 0x56, 0x78)
 - Little-endian (Logix/Beckhoff): `[120, 86, 52, 18]` (0x78, 0x56, 0x34, 0x12)
+
+## UDT/Structure Support
+
+WarLogix automatically unpacks UDT (User-Defined Type) and structure members when the template is known. Each member is published as a separate value with its full path (e.g., `MyUDT.Temperature`, `MyUDT.Status`).
+
+### Change Detection Filtering
+
+UDTs often contain volatile members like timestamps, heartbeats, or sequence counters that change frequently but aren't meaningful for data capture. You can exclude these from change detection:
+
+**Via Configuration:**
+```yaml
+tags:
+  - name: Program:MainProgram.MachineStatus
+    enabled: true
+    ignore_changes: [Timestamp, HeartbeatCount, SequenceNum]
+```
+
+**Via Tag Browser:**
+Press `i` on a UDT member to toggle ignore status. Ignored members appear with an `[I]` indicator.
+
+**Auto-Detection:**
+When enabling a UDT tag, WarLogix automatically detects and ignores common volatile members (timers, timestamps, counters) to reduce unnecessary republishing.
+
+**Note:** Ignored members are still published - they just don't trigger republishing when only they change. If a non-ignored member changes, the entire UDT (including ignored members) is republished with current values.
 
 ## PLC Configuration Guide
 
@@ -629,7 +715,7 @@ Triggers capture data snapshots when PLC conditions are met and publish to Kafka
 
 ## Limitations
 
-- Structs/UDTs are published as raw byte arrays (not decoded)
+- UDTs with unknown templates are published as raw byte arrays
 - BETA release - improvements ongoing
 
 ## License
