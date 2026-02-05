@@ -548,7 +548,8 @@ Example of a raw byte array for a 4-byte integer value of 0x12345678:
 4. **PLC must be in RUN mode** for symbol access
 
 ** Adding the Route for WarLogix
-<img width="637" height="482" alt="image" src="https://github.com/user-attachments/assets/21c34603-f4bf-477f-8caf-69aa89e31e5c" />
+
+<img width="350" alt="image" src="https://github.com/user-attachments/assets/21c34603-f4bf-477f-8caf-69aa89e31e5c" />
 
 The AMS Net ID and IP Address should correspond to the IP address that you are running WarLogix from.   Do not select Secure ADS.
 
