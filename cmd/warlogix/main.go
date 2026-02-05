@@ -419,7 +419,7 @@ func runDaemonMode(cfg *config.Config) {
 	select {
 	case <-shutdownDone:
 		// Clean shutdown
-	case <-time.After(5 * time.Second):
+	case <-time.After(2 * time.Second):
 		fmt.Println("Shutdown timed out, forcing exit...")
 	}
 

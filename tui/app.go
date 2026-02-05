@@ -503,9 +503,7 @@ func (a *App) publishAllHealth() {
 
 // Shutdown performs a clean shutdown of all resources.
 func (a *App) Shutdown() {
-	a.setStatus("Shutting down...")
-
-	// Stop periodic refresh goroutine
+	// Stop periodic refresh goroutine first
 	select {
 	case <-a.stopChan:
 		// Already closed
@@ -518,12 +516,15 @@ func (a *App) Shutdown() {
 	a.manager.SetOnValueChange(nil)
 	a.manager.SetOnLog(nil)
 
-	// Stop all triggers first
+	// Stop the TUI immediately to prevent writes to closed PTY
+	a.app.Stop()
+
+	// Stop all triggers
 	if a.triggerMgr != nil {
 		a.triggerMgr.Stop()
 	}
 
-	// Stop all MQTT, Valkey, and Kafka in parallel with timeout
+	// Stop all services in parallel with timeout
 	done := make(chan struct{})
 	go func() {
 		a.mqttMgr.StopAll()
@@ -531,27 +532,20 @@ func (a *App) Shutdown() {
 		if a.kafkaMgr != nil {
 			a.kafkaMgr.StopAll()
 		}
+		a.apiServer.Stop()
+		a.manager.Stop()
 		close(done)
 	}()
 
-	// Wait with timeout
+	// Wait with timeout for services
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(500 * time.Millisecond):
 		// Timeout - proceed anyway
 	}
 
-	// Stop the API server
-	a.apiServer.Stop()
-
-	// Stop the manager polling
-	a.manager.Stop()
-
-	// Disconnect all PLCs
-	a.manager.DisconnectAll()
-
-	// Stop the TUI
-	a.app.Stop()
+	// Disconnect PLCs in background (don't wait - can be slow)
+	go a.manager.DisconnectAll()
 }
 
 // Stop halts the TUI application.

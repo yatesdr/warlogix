@@ -147,23 +147,28 @@ func (s *Server) Start() error {
 // Stop stops the SSH server gracefully.
 func (s *Server) Stop() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if !s.running {
+		s.mu.Unlock()
 		return nil
 	}
 
-	tui.DebugLogSSH("Shutting down server...")
-
 	s.running = false
-	close(s.stopChan)
 
-	// Close all sessions
-	s.sessionsMu.Lock()
-	for session := range s.sessions {
-		session.Close()
+	// Close stopChan to signal goroutines
+	select {
+	case <-s.stopChan:
+		// Already closed
+	default:
+		close(s.stopChan)
 	}
-	s.sessionsMu.Unlock()
+	s.mu.Unlock()
+
+	// Close all sessions in goroutines (don't block on slow closes)
+	s.sessionsMu.RLock()
+	for session := range s.sessions {
+		go session.Close()
+	}
+	s.sessionsMu.RUnlock()
 
 	// Close listener
 	if s.listener != nil {
