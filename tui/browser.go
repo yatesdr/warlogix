@@ -243,7 +243,95 @@ func (t *BrowserTab) onNodeSelected(node *tview.TreeNode) {
 		return
 	}
 
+	// Check if this is a UDT that can be expanded
+	if logix.IsStructure(tagInfo.TypeCode) {
+		// If not yet expanded (no children), try to expand it
+		if len(node.GetChildren()) == 0 {
+			t.lazyExpandUDT(node, tagInfo)
+			// lazyExpandUDT sets expanded=true, don't toggle
+		} else {
+			// Already has children, just toggle expand/collapse
+			node.SetExpanded(!node.IsExpanded())
+		}
+	}
+
 	t.showTagDetails(tagInfo)
+}
+
+// lazyExpandUDT expands a UDT node by fetching its template and adding member children.
+// This is done lazily when the user first selects/expands the node.
+func (t *BrowserTab) lazyExpandUDT(node *tview.TreeNode, tagInfo *logix.TagInfo) {
+	plc := t.app.manager.GetPLC(t.selectedPLC)
+	if plc == nil {
+		DebugLog("lazyExpandUDT: no PLC for %s", tagInfo.Name)
+		return
+	}
+
+	client := plc.GetLogixClient()
+	if client == nil {
+		DebugLog("lazyExpandUDT: no client for %s", tagInfo.Name)
+		return
+	}
+
+	// Fetch template
+	tmpl, err := client.GetTemplate(tagInfo.TypeCode)
+	if err != nil {
+		DebugLog("lazyExpandUDT: failed to get template for %s: %v", tagInfo.Name, err)
+		return
+	}
+
+	// Determine base path - for arrays, we need to add [0] to access first element
+	basePath := tagInfo.Name
+
+	// Check multiple ways to detect arrays:
+	// 1. Dimensions populated from discovery
+	// 2. Array bit in type code (0x2000 or 0x4000 for 1D/2D)
+	// 3. Tag name ends with "[]" (some PLCs return this notation)
+	// 4. Use TagInfo.IsArray() which combines dimensions and type code check
+	hasDims := len(tagInfo.Dimensions) > 0
+	isArrayType := logix.IsArrayType(tagInfo.TypeCode)
+	isArrayBitSet := logix.IsArray(tagInfo.TypeCode) // Check 0x2000 bit specifically
+	nameHasBrackets := strings.HasSuffix(tagInfo.Name, "[]")
+	isArray := hasDims || isArrayType || isArrayBitSet || nameHasBrackets
+
+	DebugLog("lazyExpandUDT: %s - hasDims=%v, isArrayType=%v, isArrayBit=%v, nameBrackets=%v, typeCode=0x%04X, dims=%v",
+		tagInfo.Name, hasDims, isArrayType, isArrayBitSet, nameHasBrackets, tagInfo.TypeCode, tagInfo.Dimensions)
+
+	if isArray {
+		// For array UDTs, show members of first element by default
+		// Remove trailing [] if present, then add [0]
+		basePath = strings.TrimSuffix(tagInfo.Name, "[]") + "[0]"
+		DebugLog("lazyExpandUDT: %s is an array, using base path %s", tagInfo.Name, basePath)
+	}
+
+	// Add member nodes
+	addedCount := 0
+	for _, member := range tmpl.Members {
+		if member.Hidden || member.Name == "" {
+			continue
+		}
+
+		memberPath := basePath + "." + member.Name
+
+		// Create synthetic TagInfo for member
+		memberInfo := &logix.TagInfo{
+			Name:     memberPath,
+			TypeCode: member.Type,
+		}
+
+		enabled := t.enabledTags[memberPath]
+		writable := t.writableTags[memberPath]
+		memberNode := t.createTagNode(memberInfo, enabled, writable)
+
+		node.AddChild(memberNode)
+		t.tagNodes[memberPath] = memberNode
+		addedCount++
+	}
+
+	DebugLog("lazyExpandUDT: expanded %s with %d visible members", tagInfo.Name, addedCount)
+
+	// Force the node to be expanded to show children
+	node.SetExpanded(true)
 }
 
 func (t *BrowserTab) toggleNodeSelection(node *tview.TreeNode) {
@@ -259,6 +347,9 @@ func (t *BrowserTab) toggleNodeSelection(node *tview.TreeNode) {
 
 	tagName := tagInfo.Name
 
+	// Track previous state to detect enable transition
+	wasEnabled := t.enabledTags[tagName]
+
 	// Toggle enabled state
 	t.enabledTags[tagName] = !t.enabledTags[tagName]
 	enabled := t.enabledTags[tagName]
@@ -269,6 +360,11 @@ func (t *BrowserTab) toggleNodeSelection(node *tview.TreeNode) {
 
 	// Update config
 	t.updateConfigTag(tagName, enabled, writable)
+
+	// If tag was just enabled, force publish its current value immediately
+	if enabled && !wasEnabled && t.selectedPLC != "" {
+		go t.app.ForcePublishTag(t.selectedPLC, tagName)
+	}
 
 	// Update status
 	t.updateStatus()
@@ -314,6 +410,12 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 		writeIndicator = "[red]W[-] "
 	}
 
+	// UDT expandable indicator
+	udtIndicator := ""
+	if logix.IsStructure(tag.TypeCode) {
+		udtIndicator = "[yellow]▶[-] "
+	}
+
 	typeName := t.getTypeName(tag.TypeCode)
 	shortName := tag.Name
 	if idx := strings.LastIndex(tag.Name, "."); idx >= 0 {
@@ -336,12 +438,12 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 
 	var text string
 	if enabled {
-		text = fmt.Sprintf("%s %s%s  [gray]%s[-]", checkbox, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("%s %s%s%s  [gray]%s[-]", checkbox, udtIndicator, writeIndicator, shortName, typeName)
 		node.SetColor(tcell.ColorWhite)
 	} else {
 		// Don't use inline color tags - let node.SetColor handle it
 		// This allows proper color inversion when the node is selected
-		text = fmt.Sprintf("%s %s%s  %s", checkbox, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("%s %s%s%s  %s", checkbox, udtIndicator, writeIndicator, shortName, typeName)
 		node.SetColor(tcell.ColorDarkGray)
 	}
 	node.SetText(text)
@@ -932,6 +1034,12 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 		errorIndicator = "[red]![-] "
 	}
 
+	// UDT expandable indicator
+	udtIndicator := ""
+	if logix.IsStructure(tag.TypeCode) {
+		udtIndicator = "[yellow]▶[-] "
+	}
+
 	typeName := t.getTypeName(tag.TypeCode)
 	shortName := tag.Name
 	if idx := strings.LastIndex(tag.Name, "."); idx >= 0 {
@@ -954,11 +1062,11 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 
 	var text string
 	if enabled {
-		text = fmt.Sprintf("%s %s%s%s  [gray]%s[-]", checkbox, errorIndicator, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("%s %s%s%s%s  [gray]%s[-]", checkbox, udtIndicator, errorIndicator, writeIndicator, shortName, typeName)
 	} else {
 		// Don't use inline color tags - let node.SetColor handle it
 		// This allows proper color inversion when the node is selected
-		text = fmt.Sprintf("%s %s%s%s  %s", checkbox, errorIndicator, writeIndicator, shortName, typeName)
+		text = fmt.Sprintf("%s %s%s%s%s  %s", checkbox, udtIndicator, errorIndicator, writeIndicator, shortName, typeName)
 	}
 
 	node := tview.NewTreeNode(text).
@@ -1263,6 +1371,64 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 
 	t.app.pages.AddPage("edittag", modal, true, true)
 	t.app.app.SetFocus(form)
+}
+
+// expandUDTMembers adds child nodes for UDT members to the given parent node.
+// Returns the number of members added (including nested members that match filter).
+func (t *BrowserTab) expandUDTMembers(parentNode *tview.TreeNode, basePath string, typeCode uint16, client *logix.Client, maxDepth int) int {
+	if maxDepth <= 0 || client == nil {
+		return 0
+	}
+
+	// Get template for this UDT
+	tmpl, err := client.GetTemplate(typeCode)
+	if err != nil {
+		DebugLog("expandUDTMembers: failed to get template for %s (0x%04X): %v", basePath, typeCode, err)
+		return 0
+	}
+
+	addedCount := 0
+
+	for _, member := range tmpl.Members {
+		if member.Hidden || member.Name == "" {
+			continue
+		}
+
+		memberPath := basePath + "." + member.Name
+		memberMatches := t.matchesFilter(memberPath)
+
+		// Create a synthetic TagInfo for this member
+		memberInfo := &logix.TagInfo{
+			Name:     memberPath,
+			TypeCode: member.Type,
+		}
+
+		enabled := t.enabledTags[memberPath]
+		writable := t.writableTags[memberPath]
+		memberNode := t.createTagNode(memberInfo, enabled, writable)
+
+		// Check if this member is also a nested UDT
+		if logix.IsStructure(member.Type) {
+			// Recursively expand nested UDT
+			nestedCount := t.expandUDTMembers(memberNode, memberPath, member.Type, client, maxDepth-1)
+			if memberMatches || nestedCount > 0 {
+				parentNode.AddChild(memberNode)
+				t.tagNodes[memberPath] = memberNode
+				addedCount++
+			}
+		} else if memberMatches {
+			parentNode.AddChild(memberNode)
+			t.tagNodes[memberPath] = memberNode
+			addedCount++
+		}
+	}
+
+	// Collapse UDT nodes by default (user can expand them)
+	if addedCount > 0 {
+		parentNode.SetExpanded(false)
+	}
+
+	return addedCount
 }
 
 // deleteManualTag deletes a manual tag after confirmation.

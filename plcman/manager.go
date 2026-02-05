@@ -446,7 +446,8 @@ func (w *PLCWorker) poll() {
 		if err == nil {
 			values = make([]*TagValue, len(logixValues))
 			for i, lv := range logixValues {
-				values[i] = FromLogixTagValue(lv)
+				// Use decoded version to get UDT member names in output
+				values[i] = FromLogixTagValueDecoded(lv, client)
 			}
 		}
 	}
@@ -1009,13 +1010,28 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	// Get identity
 	identity, _ := client.Identity()
 
+	// Check if we have cached tags from a previous connection
+	plc.mu.RLock()
+	cachedTags := plc.Tags
+	cachedPrograms := plc.Programs
+	plc.mu.RUnlock()
+
 	var programs []string
 	var tags []logix.TagInfo
 
 	// Only discover programs and tags for discovery-capable PLCs
+	// If we have cached tags (from a previous connection), reuse them for fast reconnect
 	if family.SupportsDiscovery() {
-		programs, _ = client.Programs()
-		tags, _ = client.AllTags()
+		if len(cachedTags) > 0 {
+			// Fast reconnect: reuse cached tags
+			programs = cachedPrograms
+			tags = cachedTags
+			m.log("[cyan]PLC %s using cached tags (%d tags)[-]", plc.Config.Name, len(tags))
+		} else {
+			// Full discovery: fetch programs and tags
+			programs, _ = client.Programs()
+			tags, _ = client.AllTags()
+		}
 		// Store tags in client for element count lookup during reads
 		// For Micro800, this also probes array sizes and returns updated tags
 		tags = client.SetTags(tags)
@@ -1039,6 +1055,10 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 
 	m.markStatusDirty()
 	m.log("[green]PLC %s connected:[-] %s, %d tags", name, client.ConnectionMode(), len(tags))
+
+	// Note: UDT templates are fetched lazily on-demand when structure tags are read.
+	// This keeps initial connection fast, especially over slow networks (VPN, etc.)
+	// Templates are cached after first fetch for fast subsequent reads.
 
 	return nil
 }
@@ -1582,7 +1602,7 @@ func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 	m.mu.RUnlock()
 
 	if !exists {
-		return nil, nil
+		return nil, fmt.Errorf("PLC not found: %s", plcName)
 	}
 
 	plc.mu.RLock()
@@ -1590,6 +1610,7 @@ func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 	s7Client := plc.S7Client
 	adsClient := plc.AdsClient
 	finsClient := plc.FinsClient
+	status := plc.Status
 	family := plc.Config.GetFamily()
 	// Get configured type for this tag
 	var typeHint string
@@ -1601,10 +1622,15 @@ func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 	}
 	plc.mu.RUnlock()
 
+	// Check connection status first
+	if status != StatusConnected {
+		return nil, fmt.Errorf("PLC not connected: %s (status: %s)", plcName, status)
+	}
+
 	switch family {
 	case config.FamilyS7:
 		if s7Client == nil {
-			return nil, nil
+			return nil, fmt.Errorf("S7 client not available for %s", plcName)
 		}
 		req := []s7.TagRequest{{Address: tagName, TypeHint: typeHint}}
 		s7Values, err := s7Client.ReadWithTypes(req)
@@ -1638,11 +1664,11 @@ func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 				Error:    sv.Error,
 			}, nil
 		}
-		return nil, nil
+		return nil, fmt.Errorf("no data returned for tag: %s", tagName)
 
 	case config.FamilyBeckhoff:
 		if adsClient == nil {
-			return nil, nil
+			return nil, fmt.Errorf("ADS client not available for %s", plcName)
 		}
 		adsValues, err := adsClient.Read(tagName)
 		if err != nil {
@@ -1660,11 +1686,11 @@ func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 				Error:    av.Error,
 			}, nil
 		}
-		return nil, nil
+		return nil, fmt.Errorf("no data returned for tag: %s", tagName)
 
 	case config.FamilyOmron:
 		if finsClient == nil {
-			return nil, nil
+			return nil, fmt.Errorf("FINS client not available for %s", plcName)
 		}
 		req := []fins.TagRequest{{Address: tagName, TypeHint: typeHint}}
 		finsValues, err := finsClient.ReadWithTypes(req)
@@ -1698,21 +1724,45 @@ func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 				Error:    fv.Error,
 			}, nil
 		}
-		return nil, nil
+		return nil, fmt.Errorf("no data returned for tag: %s", tagName)
 
 	default:
 		// Handle Logix/Micro800 PLCs
 		if client == nil {
-			return nil, nil
+			return nil, fmt.Errorf("Logix client not available for %s", plcName)
 		}
 		values, err := client.Read(tagName)
 		if err != nil {
+			// Check if this is a connection error and schedule reconnect
+			if isLikelyConnectionError(err) {
+				m.handleConnectionError(plcName, plc, err)
+			}
 			return nil, err
 		}
 		if len(values) > 0 {
-			return FromLogixTagValue(values[0]), nil
+			// Use decoded version to get UDT member names in output
+			return FromLogixTagValueDecoded(values[0], client), nil
 		}
-		return nil, nil
+		return nil, fmt.Errorf("no data returned for tag: %s", tagName)
+	}
+}
+
+// handleConnectionError marks a PLC as disconnected and schedules reconnection.
+func (m *Manager) handleConnectionError(plcName string, plc *ManagedPLC, err error) {
+	plc.mu.Lock()
+	wasConnected := plc.Status == StatusConnected
+	plc.Status = StatusDisconnected
+	autoConnect := plc.Config.Enabled
+	plc.mu.Unlock()
+
+	if wasConnected {
+		m.log("[yellow]PLC %s connection error: %v[-]", plcName, err)
+		m.markStatusDirty()
+
+		// Schedule reconnection if auto-connect is enabled
+		if autoConnect {
+			go m.scheduleReconnect(plcName)
+		}
 	}
 }
 
@@ -1809,6 +1859,55 @@ func (m *Manager) GetPollStats() PollStats {
 	m.statsMu.RLock()
 	defer m.statsMu.RUnlock()
 	return m.lastPollStats
+}
+
+// GetTagValueChange returns a single tag's current value as a ValueChange.
+// Returns nil if the tag is not found or has an error.
+func (m *Manager) GetTagValueChange(plcName, tagName string) *ValueChange {
+	m.mu.RLock()
+	plc, exists := m.plcs[plcName]
+	m.mu.RUnlock()
+
+	if !exists || plc == nil {
+		return nil
+	}
+
+	plc.mu.RLock()
+	defer plc.mu.RUnlock()
+
+	val, ok := plc.Values[tagName]
+	if !ok || val == nil || val.Error != nil {
+		return nil
+	}
+
+	// Build lookup from config
+	var writable bool
+	var alias string
+	for _, tag := range plc.Config.Tags {
+		if tag.Name == tagName {
+			writable = tag.Writable
+			alias = tag.Alias
+			break
+		}
+	}
+
+	family := plc.Config.GetFamily()
+	vc := &ValueChange{
+		PLCName:  plcName,
+		TagName:  tagName,
+		Alias:    alias,
+		TypeName: val.TypeName(),
+		Value:    val.GoValue(),
+		Writable: writable,
+		Family:   string(family),
+	}
+
+	// For S7, set Address to uppercase version of TagName
+	if family == config.FamilyS7 {
+		vc.Address = strings.ToUpper(tagName)
+	}
+
+	return vc
 }
 
 // GetAllCurrentValues returns all currently cached tag values for all PLCs.

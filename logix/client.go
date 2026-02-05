@@ -10,10 +10,12 @@ import (
 // Client is a high-level wrapper that manages connection lifecycle
 // and provides simplified methods for common PLC operations.
 type Client struct {
-	plc           *PLC               // Low-level access preserved
-	micro800      bool               // True for Micro800 series (no batch reads)
-	tagInfo       map[string]TagInfo // Discovered tags for element count lookup
-	templateSizes map[uint16]uint32  // Cache of template ID -> size in bytes
+	plc             *PLC               // Low-level access preserved
+	micro800        bool               // True for Micro800 series (no batch reads)
+	tagInfo         map[string]TagInfo // Discovered tags for element count lookup
+	templateSizes   map[uint16]uint32  // Cache of template ID -> size in bytes
+	templates       map[uint16]*Template // Cache of template ID -> full template definition
+	failedTemplates map[uint16]bool    // Cache of template IDs that failed to fetch
 }
 
 // options holds configuration options for Connect.
@@ -195,6 +197,30 @@ func (c *Client) isArrayTag(tagName string) bool {
 	return false
 }
 
+// isStructTag returns true if the tag is known to be a structure/UDT type.
+func (c *Client) isStructTag(tagName string) bool {
+	if c == nil || c.tagInfo == nil {
+		return false
+	}
+	if info, ok := c.tagInfo[tagName]; ok {
+		return IsStructure(info.TypeCode)
+	}
+	return false
+}
+
+// getInstanceID returns the symbol instance ID for a tag, or 0 if unknown.
+// The instance ID enables Symbol Instance Addressing which is more reliable
+// for reading structures on some PLC configurations.
+func (c *Client) getInstanceID(tagName string) uint32 {
+	if c == nil || c.tagInfo == nil {
+		return 0
+	}
+	if info, ok := c.tagInfo[tagName]; ok {
+		return info.Instance
+	}
+	return 0
+}
+
 // GetTagInfo returns the stored tag info for a tag name, if available.
 // Returns (tagInfo, true) if found, (TagInfo{}, false) if not.
 // Used for debugging to verify tag info is stored correctly.
@@ -342,7 +368,8 @@ func (c *Client) AllTags() ([]TagInfo, error) {
 // Read reads one or more tags by name and returns their values.
 // Each tag in the result includes its own error status (nil if successful).
 // The method returns an error only for transport-level failures.
-// Arrays are read individually with proper element counts; scalars are batched for efficiency.
+// Arrays and structures are read individually; atomic scalars are batched for efficiency.
+// For UDT/structure types that don't allow direct reads, automatically expands to read members.
 func (c *Client) Read(tagNames ...string) ([]*TagValue, error) {
 	if c == nil || c.plc == nil {
 		return nil, fmt.Errorf("Read: nil client")
@@ -356,14 +383,14 @@ func (c *Client) Read(tagNames ...string) ([]*TagValue, error) {
 		return c.readIndividual(tagNames)
 	}
 
-	// Separate arrays from scalars for proper handling
-	// Arrays need individual reads to get all elements
-	// Scalars can be batched efficiently
+	// Separate complex types from simple scalars for proper handling
+	// Arrays and structures need individual reads (large data, potential fragmented reads)
+	// Simple scalars can be batched efficiently
 	var scalars []string
-	var arrays []string
+	var individual []string
 	for _, name := range tagNames {
-		if c.isArrayTag(name) {
-			arrays = append(arrays, name)
+		if c.isArrayTag(name) || c.isStructTag(name) {
+			individual = append(individual, name)
 		} else {
 			scalars = append(scalars, name)
 		}
@@ -371,23 +398,92 @@ func (c *Client) Read(tagNames ...string) ([]*TagValue, error) {
 
 	results := make([]*TagValue, 0, len(tagNames))
 
-	// Read arrays individually with proper element counts
-	for _, name := range arrays {
+	// Read arrays and structures individually with proper element counts
+	for _, name := range individual {
 		count := c.getElementCount(name)
-		tag, err := c.plc.ReadTagCount(name, count)
-		if err != nil {
-			results = append(results, &TagValue{
-				Name:  name,
-				Error: err,
-			})
-		} else {
-			results = append(results, &TagValue{
-				Name:     tag.Name,
-				DataType: tag.DataType,
-				Bytes:    tag.Bytes,
-				Error:    nil,
-			})
+		instanceID := c.getInstanceID(name)
+
+		// For structures, get expected size from template for complete reads
+		var expectedSize uint32
+		isStruct := c.isStructTag(name)
+		if isStruct {
+			if info, ok := c.tagInfo[name]; ok {
+				expectedSize = c.GetElementSize(info.TypeCode)
+				debugLog("Read struct %q: typeCode=0x%04X, expectedSize=%d, count=%d",
+					name, info.TypeCode, expectedSize, count)
+				// For arrays of structures, multiply by element count
+				if count > 1 {
+					expectedSize *= uint32(count)
+				}
+			} else {
+				debugLog("Read struct %q: NOT FOUND in tagInfo", name)
+			}
 		}
+
+		tag, err := c.plc.ReadTagCountWithInstance(name, count, instanceID)
+		if err != nil {
+			debugLog("Read individual tag %q (count=%d, instance=%d) failed: %v", name, count, instanceID, err)
+
+			// If direct read failed and this is a structure, try fragmented read
+			if isStruct && expectedSize > 0 {
+				debugLog("Trying fragmented read for %q (expected size: %d)", name, expectedSize)
+				tag, err = c.plc.ReadTagFragmented(name, expectedSize)
+				if err == nil {
+					debugLog("Fragmented read for %q succeeded: got %d bytes", name, len(tag.Bytes))
+				}
+			}
+
+			if err != nil {
+				// If fragmented read also failed, try reading members individually
+				if isStruct {
+					memberResults, memberErr := c.readStructMembers(name)
+					if memberErr == nil && len(memberResults) > 0 {
+						debugLog("Read UDT %q via %d members succeeded", name, len(memberResults))
+						results = append(results, memberResults...)
+						continue
+					}
+					debugLog("Read UDT %q members also failed: %v", name, memberErr)
+				}
+
+				results = append(results, &TagValue{
+					Name:  name,
+					Error: err,
+				})
+				continue
+			}
+		}
+
+		// Check if we got incomplete data for structures
+		debugLog("Read %q got %d bytes (isStruct=%v, expectedSize=%d)",
+			name, len(tag.Bytes), isStruct, expectedSize)
+		if isStruct && expectedSize > 0 && uint32(len(tag.Bytes)) < expectedSize {
+			debugLog("Read %q got incomplete data (%d/%d bytes), trying fragmented read",
+				name, len(tag.Bytes), expectedSize)
+			fragTag, fragErr := c.plc.ReadTagFragmented(name, expectedSize)
+			if fragErr == nil && len(fragTag.Bytes) > len(tag.Bytes) {
+				debugLog("Fragmented read for %q got more data: %d bytes", name, len(fragTag.Bytes))
+				tag = fragTag
+			} else if fragErr != nil {
+				debugLog("Fragmented read for %q failed: %v", name, fragErr)
+			} else {
+				debugLog("Fragmented read for %q got same or less data: %d bytes", name, len(fragTag.Bytes))
+			}
+		}
+
+		// Prefer tag info type code (from discovery) over read response
+		// The PLC read response sometimes returns a simplified type code
+		// that lacks the structure flag for UDTs
+		dataType := tag.DataType
+		if info, ok := c.tagInfo[name]; ok && info.TypeCode != 0 {
+			// Use discovered type code - it has correct structure/array flags
+			dataType = info.TypeCode
+		}
+		results = append(results, &TagValue{
+			Name:     tag.Name,
+			DataType: dataType,
+			Bytes:    tag.Bytes,
+			Error:    nil,
+		})
 	}
 
 	// Batch read scalars
@@ -444,18 +540,27 @@ func (c *Client) readIndividual(tagNames []string) ([]*TagValue, error) {
 	results := make([]*TagValue, 0, len(tagNames))
 
 	for _, name := range tagNames {
-		// Look up element count for arrays
+		// Look up element count and instance ID for better reliability
 		count := c.getElementCount(name)
-		tag, err := c.plc.ReadTagCount(name, count)
+		instanceID := c.getInstanceID(name)
+		tag, err := c.plc.ReadTagCountWithInstance(name, count, instanceID)
 		if err != nil {
 			results = append(results, &TagValue{
 				Name:  name,
 				Error: err,
 			})
 		} else {
+			// Prefer tag info type code (from discovery) over read response
+			// The PLC read response sometimes returns a simplified type code
+			// that lacks the structure flag for UDTs
+			dataType := tag.DataType
+			if info, ok := c.tagInfo[name]; ok && info.TypeCode != 0 {
+				// Use discovered type code - it has correct structure/array flags
+				dataType = info.TypeCode
+			}
 			results = append(results, &TagValue{
 				Name:     tag.Name,
-				DataType: tag.DataType,
+				DataType: dataType,
 				Bytes:    tag.Bytes,
 				Error:    nil,
 			})
@@ -463,6 +568,206 @@ func (c *Client) readIndividual(tagNames []string) ([]*TagValue, error) {
 	}
 
 	return results, nil
+}
+
+// readStructMembers reads a UDT/structure by reading each member individually.
+// This is used when direct structure reads fail (e.g., due to access restrictions).
+// Returns TagValue entries for each member with paths like "StructName.MemberName".
+// Nested UDTs are recursively expanded to their atomic members.
+func (c *Client) readStructMembers(tagName string) ([]*TagValue, error) {
+	// Get the type code for this tag
+	info, ok := c.tagInfo[tagName]
+	if !ok {
+		return nil, fmt.Errorf("no tag info for %q", tagName)
+	}
+
+	if !IsStructure(info.TypeCode) {
+		return nil, fmt.Errorf("tag %q is not a structure type", tagName)
+	}
+
+	// Get the template for this structure
+	tmpl, err := c.GetTemplate(info.TypeCode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get template: %w", err)
+	}
+
+	if len(tmpl.Members) == 0 {
+		return nil, fmt.Errorf("template %q has no members", tmpl.Name)
+	}
+
+	debugLog("readStructMembers: reading %d members of %q (template: %q)", len(tmpl.MemberMap), tagName, tmpl.Name)
+
+	// Expand all member paths, recursively handling nested UDTs
+	// maxDepth prevents infinite recursion
+	memberPaths, memberTypes := c.expandMemberPaths(tagName, tmpl, 10)
+
+	if len(memberPaths) == 0 {
+		return nil, fmt.Errorf("no readable members in template %q", tmpl.Name)
+	}
+
+	debugLog("readStructMembers: expanded to %d atomic member paths", len(memberPaths))
+
+	// Read all members - use batch read if possible
+	results := make([]*TagValue, 0, len(memberPaths))
+
+	// Determine batch size based on connection mode
+	batchSize := 5 // Conservative for unconnected messaging
+	if c.plc.IsConnected() {
+		batchSize = 50
+	}
+
+	for i := 0; i < len(memberPaths); i += batchSize {
+		end := i + batchSize
+		if end > len(memberPaths) {
+			end = len(memberPaths)
+		}
+		batch := memberPaths[i:end]
+		batchTypes := memberTypes[i:end]
+
+		// Try batch read first
+		tags, err := c.plc.ReadMultiple(batch)
+		if err != nil {
+			// Batch failed - try reading individually
+			debugLog("Batch read of UDT members failed: %v, trying individual reads", err)
+			for j, path := range batch {
+				tag, readErr := c.plc.ReadTagCount(path, 1)
+				if readErr != nil {
+					results = append(results, &TagValue{
+						Name:  path,
+						Error: readErr,
+					})
+				} else {
+					dataType := tag.DataType
+					if dataType == 0 {
+						dataType = batchTypes[j]
+					}
+					results = append(results, &TagValue{
+						Name:     path,
+						DataType: dataType,
+						Bytes:    tag.Bytes,
+						Error:    nil,
+					})
+				}
+			}
+			continue
+		}
+
+		// Process batch results
+		for j, tag := range tags {
+			if tag == nil {
+				results = append(results, &TagValue{
+					Name:  batch[j],
+					Error: fmt.Errorf("member read failed"),
+				})
+			} else {
+				dataType := tag.DataType
+				if dataType == 0 {
+					dataType = batchTypes[j]
+				}
+				results = append(results, &TagValue{
+					Name:     tag.Name,
+					DataType: dataType,
+					Bytes:    tag.Bytes,
+					Error:    nil,
+				})
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// expandMemberPaths recursively expands UDT members to their atomic (non-struct) paths.
+// For nested UDTs, it fetches their templates and expands their members.
+// Returns parallel slices of paths and types.
+func (c *Client) expandMemberPaths(basePath string, tmpl *Template, maxDepth int) ([]string, []uint16) {
+	if maxDepth <= 0 {
+		debugLog("expandMemberPaths: max depth reached for %q", basePath)
+		return nil, nil
+	}
+
+	var paths []string
+	var types []uint16
+
+	for _, member := range tmpl.Members {
+		if member.Hidden || member.Name == "" {
+			continue
+		}
+
+		memberPath := basePath + "." + member.Name
+
+		// Check if this member is a nested structure
+		if IsStructure(member.Type) {
+			// Get template for nested UDT
+			nestedTmpl, err := c.GetTemplate(member.Type)
+			if err != nil {
+				debugLog("expandMemberPaths: failed to get template for nested UDT %q (type 0x%04X): %v",
+					memberPath, member.Type, err)
+				// Skip this nested UDT - can't expand it
+				continue
+			}
+
+			debugLog("expandMemberPaths: expanding nested UDT %q (template: %q) with %d members",
+				memberPath, nestedTmpl.Name, len(nestedTmpl.MemberMap))
+
+			// Recursively expand nested UDT
+			nestedPaths, nestedTypes := c.expandMemberPaths(memberPath, nestedTmpl, maxDepth-1)
+			paths = append(paths, nestedPaths...)
+			types = append(types, nestedTypes...)
+		} else {
+			// Atomic member - add directly
+			paths = append(paths, memberPath)
+			types = append(types, member.Type)
+		}
+	}
+
+	return paths, types
+}
+
+// GetStructMembers returns the member paths for a UDT/structure tag.
+// This is useful for expanding a UDT into its readable members for display.
+// Returns paths like ["TagName.Member1", "TagName.Member2", ...].
+func (c *Client) GetStructMembers(tagName string) ([]string, error) {
+	info, ok := c.tagInfo[tagName]
+	if !ok {
+		return nil, fmt.Errorf("no tag info for %q", tagName)
+	}
+
+	if !IsStructure(info.TypeCode) {
+		return nil, fmt.Errorf("tag %q is not a structure type", tagName)
+	}
+
+	tmpl, err := c.GetTemplate(info.TypeCode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get template: %w", err)
+	}
+
+	var memberPaths []string
+	for _, member := range tmpl.Members {
+		if member.Hidden || member.Name == "" {
+			continue
+		}
+		memberPaths = append(memberPaths, tagName+"."+member.Name)
+	}
+
+	return memberPaths, nil
+}
+
+// GetAllStructMembers returns all member paths for a UDT, recursively expanding nested UDTs.
+// This returns only atomic (non-structure) members that can be read individually.
+// The basePath should be the tag name (or tagName[0] for arrays).
+func (c *Client) GetAllStructMembers(typeCode uint16, basePath string) ([]string, error) {
+	if !IsStructure(typeCode) {
+		return nil, fmt.Errorf("type 0x%04X is not a structure", typeCode)
+	}
+
+	tmpl, err := c.GetTemplate(typeCode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get template: %w", err)
+	}
+
+	paths, _ := c.expandMemberPaths(basePath, tmpl, 10)
+	return paths, nil
 }
 
 // ReadAll discovers and reads all readable tags from the PLC.
@@ -611,4 +916,318 @@ func (c *Client) WriteString(tagName string, val string) error {
 	data := binary.LittleEndian.AppendUint32(nil, uint32(len(strBytes)))
 	data = append(data, strBytes...)
 	return c.plc.WriteTag(tagName, TypeSTRING, data)
+}
+
+// GetTemplate returns the template for a structure type, fetching from PLC if not cached.
+func (c *Client) GetTemplate(typeCode uint16) (*Template, error) {
+	if c == nil || c.plc == nil {
+		return nil, fmt.Errorf("GetTemplate: nil client")
+	}
+
+	if !IsStructure(typeCode) {
+		return nil, fmt.Errorf("type 0x%04X is not a structure", typeCode)
+	}
+
+	templateID := TemplateID(typeCode)
+	if templateID == 0 {
+		return nil, fmt.Errorf("invalid template ID")
+	}
+
+	// Check success cache first
+	if c.templates != nil {
+		if tmpl, ok := c.templates[templateID]; ok {
+			return tmpl, nil
+		}
+	}
+
+	// Check failure cache - don't retry templates that already failed
+	if c.failedTemplates != nil {
+		if c.failedTemplates[templateID] {
+			return nil, fmt.Errorf("template %d previously failed to fetch", templateID)
+		}
+	}
+
+	// Fetch from PLC
+	tmpl, err := c.plc.GetTemplate(templateID)
+	if err != nil {
+		// Cache the failure to avoid retrying
+		if c.failedTemplates == nil {
+			c.failedTemplates = make(map[uint16]bool)
+		}
+		c.failedTemplates[templateID] = true
+		return nil, err
+	}
+
+	// Cache success
+	if c.templates == nil {
+		c.templates = make(map[uint16]*Template)
+	}
+	c.templates[templateID] = tmpl
+
+	debugLog("Cached template %q (ID: %d) with %d members", tmpl.Name, tmpl.ID, len(tmpl.Members))
+
+	return tmpl, nil
+}
+
+// GetTemplateByID returns the template by ID, fetching from PLC if not cached.
+func (c *Client) GetTemplateByID(templateID uint16) (*Template, error) {
+	// Construct a type code with structure flag
+	typeCode := TypeStructureMask | templateID
+	return c.GetTemplate(typeCode)
+}
+
+// FetchTemplatesForTags eagerly fetches and caches templates for all structure-type tags.
+// This is OPTIONAL - templates are also fetched lazily on-demand when tags are read.
+// Use this only if you want to pre-warm the cache (not recommended for slow connections).
+// Note: Built-in AB types (modules, etc.) don't have fetchable templates - this is expected.
+func (c *Client) FetchTemplatesForTags() {
+	if c == nil || c.tagInfo == nil {
+		return
+	}
+
+	var fetched, failed int
+	for _, tag := range c.tagInfo {
+		if IsStructure(tag.TypeCode) {
+			tmpl, err := c.GetTemplate(tag.TypeCode)
+			if err != nil {
+				failed++
+				// Only log first few failures to avoid spam
+				if failed <= 3 {
+					debugLog("Failed to fetch template for tag %q: %v", tag.Name, err)
+				}
+			} else {
+				fetched++
+				debugLog("Fetched template %q for tag %q", tmpl.Name, tag.Name)
+			}
+		}
+	}
+
+	if failed > 3 {
+		debugLog("... and %d more template fetch failures (built-in types don't have fetchable templates)", failed-3)
+	}
+	if fetched > 0 || failed > 0 {
+		debugLog("Template fetch summary: %d successful, %d failed", fetched, failed)
+	}
+}
+
+// DecodeUDT decodes raw UDT bytes into a structured map using the template.
+// Returns a map with member names as keys and decoded values.
+// Nested UDTs are recursively decoded into nested maps.
+func (c *Client) DecodeUDT(typeCode uint16, data []byte) (map[string]interface{}, error) {
+	tmpl, err := c.GetTemplate(typeCode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get template: %w", err)
+	}
+
+	return c.decodeUDTWithTemplate(tmpl, data)
+}
+
+// decodeUDTWithTemplate decodes UDT data using a specific template.
+func (c *Client) decodeUDTWithTemplate(tmpl *Template, data []byte) (map[string]interface{}, error) {
+	result := make(map[string]interface{})
+	dataLen := uint32(len(data))
+	skipped := 0
+
+	debugLog("decodeUDTWithTemplate: template %q (size=%d) with %d bytes of data",
+		tmpl.Name, tmpl.Size, dataLen)
+
+	for _, member := range tmpl.Members {
+		if member.Hidden || member.Name == "" {
+			continue
+		}
+
+		// Check if we have enough data
+		if member.Offset >= dataLen {
+			if skipped < 5 {
+				debugLog("decodeUDTWithTemplate: SKIPPED member %q at offset %d (data len %d, type 0x%04X)",
+					member.Name, member.Offset, dataLen, member.Type)
+			}
+			skipped++
+			continue
+		}
+
+		memberData := data[member.Offset:]
+		value, err := c.decodeMemberValue(&member, memberData)
+		if err != nil {
+			debugLog("Failed to decode member %q: %v", member.Name, err)
+			continue
+		}
+
+		result[member.Name] = value
+	}
+
+	if skipped > 0 {
+		debugLog("decodeUDTWithTemplate: skipped %d members due to insufficient data", skipped)
+	}
+
+	return result, nil
+}
+
+// decodeMemberValue decodes a single member's value from raw bytes.
+func (c *Client) decodeMemberValue(member *TemplateMember, data []byte) (interface{}, error) {
+	if member.IsArray() {
+		return c.decodeArrayMember(member, data)
+	}
+
+	return c.decodeScalarMember(member.Type, data)
+}
+
+// decodeScalarMember decodes a scalar value of the given type.
+func (c *Client) decodeScalarMember(typeCode uint16, data []byte) (interface{}, error) {
+	// Handle nested structures
+	if IsStructure(typeCode) {
+		tmpl, err := c.GetTemplate(typeCode)
+		if err != nil {
+			// Return raw bytes as fallback
+			return data, nil
+		}
+		return c.decodeUDTWithTemplate(tmpl, data)
+	}
+
+	// Handle atomic types
+	baseType := BaseType(typeCode)
+
+	switch baseType {
+	case TypeBOOL:
+		if len(data) < 1 {
+			return nil, fmt.Errorf("insufficient data for BOOL")
+		}
+		return data[0] != 0, nil
+
+	case TypeSINT:
+		if len(data) < 1 {
+			return nil, fmt.Errorf("insufficient data for SINT")
+		}
+		return int64(int8(data[0])), nil
+
+	case TypeINT:
+		if len(data) < 2 {
+			return nil, fmt.Errorf("insufficient data for INT")
+		}
+		return int64(int16(binary.LittleEndian.Uint16(data))), nil
+
+	case TypeDINT:
+		if len(data) < 4 {
+			return nil, fmt.Errorf("insufficient data for DINT")
+		}
+		return int64(int32(binary.LittleEndian.Uint32(data))), nil
+
+	case TypeLINT:
+		if len(data) < 8 {
+			return nil, fmt.Errorf("insufficient data for LINT")
+		}
+		return int64(binary.LittleEndian.Uint64(data)), nil
+
+	case TypeUSINT:
+		if len(data) < 1 {
+			return nil, fmt.Errorf("insufficient data for USINT")
+		}
+		return uint64(data[0]), nil
+
+	case TypeUINT:
+		if len(data) < 2 {
+			return nil, fmt.Errorf("insufficient data for UINT")
+		}
+		return uint64(binary.LittleEndian.Uint16(data)), nil
+
+	case TypeUDINT:
+		if len(data) < 4 {
+			return nil, fmt.Errorf("insufficient data for UDINT")
+		}
+		return uint64(binary.LittleEndian.Uint32(data)), nil
+
+	case TypeULINT:
+		if len(data) < 8 {
+			return nil, fmt.Errorf("insufficient data for ULINT")
+		}
+		return binary.LittleEndian.Uint64(data), nil
+
+	case TypeREAL:
+		if len(data) < 4 {
+			return nil, fmt.Errorf("insufficient data for REAL")
+		}
+		bits := binary.LittleEndian.Uint32(data)
+		return float64(math.Float32frombits(bits)), nil
+
+	case TypeLREAL:
+		if len(data) < 8 {
+			return nil, fmt.Errorf("insufficient data for LREAL")
+		}
+		bits := binary.LittleEndian.Uint64(data)
+		return math.Float64frombits(bits), nil
+
+	case TypeSTRING:
+		if len(data) < 4 {
+			return nil, fmt.Errorf("insufficient data for STRING")
+		}
+		strLen := binary.LittleEndian.Uint32(data[:4])
+		if int(strLen) > len(data)-4 {
+			strLen = uint32(len(data) - 4)
+		}
+		return string(data[4 : 4+strLen]), nil
+
+	default:
+		// Unknown type - return raw bytes
+		size := TypeSize(baseType)
+		if size == 0 {
+			size = 4 // Default
+		}
+		if size > len(data) {
+			size = len(data)
+		}
+		return data[:size], nil
+	}
+}
+
+// decodeArrayMember decodes an array member's values.
+func (c *Client) decodeArrayMember(member *TemplateMember, data []byte) (interface{}, error) {
+	elemCount := member.ElementCount()
+	if elemCount <= 0 {
+		return nil, nil
+	}
+
+	// Determine element size
+	var elemSize int
+	if IsStructure(member.Type) {
+		tmpl, err := c.GetTemplate(member.Type)
+		if err != nil {
+			return nil, err
+		}
+		elemSize = int(tmpl.Size)
+	} else {
+		elemSize = TypeSize(BaseType(member.Type))
+		if elemSize == 0 {
+			elemSize = 4 // Default
+		}
+	}
+
+	// Decode each element
+	results := make([]interface{}, 0, elemCount)
+	for i := 0; i < elemCount; i++ {
+		offset := i * elemSize
+		if offset >= len(data) {
+			break
+		}
+
+		elemData := data[offset:]
+		if len(elemData) > elemSize {
+			elemData = elemData[:elemSize]
+		}
+
+		val, err := c.decodeScalarMember(member.Type, elemData)
+		if err != nil {
+			continue
+		}
+		results = append(results, val)
+	}
+
+	return results, nil
+}
+
+// GetCachedTemplates returns all cached templates.
+func (c *Client) GetCachedTemplates() map[uint16]*Template {
+	if c == nil {
+		return nil
+	}
+	return c.templates
 }

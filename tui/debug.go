@@ -249,6 +249,18 @@ func DebugLogSSH(format string, args ...interface{}) {
 	}
 }
 
+// LogLogix adds a Logix-related message to the debug log.
+func (t *DebugTab) LogLogix(format string, args ...interface{}) {
+	t.Log("[#FFA500]Logix:[-] "+format, args...)
+}
+
+// DebugLogLogix logs a Logix message to the debug tab if it exists.
+func DebugLogLogix(format string, args ...interface{}) {
+	if debugLogger != nil {
+		debugLogger.LogLogix(format, args...)
+	}
+}
+
 // SetDebugFileLogger sets a file logger for the global debug logger.
 func SetDebugFileLogger(logger *logging.FileLogger) {
 	if debugLogger != nil {

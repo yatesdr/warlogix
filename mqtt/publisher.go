@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -905,7 +906,7 @@ func (m *Manager) Get(name string) *Publisher {
 	return m.publishers[name]
 }
 
-// List returns all publishers.
+// List returns all publishers sorted by name for consistent display order.
 func (m *Manager) List() []*Publisher {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -914,6 +915,12 @@ func (m *Manager) List() []*Publisher {
 	for _, pub := range m.publishers {
 		result = append(result, pub)
 	}
+
+	// Sort by name for consistent ordering
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name() < result[j].Name()
+	})
+
 	return result
 }
 

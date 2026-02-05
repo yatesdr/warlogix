@@ -15,6 +15,7 @@ import (
 	"warlogix/config"
 	"warlogix/kafka"
 	"warlogix/logging"
+	"warlogix/logix"
 	"warlogix/mqtt"
 	"warlogix/plcman"
 	"warlogix/ssh"
@@ -45,6 +46,13 @@ type tuiKafkaDebugLogger struct{}
 
 func (t tuiKafkaDebugLogger) LogKafka(format string, args ...interface{}) {
 	tui.DebugLogKafka(format, args...)
+}
+
+// tuiLogixDebugLogger adapts the TUI debug logging for Logix.
+type tuiLogixDebugLogger struct{}
+
+func (t tuiLogixDebugLogger) LogLogix(format string, args ...interface{}) {
+	tui.DebugLogLogix(format, args...)
 }
 
 // Command line flags
@@ -164,6 +172,7 @@ func runLocalMode(cfg *config.Config) {
 	mqtt.SetDebugLogger(tuiDebugLogger{})
 	valkey.SetDebugLogger(tuiValkeyDebugLogger{})
 	kafka.SetDebugLogger(tuiKafkaDebugLogger{})
+	logix.SetDebugLogger(tuiLogixDebugLogger{})
 
 	// Set up Valkey on-connect callback
 	valkeyMgr.SetOnConnectCallback(func() {
@@ -312,6 +321,7 @@ func runDaemonMode(cfg *config.Config) {
 	mqtt.SetDebugLogger(tuiDebugLogger{})
 	valkey.SetDebugLogger(tuiValkeyDebugLogger{})
 	kafka.SetDebugLogger(tuiKafkaDebugLogger{})
+	logix.SetDebugLogger(tuiLogixDebugLogger{})
 
 	// Set up Valkey on-connect callback
 	valkeyMgr.SetOnConnectCallback(func() {

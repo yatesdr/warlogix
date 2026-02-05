@@ -1,0 +1,794 @@
+package logix
+
+import (
+	"encoding/binary"
+	"fmt"
+	"strings"
+
+	"warlogix/cip"
+)
+
+// Template represents a UDT/AOI structure definition from the PLC.
+type Template struct {
+	ID          uint16           // Template instance ID
+	Name        string           // Structure name (e.g., "MyUDT")
+	Size        uint32           // Size in bytes of structure instances
+	Members     []TemplateMember // Member definitions
+	MemberMap   map[string]int   // Map of member name to index in Members slice
+	RawHandle   uint16           // Structure handle from PLC
+	MemberCount uint16           // Number of members
+}
+
+// TemplateMember represents a single member within a UDT.
+type TemplateMember struct {
+	Name      string // Member name
+	Type      uint16 // Type code (can be nested struct if 0x8xxx)
+	Offset    uint32 // Byte offset within structure
+	ArrayDims []int  // Array dimensions (nil for scalar)
+	BitOffset uint8  // Bit offset for BOOL members within a byte
+	Hidden    bool   // True if this is a hidden/internal member
+}
+
+// IsStructure returns true if this member is a nested structure/UDT.
+func (m *TemplateMember) IsStructure() bool {
+	return IsStructure(m.Type)
+}
+
+// IsArray returns true if this member is an array.
+func (m *TemplateMember) IsArray() bool {
+	return len(m.ArrayDims) > 0
+}
+
+// ElementCount returns the total number of elements (1 for scalar).
+func (m *TemplateMember) ElementCount() int {
+	if len(m.ArrayDims) == 0 {
+		return 1
+	}
+	count := 1
+	for _, d := range m.ArrayDims {
+		count *= d
+	}
+	return count
+}
+
+// GetMember returns a member by name, or nil if not found.
+func (t *Template) GetMember(name string) *TemplateMember {
+	if t.MemberMap == nil {
+		return nil
+	}
+	if idx, ok := t.MemberMap[name]; ok {
+		return &t.Members[idx]
+	}
+	return nil
+}
+
+// templateAttributes holds the attributes fetched from the Template Object.
+type templateAttributes struct {
+	ObjectDefinitionSize uint32 // Attribute 4: size of definition in 32-bit words
+	StructureSize        uint32 // Attribute 5: size of structure instances in bytes (pycomm3) or attr 3 (pylogix)
+	MemberCount          uint16 // Attribute 2: number of members
+	StructureHandle      uint16 // Attribute 1: handle/identifier
+}
+
+// GetTemplate fetches and parses a UDT template from the PLC.
+// The templateID is extracted from a structure type code (lower 12 bits).
+// This follows the pylogix/pycomm3 approach:
+// 1. Get template attributes using Get Attribute List (0x03)
+// 2. Read template definition using Read Tag (0x4C) with offset/length
+func (p *PLC) GetTemplate(templateID uint16) (*Template, error) {
+	if templateID == 0 {
+		return nil, fmt.Errorf("invalid template ID 0")
+	}
+
+	debugLog("GetTemplate: fetching template ID %d (0x%04X)", templateID, templateID)
+
+	// Step 1: Get template attributes to know how much data to read
+	attrs, err := p.getTemplateAttributes(templateID)
+	if err != nil {
+		debugLog("GetTemplate: failed to get attributes for template %d: %v", templateID, err)
+		return nil, fmt.Errorf("failed to get template attributes: %w", err)
+	}
+
+	debugLog("GetTemplate: attributes - defSize=%d, structSize=%d, memberCount=%d, handle=0x%04X",
+		attrs.ObjectDefinitionSize, attrs.StructureSize, attrs.MemberCount, attrs.StructureHandle)
+
+	// Step 2: Read the template definition data
+	// Calculate bytes to read: (object_definition_size * 4) - 23, rounded up to 4-byte boundary
+	bytesToRead := (attrs.ObjectDefinitionSize * 4) - 23
+	// Round up to 4-byte boundary
+	bytesToRead = ((bytesToRead + 3) / 4) * 4
+
+	defData, err := p.readTemplateData(templateID, bytesToRead)
+	if err != nil {
+		debugLog("GetTemplate: failed to read definition for template %d: %v", templateID, err)
+		return nil, fmt.Errorf("failed to read template definition: %w", err)
+	}
+	debugLog("GetTemplate: got %d bytes of definition data for template %d", len(defData), templateID)
+
+	// Debug: show first 64 bytes of template data
+	showLen := len(defData)
+	if showLen > 64 {
+		showLen = 64
+	}
+	debugLog("GetTemplate: first %d bytes of definition: % X", showLen, defData[:showLen])
+
+	// Step 3: Parse the template definition
+	tmpl := &Template{
+		ID:          templateID,
+		Size:        attrs.StructureSize,
+		MemberCount: attrs.MemberCount,
+		RawHandle:   attrs.StructureHandle,
+		MemberMap:   make(map[string]int),
+	}
+
+	if err := tmpl.parseDefinition(defData, int(attrs.MemberCount)); err != nil {
+		debugLog("GetTemplate: failed to parse definition for template %d: %v", templateID, err)
+		return nil, fmt.Errorf("failed to parse template definition: %w", err)
+	}
+
+	// Calculate member offsets using a size lookup that can query nested UDT sizes
+	sizeLookup := func(typeCode uint16) uint32 {
+		if !IsStructure(typeCode) {
+			return uint32(TypeSize(typeCode & 0x0FFF))
+		}
+		// Query nested structure size from PLC
+		size, err := p.GetTemplateSize(typeCode)
+		if err != nil {
+			debugLog("GetTemplate: failed to get size for nested type 0x%04X: %v", typeCode, err)
+			return 0
+		}
+		return size
+	}
+	tmpl.calculateOffsetsWithSizes(sizeLookup)
+
+	debugLog("GetTemplate: parsed template %d %q with %d visible members", templateID, tmpl.Name, len(tmpl.MemberMap))
+	return tmpl, nil
+}
+
+// getTemplateAttributes fetches template attributes using Get Attribute List (0x03).
+// This follows the pylogix approach: request attributes [0x04, 0x03, 0x02, 0x01].
+func (p *PLC) getTemplateAttributes(templateID uint16) (*templateAttributes, error) {
+	// Build path to Template Object (class 0x6C), specific instance
+	var builder *cip.PathBuilder
+	builder = cip.EPath().Class(0x6C)
+	if templateID <= 0xFF {
+		builder = builder.Instance(byte(templateID))
+	} else {
+		builder = builder.Instance16(templateID)
+	}
+	path, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build Get Attribute List request
+	// Service: 0x03 (Get Attribute List)
+	// Attribute list: [count=5][attr5][attr4][attr3][attr2][attr1]
+	// pycomm3 uses attribute 5 for structure size (UDINT, 4 bytes)
+	// pylogix uses attribute 3 (UINT, 2 bytes) as fallback
+	attrData := []byte{
+		0x05, 0x00, // Attribute count = 5
+		0x05, 0x00, // Attribute 5: Structure size in bytes (UDINT, pycomm3)
+		0x04, 0x00, // Attribute 4: Object definition size (in 32-bit words)
+		0x03, 0x00, // Attribute 3: Member byte count (UINT, fallback)
+		0x02, 0x00, // Attribute 2: Member count
+		0x01, 0x00, // Attribute 1: Structure handle
+	}
+
+	reqData := make([]byte, 0, 2+len(path)+len(attrData))
+	reqData = append(reqData, 0x03) // Get Attribute List service
+	reqData = append(reqData, path.WordLen())
+	reqData = append(reqData, path...)
+	reqData = append(reqData, attrData...)
+
+	cipResp, err := p.sendCipRequest(reqData)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse response
+	if len(cipResp) < 4 {
+		return nil, fmt.Errorf("response too short: %d bytes", len(cipResp))
+	}
+
+	replyService := cipResp[0]
+	status := cipResp[2]
+	addlStatusSize := cipResp[3]
+
+	// Verify it's a reply to Get Attribute List (0x03 | 0x80 = 0x83)
+	if replyService != 0x83 {
+		return nil, fmt.Errorf("unexpected reply service: 0x%02X", replyService)
+	}
+
+	if status != StatusSuccess {
+		return nil, parseCipError(status, addlStatusSize, cipResp[4:])
+	}
+
+	// Parse attribute values from response
+	// Response format: [attr_count:2] followed by [attr_id:2][status:2][value:n] for each
+	dataStart := 4 + int(addlStatusSize)*2
+	if len(cipResp) < dataStart+2 {
+		return nil, fmt.Errorf("response missing attribute data")
+	}
+
+	data := cipResp[dataStart:]
+	if len(data) < 2 {
+		return nil, fmt.Errorf("response data too short")
+	}
+
+	// Debug: show raw attribute response data
+	debugLog("getTemplateAttributes: raw response (%d bytes): % X", len(data), data)
+
+	attrCount := binary.LittleEndian.Uint16(data[0:2])
+	debugLog("getTemplateAttributes: got %d attributes in response", attrCount)
+
+	attrs := &templateAttributes{}
+	offset := 2
+
+	for i := 0; i < int(attrCount) && offset+4 <= len(data); i++ {
+		attrID := binary.LittleEndian.Uint16(data[offset : offset+2])
+		attrStatus := binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+		offset += 4
+
+		if attrStatus != 0 {
+			debugLog("getTemplateAttributes: attribute %d has error status 0x%04X", attrID, attrStatus)
+			// Still need to skip the value bytes - but we don't know the size
+			// For safety, try to continue based on expected attribute sizes
+			switch attrID {
+			case 1, 2, 3: // UINT attributes (2 bytes)
+				offset += 2
+			case 4, 5: // UDINT attributes (4 bytes)
+				offset += 4
+			default:
+				offset += 2 // Default to UINT
+			}
+			continue
+		}
+
+		// Parse attribute value based on ID
+		// Template Object attribute sizes:
+		// - Attribute 1: Structure handle (UINT, 2 bytes)
+		// - Attribute 2: Member count (UINT, 2 bytes)
+		// - Attribute 3: Member byte count (UINT, 2 bytes) - NOT structure size
+		// - Attribute 4: Object definition size (UDINT, 4 bytes)
+		// - Attribute 5: Structure size (UDINT, 4 bytes)
+		switch attrID {
+		case 1: // Structure handle (UINT, 2 bytes)
+			if offset+2 <= len(data) {
+				attrs.StructureHandle = binary.LittleEndian.Uint16(data[offset : offset+2])
+				offset += 2
+			}
+		case 2: // Member count (UINT, 2 bytes)
+			if offset+2 <= len(data) {
+				attrs.MemberCount = binary.LittleEndian.Uint16(data[offset : offset+2])
+				offset += 2
+			}
+		case 3: // Member byte count (UINT, 2 bytes) - use as structure size fallback
+			if offset+2 <= len(data) {
+				// This is NOT the structure size, but we can use it as fallback
+				val := binary.LittleEndian.Uint16(data[offset : offset+2])
+				if attrs.StructureSize == 0 {
+					attrs.StructureSize = uint32(val)
+				}
+				offset += 2
+			}
+		case 4: // Object definition size (UDINT, 4 bytes)
+			if offset+4 <= len(data) {
+				attrs.ObjectDefinitionSize = binary.LittleEndian.Uint32(data[offset : offset+4])
+				offset += 4
+			}
+		case 5: // Structure size (UDINT, 4 bytes)
+			if offset+4 <= len(data) {
+				attrs.StructureSize = binary.LittleEndian.Uint32(data[offset : offset+4])
+				offset += 4
+			}
+		default:
+			debugLog("getTemplateAttributes: unknown attribute %d", attrID)
+			// Skip unknown attributes - assume UINT (2 bytes) as safer default
+			offset += 2
+		}
+	}
+
+	if attrs.ObjectDefinitionSize == 0 {
+		return nil, fmt.Errorf("failed to get object definition size")
+	}
+
+	return attrs, nil
+}
+
+// readTemplateData reads the raw template definition bytes using Read Tag (0x4C).
+// Uses the pylogix format: request_data = pack("<IH", offset, bytes_to_read)
+func (p *PLC) readTemplateData(templateID uint16, totalBytes uint32) ([]byte, error) {
+	// Build path to Template Object (class 0x6C), specific instance
+	var builder *cip.PathBuilder
+	builder = cip.EPath().Class(0x6C)
+	if templateID <= 0xFF {
+		builder = builder.Instance(byte(templateID))
+	} else {
+		builder = builder.Instance16(templateID)
+	}
+	path, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+
+	var allData []byte
+	offset := uint32(0)
+
+	for offset < totalBytes {
+		remaining := totalBytes - offset
+
+		// Build Read Tag request with offset and length
+		// pylogix format: pack("<IH", offset, remaining)
+		// offset: 4 bytes (DINT)
+		// remaining: 2 bytes (UINT) - but we may need to limit chunk size
+		chunkSize := remaining
+		if chunkSize > 4000 {
+			chunkSize = 4000
+		}
+
+		reqPayload := make([]byte, 6)
+		binary.LittleEndian.PutUint32(reqPayload[0:4], offset)
+		binary.LittleEndian.PutUint16(reqPayload[4:6], uint16(chunkSize))
+
+		reqData := make([]byte, 0, 2+len(path)+len(reqPayload))
+		reqData = append(reqData, SvcReadTag) // 0x4C
+		reqData = append(reqData, path.WordLen())
+		reqData = append(reqData, path...)
+		reqData = append(reqData, reqPayload...)
+
+		cipResp, err := p.sendCipRequest(reqData)
+		if err != nil {
+			if len(allData) > 0 {
+				debugLog("readTemplateData: error after %d bytes: %v", len(allData), err)
+				break
+			}
+			return nil, err
+		}
+
+		if len(cipResp) < 4 {
+			if len(allData) > 0 {
+				break
+			}
+			return nil, fmt.Errorf("response too short: %d bytes", len(cipResp))
+		}
+
+		replyService := cipResp[0]
+		status := cipResp[2]
+		addlStatusSize := cipResp[3]
+
+		// Verify it's a reply to Read Tag (0x4C | 0x80 = 0xCC)
+		if replyService != 0xCC {
+			return nil, fmt.Errorf("unexpected reply service: 0x%02X", replyService)
+		}
+
+		// Status 0x06 = partial transfer, continue reading
+		if status != StatusSuccess && status != StatusPartialTransfer {
+			if len(allData) > 0 {
+				debugLog("readTemplateData: error after %d bytes: %v", len(allData), parseCipError(status, addlStatusSize, cipResp[4:]))
+				break
+			}
+			return nil, parseCipError(status, addlStatusSize, cipResp[4:])
+		}
+
+		dataStart := 4 + int(addlStatusSize)*2
+		if dataStart >= len(cipResp) {
+			break
+		}
+
+		chunkData := cipResp[dataStart:]
+
+		// Note: Template definition data does NOT have a type code prefix
+		// unlike regular Read Tag responses. The data starts directly with
+		// member definitions.
+
+		allData = append(allData, chunkData...)
+		offset += uint32(len(chunkData))
+
+		debugLog("readTemplateData: read %d bytes at offset %d, total %d/%d, status=0x%02X",
+			len(chunkData), offset-uint32(len(chunkData)), len(allData), totalBytes, status)
+
+		// If success (not partial), we're done
+		if status == StatusSuccess {
+			break
+		}
+	}
+
+	if len(allData) == 0 {
+		return nil, fmt.Errorf("no definition data received")
+	}
+
+	return allData, nil
+}
+
+// parseDefinition parses the raw template definition bytes.
+// Format (per pylogix):
+// - Member definitions: memberCount * 8 bytes each
+// - String table: null-terminated strings (template name, then member names)
+func (t *Template) parseDefinition(data []byte, memberCount int) error {
+	if memberCount <= 0 {
+		return fmt.Errorf("invalid member count: %d", memberCount)
+	}
+
+	memberInfoSize := 8
+	expectedInfoBytes := memberCount * memberInfoSize
+
+	if len(data) < expectedInfoBytes {
+		debugLog("parseDefinition: data too short for %d members (need %d bytes, have %d)",
+			memberCount, expectedInfoBytes, len(data))
+		// Adjust member count to fit available data
+		memberCount = len(data) / memberInfoSize
+		if memberCount == 0 {
+			return fmt.Errorf("data too short: %d bytes", len(data))
+		}
+		expectedInfoBytes = memberCount * memberInfoSize
+	}
+
+	debugLog("parseDefinition: parsing %d members from %d bytes", memberCount, len(data))
+
+	// Parse member info entries
+	members := make([]TemplateMember, 0, memberCount)
+	for i := 0; i < memberCount; i++ {
+		idx := i * memberInfoSize
+		if idx+8 > len(data) {
+			break
+		}
+
+		entry := data[idx : idx+8]
+
+		// Parse member entry (per pylogix format):
+		// Bytes 0-1: Array size (UINT) - number of elements if array
+		// Bytes 2-3: Type code (UINT) - lower 12 bits = type, bit 13-14 = array flag, bit 15 = struct flag
+		// Bytes 4-7: Additional info (varies by PLC - not reliable as offset)
+		arraySize := binary.LittleEndian.Uint16(entry[0:2])
+		typeVal := binary.LittleEndian.Uint16(entry[2:4])
+
+		// Extract type info from typeVal
+		dataTypeValue := typeVal & 0x0FFF   // Lower 12 bits (base type)
+		isArray := (typeVal & 0x6000) >> 13 // Bits 13-14
+
+		member := TemplateMember{
+			Type:   typeVal, // Keep full type value for IsStructure() check
+			Offset: 0,       // Will be calculated by calculateOffsets()
+		}
+
+		// Set array dimensions if this is an array
+		if isArray > 0 && arraySize > 0 {
+			member.ArrayDims = []int{int(arraySize)}
+		}
+
+		// Log member details for debugging (show raw bytes for first few)
+		if i < 5 {
+			debugLog("  Member %d: raw=% X -> arraySize=%d typeVal=0x%04X",
+				i, entry, arraySize, typeVal)
+		}
+
+		// Check for hidden/internal members (type 0)
+		if dataTypeValue == 0 {
+			member.Hidden = true
+		}
+
+		members = append(members, member)
+	}
+
+	debugLog("parseDefinition: parsed %d member info entries", len(members))
+
+	// Parse member names from the string table
+	// String table starts after member definitions
+	nameDataStart := len(members) * memberInfoSize
+	if nameDataStart < len(data) {
+		nameData := data[nameDataStart:]
+		debugLog("parseDefinition: parsing names from %d bytes at offset %d", len(nameData), nameDataStart)
+		// Show first 128 bytes of string table for debugging
+		showLen := len(nameData)
+		if showLen > 128 {
+			showLen = 128
+		}
+		debugLog("parseDefinition: string table first %d bytes: % X", showLen, nameData[:showLen])
+
+		names := parseNullTerminatedStrings(nameData, len(members)+1) // +1 for template name
+		if len(names) > 0 {
+			debugLog("parseDefinition: found %d names, first: %q", len(names), names[0])
+		}
+
+		// First name is the template name (may contain semicolon-separated parts)
+		if len(names) > 0 {
+			// Template name may be in format "Name;extra;info"
+			// Extract just the name part before any semicolon
+			templateName := names[0]
+			if idx := strings.Index(templateName, ";"); idx >= 0 {
+				templateName = templateName[:idx]
+			}
+			t.Name = templateName
+			debugLog("parseDefinition: template name extracted: %q (full: %q)", templateName, names[0])
+		}
+
+		// Assign names to members
+		for i := 0; i < len(members) && i+1 < len(names); i++ {
+			members[i].Name = names[i+1]
+			// Mark members as hidden if:
+			// - Name starts with double underscore (pylogix convention)
+			// - Name starts with colon (internal member)
+			// - Name is empty or has control characters
+			if len(members[i].Name) > 0 {
+				name := members[i].Name
+				if strings.HasPrefix(name, "__") || strings.HasPrefix(name, ":") || name[0] < 32 {
+					members[i].Hidden = true
+				}
+			}
+			// Log first 10 member names for debugging
+			if i < 10 {
+				debugLog("  Assigned member %d: name=%q offset=%d type=0x%04X",
+					i, members[i].Name, members[i].Offset, members[i].Type)
+			}
+		}
+		if len(members) > 10 {
+			debugLog("  ... and %d more members", len(members)-10)
+		}
+	}
+
+	// Build member map for quick lookup (only visible members)
+	t.Members = members
+	for i, m := range members {
+		if m.Name != "" && !m.Hidden {
+			t.MemberMap[m.Name] = i
+		}
+	}
+
+	// Note: Offsets will be calculated by calculateOffsetsWithSizes() after template is cached
+	// This allows looking up nested UDT sizes from the cache
+	debugLog("parseDefinition: template %q has %d visible members", t.Name, len(t.MemberMap))
+
+	debugLog("parseDefinition: template %q has %d visible members", t.Name, len(t.MemberMap))
+	return nil
+}
+
+// calculateOffsetsWithSizes calculates proper byte offsets using a size lookup function.
+// The sizeLookup function returns the size in bytes for a given type code.
+// This allows proper handling of nested UDT sizes.
+func (t *Template) calculateOffsetsWithSizes(sizeLookup func(uint16) uint32) {
+	if len(t.Members) == 0 {
+		return
+	}
+
+	var offset uint32 = 0
+	var boolBitPosition uint8 = 0
+	var inBoolHost bool = false
+
+	for i := range t.Members {
+		member := &t.Members[i]
+		baseType := member.Type & 0x0FFF
+		isStruct := (member.Type & 0x8000) != 0
+
+		var memberSize uint32
+		var alignment uint32
+
+		if isStruct {
+			// Get actual nested structure size
+			memberSize = sizeLookup(member.Type)
+			if memberSize == 0 {
+				memberSize = 4 // Fallback if lookup fails
+			}
+			alignment = 4 // Structures are 4-byte aligned
+		} else {
+			switch baseType {
+			case TypeBOOL:
+				if !inBoolHost || boolBitPosition >= 32 {
+					offset = alignTo(offset, 4)
+					inBoolHost = true
+					boolBitPosition = 0
+				}
+				member.Offset = offset
+				member.BitOffset = boolBitPosition
+				boolBitPosition++
+				continue
+
+			case TypeSINT, TypeUSINT:
+				alignment, memberSize = 1, 1
+			case TypeINT, TypeUINT:
+				alignment, memberSize = 2, 2
+			case TypeDINT, TypeUDINT, TypeREAL:
+				alignment, memberSize = 4, 4
+			case TypeLINT, TypeULINT, TypeLREAL:
+				alignment, memberSize = 8, 8
+			case TypeSTRING:
+				alignment, memberSize = 4, 88
+			case TypeShortSTRING:
+				alignment, memberSize = 1, 1
+			default:
+				alignment, memberSize = 4, 4
+			}
+		}
+
+		if baseType != TypeBOOL {
+			if inBoolHost {
+				offset += 4
+				inBoolHost = false
+				boolBitPosition = 0
+			}
+			offset = alignTo(offset, alignment)
+		}
+
+		member.Offset = offset
+
+		if member.IsArray() {
+			memberSize *= uint32(member.ElementCount())
+		}
+
+		offset += memberSize
+	}
+
+	// Log calculated offsets
+	debugLog("calculateOffsetsWithSizes: %s final offset=%d (template size=%d)", t.Name, offset, t.Size)
+	for i := 0; i < len(t.Members) && i < 20; i++ {
+		m := t.Members[i]
+		arrInfo := ""
+		if m.IsArray() {
+			arrInfo = fmt.Sprintf(" [%d elements]", m.ElementCount())
+		}
+		debugLog("  Member %d %q: offset=%d, type=0x%04X%s", i, m.Name, m.Offset, m.Type, arrInfo)
+	}
+	if len(t.Members) > 20 {
+		debugLog("  ... and %d more members", len(t.Members)-20)
+	}
+}
+
+// calculateOffsets calculates proper byte offsets for all members based on their types.
+// This is necessary because the template data from the PLC may not contain usable byte offsets.
+// Uses Logix alignment rules: types are aligned to their natural size, BOOLs are packed into DINT hosts.
+func (t *Template) calculateOffsets() {
+	if len(t.Members) == 0 {
+		return
+	}
+
+	var offset uint32 = 0
+	var boolBitPosition uint8 = 0  // Bit position within current BOOL host
+	var inBoolHost bool = false     // Are we currently in a BOOL packing region?
+
+	for i := range t.Members {
+		member := &t.Members[i]
+		baseType := member.Type & 0x0FFF
+		isStruct := (member.Type & 0x8000) != 0
+
+		// Get member size and alignment
+		var memberSize uint32
+		var alignment uint32
+
+		if isStruct {
+			// Nested structures - assume 4-byte alignment, size unknown
+			// For nested UDTs, we'd need to fetch their template too
+			alignment = 4
+			memberSize = 4 // Placeholder - actual size depends on nested template
+		} else {
+			switch baseType {
+			case TypeBOOL:
+				// BOOLs are packed into DINT hosts (32 bits each)
+				// They don't have their own byte offset, they share the host's offset
+				if !inBoolHost || boolBitPosition >= 32 {
+					// Start new BOOL host - align to 4 bytes
+					offset = alignTo(offset, 4)
+					inBoolHost = true
+					boolBitPosition = 0
+				}
+				member.Offset = offset
+				member.BitOffset = boolBitPosition
+				boolBitPosition++
+				continue // Don't advance offset for packed BOOLs
+
+			case TypeSINT, TypeUSINT:
+				alignment = 1
+				memberSize = 1
+			case TypeINT, TypeUINT:
+				alignment = 2
+				memberSize = 2
+			case TypeDINT, TypeUDINT, TypeREAL:
+				alignment = 4
+				memberSize = 4
+			case TypeLINT, TypeULINT, TypeLREAL:
+				alignment = 8
+				memberSize = 8
+			case TypeSTRING:
+				// Logix STRING: 4-byte length + 82 chars + 2 padding = 88 bytes, 4-byte aligned
+				alignment = 4
+				memberSize = 88
+			case TypeShortSTRING:
+				// Short string: 1-byte length + data
+				alignment = 1
+				memberSize = 1 // Variable, but minimum 1
+			default:
+				// Unknown type - assume 4-byte aligned, 4-byte size
+				alignment = 4
+				memberSize = 4
+			}
+		}
+
+		// Non-BOOL member ends any BOOL packing region
+		if baseType != TypeBOOL {
+			if inBoolHost {
+				// Close the BOOL host - advance past it (4 bytes for DINT)
+				offset += 4
+				inBoolHost = false
+				boolBitPosition = 0
+			}
+
+			// Align offset
+			offset = alignTo(offset, alignment)
+		}
+
+		member.Offset = offset
+
+		// Handle arrays
+		if member.IsArray() {
+			memberSize *= uint32(member.ElementCount())
+		}
+
+		offset += memberSize
+	}
+
+	// Log calculated offsets for first few members
+	for i := 0; i < len(t.Members) && i < 10; i++ {
+		m := t.Members[i]
+		if m.Type&0x0FFF == TypeBOOL {
+			debugLog("  Calculated member %d %q: offset=%d, bitOffset=%d, type=0x%04X",
+				i, m.Name, m.Offset, m.BitOffset, m.Type)
+		} else {
+			debugLog("  Calculated member %d %q: offset=%d, type=0x%04X",
+				i, m.Name, m.Offset, m.Type)
+		}
+	}
+	if len(t.Members) > 10 {
+		debugLog("  ... and %d more members with calculated offsets", len(t.Members)-10)
+	}
+}
+
+// alignTo rounds offset up to the next multiple of alignment.
+func alignTo(offset, alignment uint32) uint32 {
+	if alignment == 0 {
+		return offset
+	}
+	return (offset + alignment - 1) &^ (alignment - 1)
+}
+
+// parseNullTerminatedStrings parses null-terminated strings from a byte slice.
+func parseNullTerminatedStrings(data []byte, maxCount int) []string {
+	var result []string
+	var current []byte
+
+	for _, b := range data {
+		if b == 0 {
+			if len(current) > 0 {
+				result = append(result, string(current))
+				current = nil
+				if len(result) >= maxCount {
+					break
+				}
+			}
+		} else if b >= 32 && b < 127 { // Printable ASCII
+			current = append(current, b)
+		}
+	}
+
+	// Don't forget the last string if no null terminator
+	if len(current) > 0 && len(result) < maxCount {
+		result = append(result, string(current))
+	}
+
+	return result
+}
+
+// String returns a human-readable representation of the template.
+func (t *Template) String() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Template %q (ID: %d, Size: %d bytes)\n", t.Name, t.ID, t.Size))
+	for _, m := range t.Members {
+		if m.Hidden {
+			continue
+		}
+		typeStr := TypeName(m.Type)
+		if m.IsArray() {
+			typeStr += fmt.Sprintf("[%d]", m.ArrayDims[0])
+		}
+		sb.WriteString(fmt.Sprintf("  +%04X: %s %s\n", m.Offset, m.Name, typeStr))
+	}
+	return sb.String()
+}

@@ -201,20 +201,139 @@ func (p *PLC) GetTemplateSize(typeCode uint16) (uint32, error) {
 	}
 
 	// Template instance ID is in bits 11-0 of the type code
-	templateID := uint32(typeCode & 0x0FFF)
+	templateID := uint16(typeCode & 0x0FFF)
 	if templateID == 0 {
 		return 0, fmt.Errorf("invalid template ID 0")
 	}
 
-	return p.getTemplateAttribute(templateID, 4) // Attribute 4 = template size in bytes
+	// Use getTemplateAttributeList which uses Get Attribute List service (0x03)
+	// This works on PLCs that don't support Get Attribute Single (0x0E)
+	return p.getTemplateStructureSize(templateID)
 }
 
-// getTemplateAttribute fetches an attribute from a Template Object instance.
+// getTemplateStructureSize fetches the structure size using Get Attribute List (0x03).
+// This is more compatible than Get Attribute Single (0x0E) which some PLCs don't support.
+func (p *PLC) getTemplateStructureSize(templateID uint16) (uint32, error) {
+	// Build path to Template Object (class 0x6C), specific instance
+	builder := cip.EPath().Class(0x6C)
+	if templateID <= 0xFF {
+		builder = builder.Instance(byte(templateID))
+	} else {
+		builder = builder.Instance16(templateID)
+	}
+	path, err := builder.Build()
+	if err != nil {
+		return 0, err
+	}
+
+	// Request attribute 5 (structure size, UDINT) using Get Attribute List
+	attrData := []byte{
+		0x01, 0x00, // Attribute count = 1
+		0x05, 0x00, // Attribute 5: Structure size in bytes (UDINT)
+	}
+
+	reqData := make([]byte, 0, 2+len(path)+len(attrData))
+	reqData = append(reqData, 0x03) // Get Attribute List service
+	reqData = append(reqData, path.WordLen())
+	reqData = append(reqData, path...)
+	reqData = append(reqData, attrData...)
+
+	cipResp, err := p.sendCipRequest(reqData)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(cipResp) < 4 {
+		return 0, fmt.Errorf("response too short: %d bytes", len(cipResp))
+	}
+
+	replyService := cipResp[0]
+	status := cipResp[2]
+	addlStatusSize := cipResp[3]
+
+	if replyService != 0x83 {
+		return 0, fmt.Errorf("unexpected reply service: 0x%02X", replyService)
+	}
+
+	if status != StatusSuccess {
+		return 0, parseCipError(status, addlStatusSize, cipResp[4:])
+	}
+
+	// Parse response: [attr_count:2] [attr_id:2] [status:2] [value:4]
+	dataStart := 4 + int(addlStatusSize)*2
+	if len(cipResp) < dataStart+10 {
+		return 0, fmt.Errorf("response too short for attribute data")
+	}
+
+	data := cipResp[dataStart:]
+	// Skip attr_count (2), attr_id (2), status (2) = 6 bytes to get to value
+	if len(data) < 10 {
+		return 0, fmt.Errorf("insufficient attribute data")
+	}
+
+	attrStatus := binary.LittleEndian.Uint16(data[4:6])
+	if attrStatus != 0 {
+		return 0, fmt.Errorf("attribute error status: 0x%04X", attrStatus)
+	}
+
+	size := binary.LittleEndian.Uint32(data[6:10])
+	return size, nil
+}
+
+// getTemplateAttributeUINT fetches a UINT (2-byte) attribute from a Template Object instance.
+func (p *PLC) getTemplateAttributeUINT(templateID uint32, attrID byte) (uint32, error) {
+	// Build path to Template Object (class 0x6C), specific instance
+	builder := cip.EPath().Class(0x6C)
+	if templateID <= 0xFF {
+		builder = builder.Instance(byte(templateID))
+	} else if templateID <= 0xFFFF {
+		builder = builder.Instance16(uint16(templateID))
+	} else {
+		builder = builder.Instance32(templateID)
+	}
+	path, err := builder.Attribute(attrID).Build()
+	if err != nil {
+		return 0, err
+	}
+
+	// Build Get Attribute Single request
+	reqData := make([]byte, 0, 2+len(path))
+	reqData = append(reqData, SvcGetAttributeSingle)
+	reqData = append(reqData, path.WordLen())
+	reqData = append(reqData, path...)
+
+	cipResp, err := p.sendCipRequest(reqData)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(cipResp) < 4 {
+		return 0, fmt.Errorf("response too short")
+	}
+
+	status := cipResp[2]
+	addlStatusSize := cipResp[3]
+
+	if status != StatusSuccess {
+		return 0, parseCipError(status, addlStatusSize, cipResp[4:])
+	}
+
+	// Parse the attribute value (UINT - 2 bytes)
+	dataStart := 4 + int(addlStatusSize)*2
+	if len(cipResp) < dataStart+2 {
+		return 0, fmt.Errorf("insufficient data for attribute")
+	}
+
+	value := binary.LittleEndian.Uint16(cipResp[dataStart : dataStart+2])
+	return uint32(value), nil
+}
+
+// getTemplateAttribute fetches a UDINT (4-byte) attribute from a Template Object instance.
 // Template Object is class 0x6C. Common attributes:
-// - 1: Member count
-// - 2: Definition size
-// - 4: Template size in bytes (what we need for reading)
-// - 5: Template name
+// - 1: Structure handle (UINT)
+// - 2: Member count (UINT)
+// - 3: Structure size in bytes (UINT)
+// - 4: Object definition size in 32-bit words (UDINT)
 func (p *PLC) getTemplateAttribute(templateID uint32, attrID byte) (uint32, error) {
 	// Build path to Template Object (class 0x6C), specific instance
 	builder := cip.EPath().Class(0x6C)

@@ -96,6 +96,13 @@ func (p *PLC) ReadTag(tagName string) (*Tag, error) {
 // ReadTagCount reads multiple elements of a tag (for arrays).
 // For large arrays that exceed packet size, automatically reads in chunks using array indexing.
 func (p *PLC) ReadTagCount(tagName string, count uint16) (*Tag, error) {
+	return p.ReadTagCountWithInstance(tagName, count, 0)
+}
+
+// ReadTagCountWithInstance reads a tag using symbolic addressing.
+// The instanceID parameter is currently unused but preserved for future compatibility.
+// For large arrays that exceed packet size, automatically reads in chunks using array indexing.
+func (p *PLC) ReadTagCountWithInstance(tagName string, count uint16, instanceID uint32) (*Tag, error) {
 	if p == nil || p.Connection == nil {
 		return nil, fmt.Errorf("ReadTag: nil plc or connection")
 	}
@@ -103,7 +110,11 @@ func (p *PLC) ReadTagCount(tagName string, count uint16) (*Tag, error) {
 		return nil, fmt.Errorf("ReadTag: empty tag name")
 	}
 
-	// Try reading all elements at once first
+	// Note: Symbol Instance Addressing (Class 0x6B) was previously attempted here but
+	// it doesn't work reliably for reading tag data. The Symbol Object class is designed
+	// for tag browsing/metadata, not data retrieval. We now use symbolic addressing only.
+
+	// Use symbolic addressing
 	tag, partialTransfer, err := p.readTagCountInternal(tagName, count)
 	if err != nil {
 		return nil, err
@@ -231,6 +242,85 @@ func (p *PLC) readTagChunked(tagName string, totalCount uint16, initialTag *Tag)
 	return &Tag{
 		Name:     tagName,
 		DataType: initialTag.DataType,
+		Bytes:    allBytes,
+	}, nil
+}
+
+// ReadTagFragmented reads a tag using the Read Tag Fragmented service (0x52).
+// This is used for large structures that exceed the packet size.
+// It reads in chunks using byte offsets and reassembles the full data.
+func (p *PLC) ReadTagFragmented(tagName string, expectedSize uint32) (*Tag, error) {
+	if p == nil || p.Connection == nil {
+		return nil, fmt.Errorf("ReadTagFragmented: nil plc or connection")
+	}
+
+	// Build the symbolic EPath for the tag name
+	path, err := cip.EPath().Symbol(tagName).Build()
+	if err != nil {
+		return nil, fmt.Errorf("ReadTagFragmented: failed to build path: %w", err)
+	}
+
+	// Calculate max chunk size based on connection
+	maxChunk := uint32(480) // Conservative default for unconnected messaging
+	if p.connSize > 0 {
+		maxChunk = uint32(p.connSize) - 100 // Leave room for protocol overhead
+	}
+
+	var allBytes []byte
+	var dataType uint16
+	offset := uint32(0)
+
+	for offset < expectedSize {
+		// Request remaining bytes, capped at max chunk
+		remaining := expectedSize - offset
+		chunkSize := remaining
+		if chunkSize > maxChunk {
+			chunkSize = maxChunk
+		}
+
+		// Build Read Tag Fragmented request:
+		// [Service 0x52] [PathSize] [Path] [ElementCount:2] [Offset:4]
+		reqData := make([]byte, 0, 2+len(path)+6)
+		reqData = append(reqData, SvcReadTagFragmented)
+		reqData = append(reqData, path.WordLen())
+		reqData = append(reqData, path...)
+		reqData = binary.LittleEndian.AppendUint16(reqData, 1) // Element count = 1
+		reqData = binary.LittleEndian.AppendUint32(reqData, offset)
+
+		cipResp, err := p.sendCipRequest(reqData)
+		if err != nil {
+			if len(allBytes) > 0 {
+				// Return what we have
+				break
+			}
+			return nil, fmt.Errorf("ReadTagFragmented: %w", err)
+		}
+
+		tag, partial, err := parseReadTagFragmentedResponse(cipResp, tagName)
+		if err != nil {
+			if len(allBytes) > 0 {
+				break
+			}
+			return nil, fmt.Errorf("ReadTagFragmented: %w", err)
+		}
+
+		// First chunk gives us the data type
+		if offset == 0 {
+			dataType = tag.DataType
+		}
+
+		allBytes = append(allBytes, tag.Bytes...)
+		offset += uint32(len(tag.Bytes))
+
+		// If no partial transfer, we're done
+		if !partial {
+			break
+		}
+	}
+
+	return &Tag{
+		Name:     tagName,
+		DataType: dataType,
 		Bytes:    allBytes,
 	}, nil
 }
@@ -525,10 +615,13 @@ func parseWriteTagResponse(data []byte) error {
 func parseCipError(status byte, addlSize byte, addlData []byte) error {
 	statusName := cipStatusName(status)
 
-	if status == StatusGeneralError && addlSize >= 1 && len(addlData) >= 2 {
+	// Check for extended status (not just for General Error)
+	if addlSize >= 1 && len(addlData) >= 2 {
 		extStatus := binary.LittleEndian.Uint16(addlData[:2])
-		extName := cipExtStatusName(extStatus)
-		return fmt.Errorf("CIP error: %s (0x%02X), extended: %s (0x%04X)", statusName, status, extName, extStatus)
+		if extStatus != 0 {
+			extName := cipExtStatusName(extStatus)
+			return fmt.Errorf("CIP error: %s (0x%02X), extended: %s (0x%04X)", statusName, status, extName, extStatus)
+		}
 	}
 
 	return fmt.Errorf("CIP error: %s (0x%02X)", statusName, status)
@@ -538,20 +631,54 @@ func cipStatusName(status byte) string {
 	switch status {
 	case StatusSuccess:
 		return "Success"
+	case 0x01:
+		return "Connection Failure"
+	case 0x02:
+		return "Resource Unavailable"
+	case 0x03:
+		return "Invalid Parameter"
 	case StatusPathSegmentError:
 		return "Path Segment Error"
 	case StatusPathUnknown:
 		return "Path Unknown"
 	case StatusPartialTransfer:
 		return "Partial Transfer"
+	case 0x07:
+		return "Connection Lost"
 	case StatusServiceNotSupport:
 		return "Service Not Supported"
+	case 0x09:
+		return "Invalid Attribute Value"
 	case StatusObjectNotExist:
 		return "Object Does Not Exist"
+	case 0x0D:
+		return "Object Already Exists"
+	case 0x0E:
+		return "Attribute Not Settable"
+	case 0x0F:
+		return "Privilege Violation"
+	case 0x10:
+		return "Device State Conflict"
+	case 0x11:
+		return "Reply Data Too Large"
+	case 0x13:
+		return "Not Enough Data"
+	case 0x14:
+		return "Attribute Not Supported"
+	case 0x15:
+		return "Too Much Data"
+	case 0x1C:
+		return "Not Enough Data Received"
+	case 0x1E:
+		return "Invalid Symbolic"
+	case 0x20:
+		return "Invalid Parameter Type"
+	case 0x26:
+		return "Invalid Path"
 	case StatusGeneralError:
 		return "General Error"
 	default:
-		return "Unknown Status"
+		return fmt.Sprintf("Status 0x%02X", status)
 	}
 }
 
@@ -569,7 +696,35 @@ func cipExtStatusName(extStatus uint16) string {
 		return "Size Too Large"
 	case ExtStatusOffsetError:
 		return "Offset Out of Range"
+	case 0x0100:
+		return "Connection In Use"
+	case 0x0103:
+		return "Transport Class Not Supported"
+	case 0x0106:
+		return "Ownership Conflict"
+	case 0x0107:
+		return "Connection Not Found"
+	case 0x0108:
+		return "Invalid Connection Type"
+	case 0x0109:
+		return "Invalid Connection Size"
+	case 0x0110:
+		return "Module Not Found"
+	case 0x0111:
+		return "Connection Request Refused"
+	case 0x0203:
+		return "Connection Timed Out"
+	case 0x0204:
+		return "Unconnected Send Timed Out"
+	case 0x0205:
+		return "Parameter Error"
+	case 0x0311:
+		return "Connection Request Failed"
+	case 0x0312:
+		return "Connection Request Rejected"
+	case 0xFF00:
+		return "Extended Link Error"
 	default:
-		return "Unknown Extended Status"
+		return fmt.Sprintf("Extended Status 0x%04X", extStatus)
 	}
 }

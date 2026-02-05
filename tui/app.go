@@ -525,6 +525,22 @@ func (a *App) QueueUpdateDraw(f func()) {
 	a.app.QueueUpdateDraw(f)
 }
 
+// ForcePublishTag publishes a single tag's current value to all services (MQTT, Valkey, Kafka).
+// This is called when a tag is newly enabled to publish its current value immediately.
+func (a *App) ForcePublishTag(plcName, tagName string) {
+	v := a.manager.GetTagValueChange(plcName, tagName)
+	if v == nil {
+		return
+	}
+
+	DebugLog("ForcePublishTag: publishing %s.%s", plcName, tagName)
+
+	// Publish to all services with force=true
+	a.mqttMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, true)
+	a.valkeyMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable)
+	a.kafkaMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable, true)
+}
+
 // ForcePublishAllValues publishes all current tag values to MQTT brokers.
 // This is called when an MQTT broker connects to do an initial sync.
 func (a *App) ForcePublishAllValues() {

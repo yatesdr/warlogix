@@ -40,6 +40,7 @@ func (v *TagValue) TypeName() string {
 }
 
 // FromLogixTagValue creates a unified TagValue from a logix.TagValue.
+// For UDT decoding with member names, use FromLogixTagValueDecoded instead.
 func FromLogixTagValue(lv *logix.TagValue) *TagValue {
 	if lv == nil {
 		return nil
@@ -49,6 +50,33 @@ func FromLogixTagValue(lv *logix.TagValue) *TagValue {
 		DataType: lv.DataType,
 		Family:   "logix",
 		Value:    lv.GoValue(),
+		Bytes:    lv.Bytes,
+		Count:    lv.Count,
+		Error:    lv.Error,
+	}
+}
+
+// FromLogixTagValueDecoded creates a unified TagValue with UDT decoding support.
+// If the tag is a structure type and client is provided, the value will be decoded
+// as a map[string]interface{} with member names as keys.
+func FromLogixTagValueDecoded(lv *logix.TagValue, client *logix.Client) *TagValue {
+	if lv == nil {
+		return nil
+	}
+
+	// Use decoded value for structures when client is available
+	var value interface{}
+	if client != nil {
+		value = lv.GoValueDecoded(client)
+	} else {
+		value = lv.GoValue()
+	}
+
+	return &TagValue{
+		Name:     lv.Name,
+		DataType: lv.DataType,
+		Family:   "logix",
+		Value:    value,
 		Bytes:    lv.Bytes,
 		Count:    lv.Count,
 		Error:    lv.Error,

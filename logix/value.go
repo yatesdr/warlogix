@@ -171,6 +171,8 @@ func (v *TagValue) String() (string, error) {
 //   - REAL, LREAL -> float64 (or []float64 for arrays)
 //   - STRING, SHORT_STRING -> string
 //   - STRUCT or unknown -> []int (byte array for JSON compatibility)
+//
+// For UDT/structure decoding with member names, use GoValueDecoded() with a Client.
 func (v *TagValue) GoValue() interface{} {
 	if v.Error != nil {
 		return nil
@@ -199,6 +201,40 @@ func (v *TagValue) GoValue() interface{} {
 
 	// Handle scalar values
 	return v.parseScalar(baseType)
+}
+
+// GoValueDecoded returns the tag value converted to a Go type, with UDT decoding support.
+// For structure types, this decodes the raw bytes using the template from the Client,
+// returning a map[string]interface{} with member names as keys.
+// For non-structure types, this behaves the same as GoValue().
+func (v *TagValue) GoValueDecoded(client *Client) interface{} {
+	if v.Error != nil {
+		return nil
+	}
+
+	// Check if this is a structure type
+	isStruct := IsStructure(v.DataType)
+	if isStruct && client != nil {
+		decoded, err := client.DecodeUDT(v.DataType, v.Bytes)
+		if err == nil {
+			debugLog("GoValueDecoded: decoded UDT %q (type 0x%04X) with %d members",
+				v.Name, v.DataType, len(decoded))
+			return decoded
+		}
+		debugLog("GoValueDecoded: failed to decode UDT %q (type 0x%04X): %v",
+			v.Name, v.DataType, err)
+		// Fall back to raw bytes on decode error
+	} else if isStruct && client == nil {
+		debugLog("GoValueDecoded: no client for UDT %q (type 0x%04X)", v.Name, v.DataType)
+	}
+
+	// For non-structures or if decoding failed, use standard conversion
+	return v.GoValue()
+}
+
+// IsStructureType returns true if this tag value is a structure/UDT type.
+func (v *TagValue) IsStructureType() bool {
+	return IsStructure(v.DataType)
 }
 
 // parseScalar parses a single Logix value based on type code.

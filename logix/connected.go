@@ -8,6 +8,25 @@ import (
 	"warlogix/eip"
 )
 
+// DebugLogger is an interface for debug logging.
+type DebugLogger interface {
+	LogLogix(format string, args ...interface{})
+}
+
+var debugLogger DebugLogger
+
+// SetDebugLogger sets the debug logger for Logix.
+func SetDebugLogger(logger DebugLogger) {
+	debugLogger = logger
+}
+
+// debugLog logs a message if a debug logger is configured.
+func debugLog(format string, args ...interface{}) {
+	if debugLogger != nil {
+		debugLogger.LogLogix(format, args...)
+	}
+}
+
 // Connection size options
 const (
 	ConnectionSizeLarge = 4002 // Large Forward Open max size
@@ -347,7 +366,13 @@ func (p *PLC) ReadMultiple(tagNames []string) ([]*Tag, error) {
 	for i, resp := range responses {
 		// Status 0x00 = success, 0x06 = partial transfer (OK for reads)
 		if resp.Status != 0x00 && resp.Status != 0x06 {
-			// Tag read failed
+			// Tag read failed - log the error for debugging
+			var extStatus uint16
+			if len(resp.ExtStatus) >= 2 {
+				extStatus = binary.LittleEndian.Uint16(resp.ExtStatus)
+			}
+			debugLog("ReadMultiple: tag %q failed with status 0x%02X (%s), extStatus 0x%04X",
+				tagNames[i], resp.Status, cipStatusName(resp.Status), extStatus)
 			tags[i] = nil
 			continue
 		}
