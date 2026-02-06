@@ -36,7 +36,15 @@ No expensive middleware. No vendor lock-in. Just a single binary that runs anywh
 
 ## Quick Start
 
-### Install
+### Download
+
+Pre-built binaries are available on the [Releases](https://github.com/yatesdr/warlogix/releases) page for Linux, macOS, and Windows.
+
+> **Note:** This project is under active development. It's recommended to use released versions rather than building from source. Check back frequently for updates and new features.
+
+### Build from Source (Optional)
+
+If you prefer to build from source:
 
 ```bash
 git clone https://github.com/yatesdr/warlogix.git
