@@ -4,7 +4,8 @@ A TUI (Text User Interface) gateway for industrial PLCs. Connect to Allen-Bradle
 
 > **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff and Omron support are works in progress.
 
-<img width="840" height="540" alt="image" src="https://github.com/user-attachments/assets/d2f8dc76-3ec6-4df4-838c-d7c19fca76dc" />
+<img width="837" height="521" alt="image" src="https://github.com/user-attachments/assets/041bc56c-bd92-4198-85ce-0050525fe3b1" />
+
 
 
 
