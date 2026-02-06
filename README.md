@@ -76,6 +76,7 @@ Press `d` to discover PLCs on your network, or `a` to add manually.
 | Tab | Key | Action |
 |-----|-----|--------|
 | Global | `Shift+Tab` | Switch tabs |
+| Global | `F6` | Cycle themes |
 | Global | `?` | Help |
 | Global | `Q` | Quit |
 | PLCs | `d/a/e/r` | Discover/Add/Edit/Remove |

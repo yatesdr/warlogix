@@ -144,6 +144,9 @@ triggers:
       station: Assembly
 
 poll_rate: 1s                         # Global default poll rate
+
+ui:
+  theme: default                       # Color theme (F6 to cycle)
 ```
 
 ## PLC Configuration
@@ -263,6 +266,36 @@ poll_rate: 1s                         # Global default poll rate
 |-------|------|-------------|
 | `operator` | string | Comparison: `==`, `!=`, `>`, `<`, `>=`, `<=` |
 | `value` | any | Value to compare against |
+
+## UI Configuration
+
+```yaml
+ui:
+  theme: default    # Theme name
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `theme` | string | Color theme name |
+
+### Available Themes
+
+| Theme | Description |
+|-------|-------------|
+| `default` | Clean white/silver/gray with green/red status (high ANSI compatibility) |
+| `retro` | Classic green phosphor CRT terminal |
+| `mono` | Blue IBM terminal aesthetic |
+| `amber` | Warm amber CRT with orange accents |
+| `highcontrast` | High contrast for accessibility |
+| `vanderbilt` | Vanderbilt University gold and black |
+| `harvard` | Harvard University crimson and gray |
+| `lsu` | LSU purple and gold |
+| `redwings` | Detroit Red Wings red and white |
+| `lions` | Detroit Lions blue and silver |
+| `spartans` | Michigan State green and white |
+| `tigers` | Detroit Tigers navy and orange |
+
+Press `F6` to cycle through themes. The selection is saved automatically.
 
 ## Duration Format
 
