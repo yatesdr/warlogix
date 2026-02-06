@@ -16,11 +16,13 @@ import (
 
 // PLCsTab handles the PLCs management tab.
 type PLCsTab struct {
-	app       *App
-	flex      *tview.Flex
-	table     *tview.Table
-	statusBar *tview.TextView
-	buttons   *tview.Flex
+	app        *App
+	flex       *tview.Flex
+	table      *tview.Table
+	tableFrame *tview.Frame
+	statusBar  *tview.TextView
+	buttons    *tview.Flex
+	buttonBar  *tview.TextView
 }
 
 // NewPLCsTab creates a new PLCs tab.
@@ -37,40 +39,42 @@ func (t *PLCsTab) setupUI() {
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0)
+	ApplyTableTheme(t.table)
 
 	t.table.SetSelectedFunc(t.onSelect)
 	t.table.SetInputCapture(t.handleKeys)
 
-	// Set up headers
+	// Set up headers (themed)
 	headers := []string{"", "Name", "Address", "Family", "Status", "Product"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
-			SetTextColor(tcell.ColorYellow).
+			SetTextColor(CurrentTheme.Accent).
 			SetSelectable(false).
 			SetAttributes(tcell.AttrBold))
 	}
 
-	// Create button bar as a single text view
-	buttonBar := tview.NewTextView().
+	// Create button bar as a single text view (themed)
+	t.buttonBar = tview.NewTextView().
 		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter).
-		SetText(" [yellow]d[white]iscover  [yellow]a[white]dd  [yellow]e[white]dit  [yellow]r[white]emove  [yellow]c[white]onnect  dis[yellow]C[white]onnect  [yellow]i[white]nfo  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab ")
-	t.buttons = tview.NewFlex().AddItem(buttonBar, 0, 1, false)
+		SetTextAlign(tview.AlignCenter)
+	t.updateButtonBar()
+	t.buttons = tview.NewFlex().AddItem(t.buttonBar, 0, 1, false)
 
 	// Create status bar
 	t.statusBar = tview.NewTextView().
-		SetDynamicColors(true)
+		SetDynamicColors(true).
+		SetTextColor(CurrentTheme.Text)
 
 	// Create frame around table
-	tableFrame := tview.NewFrame(t.table).
+	t.tableFrame = tview.NewFrame(t.table).
 		SetBorders(1, 0, 0, 0, 1, 1)
-	tableFrame.SetBorder(true).SetTitle(" PLCs ")
+	t.tableFrame.SetBorder(true).SetTitle(" PLCs ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 
 	// Assemble layout
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(t.buttons, 1, 0, false).
-		AddItem(tableFrame, 0, 1, true).
+		AddItem(t.tableFrame, 0, 1, true).
 		AddItem(t.statusBar, 1, 0, false)
 }
 
@@ -154,6 +158,37 @@ func (t *PLCsTab) GetFocusable() tview.Primitive {
 	return t.table
 }
 
+// updateButtonBar updates the button bar text with current theme colors.
+func (t *PLCsTab) updateButtonBar() {
+	th := CurrentTheme
+	buttonText := " " + th.TagHotkey + "d" + th.TagActionText + "iscover  " +
+		th.TagHotkey + "a" + th.TagActionText + "dd  " +
+		th.TagHotkey + "e" + th.TagActionText + "dit  " +
+		th.TagHotkey + "r" + th.TagActionText + "emove  " +
+		th.TagHotkey + "c" + th.TagActionText + "onnect  dis" +
+		th.TagHotkey + "C" + th.TagActionText + "onnect  " +
+		th.TagHotkey + "i" + th.TagActionText + "nfo  " +
+		th.TagActionText + "│  " +
+		th.TagHotkey + "?" + th.TagActionText + " help  " +
+		th.TagHotkey + "Shift+Tab" + th.TagActionText + " next tab "
+	t.buttonBar.SetText(buttonText)
+}
+
+// RefreshTheme updates the tab's UI elements to match the current theme.
+func (t *PLCsTab) RefreshTheme() {
+	t.updateButtonBar()
+	th := CurrentTheme
+	t.tableFrame.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.statusBar.SetTextColor(th.Text)
+	ApplyTableTheme(t.table)
+	// Update header colors
+	for i := 0; i < t.table.GetColumnCount(); i++ {
+		if cell := t.table.GetCell(0, i); cell != nil {
+			cell.SetTextColor(th.Accent)
+		}
+	}
+}
+
 // Refresh updates the display.
 func (t *PLCsTab) Refresh() {
 	// Clear existing rows (keep header)
@@ -172,17 +207,17 @@ func (t *PLCsTab) Refresh() {
 	for i, plc := range plcs {
 		row := i + 1
 
-		// Status indicator
+		// Status indicator (use CurrentTheme for dynamic theming)
 		var indicator string
 		switch plc.GetStatus() {
 		case plcman.StatusConnected:
-			indicator = StatusIndicatorConnected
+			indicator = CurrentTheme.StatusConnected
 		case plcman.StatusConnecting:
-			indicator = StatusIndicatorConnecting
+			indicator = CurrentTheme.StatusConnecting
 		case plcman.StatusError:
-			indicator = StatusIndicatorError
+			indicator = CurrentTheme.StatusError
 		default:
-			indicator = StatusIndicatorDisconnected
+			indicator = CurrentTheme.StatusDisconnected
 		}
 
 		// Product name
@@ -322,6 +357,7 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 	t.app.pages.RemovePage(pageName)
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Add PLC ")
 
 	family := config.PLCFamily(familyOptions[state.family])
@@ -539,6 +575,7 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 	t.app.pages.RemovePage(pageName)
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Edit PLC ")
 
 	family := config.PLCFamily(familyOptions[state.family])
@@ -790,34 +827,35 @@ func (t *PLCsTab) showInfoDialog() {
 	}
 	identity := plc.GetIdentity()
 
-	// Build info text
-	info := fmt.Sprintf("[yellow]Name:[white] %s\n", plc.Config.Name)
-	info += fmt.Sprintf("[yellow]Address:[white] %s\n", plc.Config.Address)
-	info += fmt.Sprintf("[yellow]Slot:[white] %d\n", plc.Config.Slot)
-	info += fmt.Sprintf("[yellow]Status:[white] %s\n", plc.GetStatus().String())
-	info += fmt.Sprintf("[yellow]Mode:[white] %s\n", plc.GetConnectionMode())
+	// Build info text (themed)
+	th := CurrentTheme
+	info := th.Label("Name", plc.Config.Name) + "\n"
+	info += th.Label("Address", plc.Config.Address) + "\n"
+	info += fmt.Sprintf("%sSlot:%s %d\n", th.TagAccent, th.TagReset, plc.Config.Slot)
+	info += th.Label("Status", plc.GetStatus().String()) + "\n"
+	info += th.Label("Mode", plc.GetConnectionMode()) + "\n"
 
 	if err := plc.GetError(); err != nil {
-		info += fmt.Sprintf("[yellow]Error:[red] %s\n", err.Error())
+		info += fmt.Sprintf("%sError:%s %s\n", th.TagAccent, th.TagError, err.Error())
 	}
 
 	if identity != nil {
-		info += "\n[blue]── Device Identity ──[-]\n"
-		info += fmt.Sprintf("[yellow]Product:[white] %s\n", identity.ProductName)
-		info += fmt.Sprintf("[yellow]Vendor:[white] %s\n", identity.VendorName())
-		info += fmt.Sprintf("[yellow]Type:[white] %s\n", identity.DeviceTypeName())
-		info += fmt.Sprintf("[yellow]Revision:[white] %s\n", identity.Revision)
-		info += fmt.Sprintf("[yellow]Serial:[white] %d\n", identity.Serial)
+		info += fmt.Sprintf("\n%s── Device Identity ──%s\n", th.TagPrimary, th.TagReset)
+		info += th.Label("Product", identity.ProductName) + "\n"
+		info += th.Label("Vendor", identity.VendorName()) + "\n"
+		info += th.Label("Type", identity.DeviceTypeName()) + "\n"
+		info += th.Label("Revision", identity.Revision) + "\n"
+		info += fmt.Sprintf("%sSerial:%s %d\n", th.TagAccent, th.TagReset, identity.Serial)
 	} else {
-		info += "\n[gray]Connect to view device identity[-]"
+		info += "\n" + th.Dim("Connect to view device identity")
 	}
 
 	// Show tag count if connected
 	tags := plc.GetTags()
 	programs := plc.GetPrograms()
 	if len(tags) > 0 || len(programs) > 0 {
-		info += fmt.Sprintf("\n[yellow]Programs:[white] %d\n", len(programs))
-		info += fmt.Sprintf("[yellow]Tags:[white] %d\n", len(tags))
+		info += fmt.Sprintf("\n%sPrograms:%s %d\n", th.TagAccent, th.TagReset, len(programs))
+		info += fmt.Sprintf("%sTags:%s %d\n", th.TagAccent, th.TagReset, len(tags))
 	}
 
 	textView := tview.NewTextView().

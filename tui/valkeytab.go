@@ -16,8 +16,10 @@ type ValkeyTab struct {
 	app       *App
 	flex      *tview.Flex
 	table     *tview.Table
+	tableBox  *tview.Flex
 	info      *tview.TextView
 	statusBar *tview.TextView
+	buttonBar *tview.TextView
 }
 
 // NewValkeyTab creates a new Valkey tab.
@@ -29,49 +31,52 @@ func NewValkeyTab(app *App) *ValkeyTab {
 }
 
 func (t *ValkeyTab) setupUI() {
-	// Button bar
-	buttons := tview.NewTextView().
+	// Button bar (themed)
+	t.buttonBar = tview.NewTextView().
 		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter).
-		SetText(" [yellow]a[white]dd  [yellow]e[white]dit  [yellow]r[white]emove  [yellow]c[white]onnect  dis[yellow]C[white]onnect  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab ")
+		SetTextAlign(tview.AlignCenter)
+	t.updateButtonBar()
 
 	// Server table
 	t.table = tview.NewTable().
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0)
+	ApplyTableTheme(t.table)
 
 	t.table.SetInputCapture(t.handleKeys)
 	t.table.SetSelectedFunc(t.onSelect)
 
-	// Set up headers
+	// Set up headers (themed)
 	headers := []string{"", "Name", "Address", "TLS", "Factory", "Status"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
-			SetTextColor(tcell.ColorYellow).
+			SetTextColor(CurrentTheme.Accent).
 			SetSelectable(false).
 			SetAttributes(tcell.AttrBold))
 	}
 
-	tableBox := tview.NewFlex().SetDirection(tview.FlexRow)
-	tableBox.SetBorder(true).SetTitle(" Valkey Servers ")
-	tableBox.AddItem(buttons, 1, 0, false)
-	tableBox.AddItem(t.table, 0, 1, true)
+	t.tableBox = tview.NewFlex().SetDirection(tview.FlexRow)
+	t.tableBox.SetBorder(true).SetTitle(" Valkey Servers ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
+	t.tableBox.AddItem(t.buttonBar, 1, 0, false)
+	t.tableBox.AddItem(t.table, 0, 1, true)
 
 	// Info panel
 	t.info = tview.NewTextView().
-		SetDynamicColors(true)
-	t.info.SetBorder(true).SetTitle(" Key Structure ")
+		SetDynamicColors(true).
+		SetTextColor(CurrentTheme.Text)
+	t.info.SetBorder(true).SetTitle(" Key Structure ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 	t.updateInfo()
 
 	// Status bar
 	t.statusBar = tview.NewTextView().
-		SetDynamicColors(true)
+		SetDynamicColors(true).
+		SetTextColor(CurrentTheme.Text)
 
 	// Main layout
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(tableBox, 0, 1, true).
+		AddItem(t.tableBox, 0, 1, true).
 		AddItem(t.info, 10, 0, false).
 		AddItem(t.statusBar, 1, 0, false)
 }
@@ -115,15 +120,16 @@ func (t *ValkeyTab) onSelect(row, col int) {
 }
 
 func (t *ValkeyTab) updateInfo() {
+	th := CurrentTheme
 	text := "\n"
-	text += " [yellow]Key Format:[white]\n"
+	text += " " + th.TagAccent + "Key Format:" + th.TagReset + "\n"
 	text += "   {factory}/{plc}/tags/{tag}\n\n"
-	text += " [yellow]Value Format:[white]\n"
+	text += " " + th.TagAccent + "Value Format:" + th.TagReset + "\n"
 	text += "   {\"value\": <value>, \"type\": \"<type>\", \"writable\": bool, \"timestamp\": \"<iso8601>\"}\n\n"
-	text += " [yellow]Pub/Sub Channels:[white]\n"
+	text += " " + th.TagAccent + "Pub/Sub Channels:" + th.TagReset + "\n"
 	text += "   {factory}/{plc}/changes - per-PLC changes\n"
 	text += "   {factory}/_all/changes  - all changes\n\n"
-	text += " [gray]Keys are set with optional TTL for stale detection[-]\n"
+	text += " " + th.Dim("Keys are set with optional TTL for stale detection") + "\n"
 
 	t.info.SetText(text)
 }
@@ -135,15 +141,16 @@ func (t *ValkeyTab) refreshTable() {
 	}
 
 	pubs := t.app.valkeyMgr.List()
+	th := CurrentTheme
 	for i, pub := range pubs {
 		row := i + 1
 		cfg := pub.Config()
 
 		var indicator string
 		if pub.IsRunning() {
-			indicator = "[green]●[-]"
+			indicator = th.StatusConnected
 		} else {
-			indicator = "[gray]○[-]"
+			indicator = th.StatusDisconnected
 		}
 
 		status := "Stopped"
@@ -151,9 +158,9 @@ func (t *ValkeyTab) refreshTable() {
 			status = "Connected"
 		}
 
-		tlsIndicator := "[gray]No[-]"
+		tlsIndicator := th.Dim("No")
 		if cfg.UseTLS {
-			tlsIndicator = "[green]Yes[-]"
+			tlsIndicator = th.SuccessText("Yes")
 		}
 
 		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
@@ -169,6 +176,7 @@ func (t *ValkeyTab) showAddDialog() {
 	const pageName = "add-valkey"
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Add Valkey Server ")
 
 	form.AddInputField("Name:", "", 20, nil, nil)
@@ -244,7 +252,7 @@ func (t *ValkeyTab) showAddDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 55, 21, func() {
+	t.app.showFormModal(pageName, form, 55, 26, func() {
 		t.app.closeModal(pageName)
 	})
 }
@@ -267,6 +275,7 @@ func (t *ValkeyTab) showEditDialog() {
 	originalName := cfg.Name
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Edit Valkey Server ")
 
 	form.AddInputField("Name:", cfg.Name, 20, nil, nil)
@@ -349,7 +358,7 @@ func (t *ValkeyTab) showEditDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 55, 21, func() {
+	t.app.showFormModal(pageName, form, 55, 26, func() {
 		t.app.closeModal(pageName)
 	})
 }
@@ -483,4 +492,36 @@ func (t *ValkeyTab) Refresh() {
 // secondsToDuration converts seconds to time.Duration.
 func secondsToDuration(seconds int) time.Duration {
 	return time.Duration(seconds) * time.Second
+}
+
+func (t *ValkeyTab) updateButtonBar() {
+	th := CurrentTheme
+	buttonText := " " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
+		th.TagHotkey + "e" + th.TagActionText + "dit  " +
+		th.TagHotkey + "r" + th.TagActionText + "emove  " +
+		th.TagHotkey + "c" + th.TagActionText + "onnect  dis" +
+		th.TagHotkey + "C" + th.TagActionText + "onnect  " +
+		th.TagActionText + "│  " +
+		th.TagHotkey + "?" + th.TagActionText + " help  " +
+		th.TagHotkey + "Shift+Tab" + th.TagActionText + " next tab " + th.TagReset
+	t.buttonBar.SetText(buttonText)
+}
+
+// RefreshTheme updates theme-dependent UI elements.
+func (t *ValkeyTab) RefreshTheme() {
+	t.updateButtonBar()
+	th := CurrentTheme
+	t.tableBox.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.info.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.info.SetTextColor(th.Text)
+	t.statusBar.SetTextColor(th.Text)
+	ApplyTableTheme(t.table)
+	// Update header colors
+	for i := 0; i < t.table.GetColumnCount(); i++ {
+		if cell := t.table.GetCell(0, i); cell != nil {
+			cell.SetTextColor(th.Accent)
+		}
+	}
+	// Regenerate info text with new theme colors
+	t.updateInfo()
 }

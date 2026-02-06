@@ -14,11 +14,13 @@ import (
 
 // KafkaTab handles the Kafka configuration tab.
 type KafkaTab struct {
-	app       *App
-	flex      *tview.Flex
-	table     *tview.Table
-	info      *tview.TextView
-	statusBar *tview.TextView
+	app        *App
+	flex       *tview.Flex
+	table      *tview.Table
+	tableFrame *tview.Frame
+	info       *tview.TextView
+	statusBar  *tview.TextView
+	buttonBar  *tview.TextView
 }
 
 // NewKafkaTab creates a new Kafka tab.
@@ -30,52 +32,55 @@ func NewKafkaTab(app *App) *KafkaTab {
 }
 
 func (t *KafkaTab) setupUI() {
-	// Button bar
-	buttons := tview.NewTextView().
+	// Button bar (themed)
+	t.buttonBar = tview.NewTextView().
 		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter).
-		SetText(" [yellow]a[white]dd  [yellow]e[white]dit  [yellow]r[white]emove  [yellow]c[white]onnect  dis[yellow]C[white]onnect  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab ")
+		SetTextAlign(tview.AlignCenter)
+	t.updateButtonBar()
 
 	// Cluster table
 	t.table = tview.NewTable().
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0)
+	ApplyTableTheme(t.table)
 
 	t.table.SetInputCapture(t.handleKeys)
 	t.table.SetSelectedFunc(t.onSelect)
 
-	// Set up headers
+	// Set up headers (themed)
 	headers := []string{"", "Name", "Brokers", "TLS", "SASL", "Status"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
-			SetTextColor(tcell.ColorYellow).
+			SetTextColor(CurrentTheme.Accent).
 			SetSelectable(false).
 			SetAttributes(tcell.AttrBold))
 	}
 
-	tableFrame := tview.NewFrame(t.table).SetBorders(1, 0, 0, 0, 1, 1)
-	tableFrame.SetBorder(true).SetTitle(" Kafka Clusters ")
+	t.tableFrame = tview.NewFrame(t.table).SetBorders(1, 0, 0, 0, 1, 1)
+	t.tableFrame.SetBorder(true).SetTitle(" Kafka Clusters ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 
 	// Info panel
 	t.info = tview.NewTextView().
 		SetDynamicColors(true).
-		SetScrollable(true)
-	t.info.SetBorder(true).SetTitle(" Cluster Info ")
+		SetScrollable(true).
+		SetTextColor(CurrentTheme.Text)
+	t.info.SetBorder(true).SetTitle(" Cluster Info ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 
 	// Content area
 	content := tview.NewFlex().
-		AddItem(tableFrame, 0, 2, true).
+		AddItem(t.tableFrame, 0, 2, true).
 		AddItem(t.info, 0, 1, false)
 
 	// Status bar
 	t.statusBar = tview.NewTextView().
-		SetDynamicColors(true)
+		SetDynamicColors(true).
+		SetTextColor(CurrentTheme.Text)
 
 	// Main layout
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(buttons, 1, 0, false).
+		AddItem(t.buttonBar, 1, 0, false).
 		AddItem(content, 0, 1, true).
 		AddItem(t.statusBar, 1, 0, false)
 }
@@ -128,34 +133,35 @@ func (t *KafkaTab) updateInfo(name string) {
 		return
 	}
 
+	th := CurrentTheme
 	producer := t.app.kafkaMgr.GetProducer(name)
 
-	info := fmt.Sprintf("[yellow]Name:[white] %s\n", cfg.Name)
-	info += fmt.Sprintf("[yellow]Brokers:[white] %s\n", strings.Join(cfg.Brokers, ", "))
-	info += fmt.Sprintf("[yellow]TLS:[white] %v\n", cfg.UseTLS)
+	info := th.Label("Name", cfg.Name) + "\n"
+	info += th.Label("Brokers", strings.Join(cfg.Brokers, ", ")) + "\n"
+	info += fmt.Sprintf("%sTLS:%s %v\n", th.TagAccent, th.TagReset, cfg.UseTLS)
 	if cfg.SASLMechanism != "" {
-		info += fmt.Sprintf("[yellow]SASL:[white] %s\n", cfg.SASLMechanism)
+		info += th.Label("SASL", cfg.SASLMechanism) + "\n"
 	}
-	info += fmt.Sprintf("[yellow]Required Acks:[white] %d\n", cfg.RequiredAcks)
-	info += fmt.Sprintf("[yellow]Max Retries:[white] %d\n", cfg.MaxRetries)
+	info += fmt.Sprintf("%sRequired Acks:%s %d\n", th.TagAccent, th.TagReset, cfg.RequiredAcks)
+	info += fmt.Sprintf("%sMax Retries:%s %d\n", th.TagAccent, th.TagReset, cfg.MaxRetries)
 
 	// Tag publishing settings
 	if cfg.PublishChanges {
-		info += fmt.Sprintf("\n[yellow]Publish Changes:[green] Enabled\n")
-		info += fmt.Sprintf("[yellow]Topic:[white] %s\n", cfg.Topic)
+		info += fmt.Sprintf("\n%sPublish Changes:%s %s\n", th.TagAccent, th.TagSuccess, "Enabled")
+		info += th.Label("Topic", cfg.Topic) + "\n"
 	}
 
 	if producer != nil {
 		status := producer.GetStatus()
-		info += fmt.Sprintf("\n[yellow]Status:[white] %s\n", status.String())
+		info += fmt.Sprintf("\n%sStatus:%s %s\n", th.TagAccent, th.TagReset, status.String())
 		if err := producer.GetError(); err != nil {
-			info += fmt.Sprintf("[yellow]Error:[red] %s\n", err.Error())
+			info += fmt.Sprintf("%sError:%s %s\n", th.TagAccent, th.TagError, err.Error())
 		}
 		sent, errors, lastSend := producer.GetStats()
-		info += fmt.Sprintf("[yellow]Messages Sent:[white] %d\n", sent)
-		info += fmt.Sprintf("[yellow]Errors:[white] %d\n", errors)
+		info += fmt.Sprintf("%sMessages Sent:%s %d\n", th.TagAccent, th.TagReset, sent)
+		info += fmt.Sprintf("%sErrors:%s %d\n", th.TagAccent, th.TagReset, errors)
 		if !lastSend.IsZero() {
-			info += fmt.Sprintf("[yellow]Last Send:[white] %s\n", lastSend.Format("15:04:05"))
+			info += fmt.Sprintf("%sLast Send:%s %s\n", th.TagAccent, th.TagReset, lastSend.Format("15:04:05"))
 		}
 	}
 
@@ -190,17 +196,17 @@ func (t *KafkaTab) Refresh() {
 	for i, cfg := range clusters {
 		row := i + 1
 
-		// Status indicator
-		indicator := StatusIndicatorDisconnected
+		// Status indicator (themed)
+		indicator := CurrentTheme.StatusDisconnected
 		producer := t.app.kafkaMgr.GetProducer(cfg.Name)
 		if producer != nil {
 			switch producer.GetStatus() {
 			case kafka.StatusConnected:
-				indicator = StatusIndicatorConnected
+				indicator = CurrentTheme.StatusConnected
 			case kafka.StatusConnecting:
-				indicator = StatusIndicatorConnecting
+				indicator = CurrentTheme.StatusConnecting
 			case kafka.StatusError:
-				indicator = StatusIndicatorError
+				indicator = CurrentTheme.StatusError
 			}
 		}
 
@@ -258,6 +264,7 @@ func (t *KafkaTab) showAddDialog() {
 	const pageName = "add-kafka"
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Add Kafka Cluster ")
 
 	form.AddInputField("Name:", "", 30, nil, nil)
@@ -356,6 +363,7 @@ func (t *KafkaTab) showEditDialog() {
 	}
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Edit Kafka Cluster ")
 
 	saslIdx := 0
@@ -518,4 +526,34 @@ func (t *KafkaTab) disconnectSelected() {
 	t.app.kafkaMgr.Disconnect(name)
 	t.Refresh()
 	t.app.setStatus(fmt.Sprintf("Disconnected from Kafka: %s", name))
+}
+
+func (t *KafkaTab) updateButtonBar() {
+	th := CurrentTheme
+	buttonText := " " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
+		th.TagHotkey + "e" + th.TagActionText + "dit  " +
+		th.TagHotkey + "r" + th.TagActionText + "emove  " +
+		th.TagHotkey + "c" + th.TagActionText + "onnect  dis" +
+		th.TagHotkey + "C" + th.TagActionText + "onnect  " +
+		th.TagActionText + "│  " +
+		th.TagHotkey + "?" + th.TagActionText + " help  " +
+		th.TagHotkey + "Shift+Tab" + th.TagActionText + " next tab " + th.TagReset
+	t.buttonBar.SetText(buttonText)
+}
+
+// RefreshTheme updates theme-dependent UI elements.
+func (t *KafkaTab) RefreshTheme() {
+	t.updateButtonBar()
+	th := CurrentTheme
+	t.tableFrame.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.info.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.info.SetTextColor(th.Text)
+	t.statusBar.SetTextColor(th.Text)
+	ApplyTableTheme(t.table)
+	// Update header colors
+	for i := 0; i < t.table.GetColumnCount(); i++ {
+		if cell := t.table.GetCell(0, i); cell != nil {
+			cell.SetTextColor(th.Accent)
+		}
+	}
 }

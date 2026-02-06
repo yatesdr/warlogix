@@ -15,12 +15,14 @@ import (
 
 // TriggersTab handles the Triggers configuration tab.
 type TriggersTab struct {
-	app       *App
-	flex      *tview.Flex
-	table     *tview.Table
-	dataTable *tview.Table
-	info      *tview.TextView
-	statusBar *tview.TextView
+	app        *App
+	flex       *tview.Flex
+	table      *tview.Table
+	tableFrame *tview.Frame
+	dataTable  *tview.Table
+	info       *tview.TextView
+	statusBar  *tview.TextView
+	buttonBar  *tview.TextView
 
 	selectedTrigger string
 }
@@ -34,38 +36,40 @@ func NewTriggersTab(app *App) *TriggersTab {
 }
 
 func (t *TriggersTab) setupUI() {
-	// Button bar
-	buttons := tview.NewTextView().
+	// Button bar (themed)
+	t.buttonBar = tview.NewTextView().
 		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter).
-		SetText(" [yellow]a[white]dd  [yellow]e[white]dit  [yellow]r[white]emove  [yellow]t[white] add tag  [yellow]x[white] remove tag  [yellow]s[white]tart  [yellow]S[white]top  [yellow]T[white]est  [gray]│[white]  [yellow]?[white] help ")
+		SetTextAlign(tview.AlignCenter)
+	t.updateButtonBar()
 
 	// Triggers table
 	t.table = tview.NewTable().
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0)
+	ApplyTableTheme(t.table)
 
 	t.table.SetInputCapture(t.handleKeys)
 	t.table.SetSelectionChangedFunc(t.onSelectionChanged)
 
-	// Set up headers
+	// Set up headers (themed)
 	headers := []string{"", "Name", "PLC", "Trigger", "Condition", "Fires", "Status"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
-			SetTextColor(tcell.ColorYellow).
+			SetTextColor(CurrentTheme.Accent).
 			SetSelectable(false).
 			SetAttributes(tcell.AttrBold))
 	}
 
-	tableFrame := tview.NewFrame(t.table).SetBorders(1, 0, 0, 0, 1, 1)
-	tableFrame.SetBorder(true).SetTitle(" Event Triggers ")
+	t.tableFrame = tview.NewFrame(t.table).SetBorders(1, 0, 0, 0, 1, 1)
+	t.tableFrame.SetBorder(true).SetTitle(" Event Triggers ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 
 	// Data tags table for selected trigger
 	t.dataTable = tview.NewTable().
 		SetBorders(false).
 		SetSelectable(true, false)
-	t.dataTable.SetBorder(true).SetTitle(" Data Tags ")
+	ApplyTableTheme(t.dataTable)
+	t.dataTable.SetBorder(true).SetTitle(" Data Tags ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 	t.dataTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Rune() {
 		case 'x':
@@ -85,8 +89,9 @@ func (t *TriggersTab) setupUI() {
 	// Info panel
 	t.info = tview.NewTextView().
 		SetDynamicColors(true).
-		SetScrollable(true)
-	t.info.SetBorder(true).SetTitle(" Trigger Details ")
+		SetScrollable(true).
+		SetTextColor(CurrentTheme.Text)
+	t.info.SetBorder(true).SetTitle(" Trigger Details ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 
 	// Right panel with data tags and info
 	rightPanel := tview.NewFlex().
@@ -96,17 +101,18 @@ func (t *TriggersTab) setupUI() {
 
 	// Content area
 	content := tview.NewFlex().
-		AddItem(tableFrame, 0, 2, true).
+		AddItem(t.tableFrame, 0, 2, true).
 		AddItem(rightPanel, 0, 1, false)
 
 	// Status bar
 	t.statusBar = tview.NewTextView().
-		SetDynamicColors(true)
+		SetDynamicColors(true).
+		SetTextColor(CurrentTheme.Text)
 
 	// Main layout
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(buttons, 1, 0, false).
+		AddItem(t.buttonBar, 1, 0, false).
 		AddItem(content, 0, 1, true).
 		AddItem(t.statusBar, 1, 0, false)
 }
@@ -197,21 +203,22 @@ func (t *TriggersTab) updateInfo(name string) {
 		return
 	}
 
-	info := fmt.Sprintf("[yellow]Trigger:[white] %s %v\n", cfg.Condition.Operator, cfg.Condition.Value)
+	th := CurrentTheme
+	info := fmt.Sprintf("%sTrigger:%s %s %v\n", th.TagAccent, th.TagReset, cfg.Condition.Operator, cfg.Condition.Value)
 	if cfg.AckTag != "" {
-		info += fmt.Sprintf("[yellow]Ack:[white] %s (1=ok, -1=err)\n", cfg.AckTag)
+		info += fmt.Sprintf("%sAck:%s %s (1=ok, -1=err)\n", th.TagAccent, th.TagReset, cfg.AckTag)
 	}
-	info += fmt.Sprintf("[yellow]Kafka:[white] %s\n", cfg.KafkaCluster)
-	info += fmt.Sprintf("[yellow]Topic:[white] %s\n", cfg.Topic)
+	info += th.Label("Kafka", cfg.KafkaCluster) + "\n"
+	info += th.Label("Topic", cfg.Topic) + "\n"
 
 	// Get runtime status
 	status, err, count, lastFire := t.app.triggerMgr.GetTriggerStatus(name)
-	info += fmt.Sprintf("\n[yellow]Status:[white] %s  [yellow]Fires:[white] %d\n", status.String(), count)
+	info += fmt.Sprintf("\n%sStatus:%s %s  %sFires:%s %d\n", th.TagAccent, th.TagReset, status.String(), th.TagAccent, th.TagReset, count)
 	if !lastFire.IsZero() {
-		info += fmt.Sprintf("[yellow]Last:[white] %s\n", lastFire.Format("15:04:05"))
+		info += fmt.Sprintf("%sLast:%s %s\n", th.TagAccent, th.TagReset, lastFire.Format("15:04:05"))
 	}
 	if err != nil {
-		info += fmt.Sprintf("[red]Error: %s[-]\n", err.Error())
+		info += th.ErrorText("Error: "+err.Error()) + "\n"
 	}
 
 	t.info.SetText(info)
@@ -248,17 +255,17 @@ func (t *TriggersTab) Refresh() {
 		// Get runtime status
 		status, _, count, _ := t.app.triggerMgr.GetTriggerStatus(cfg.Name)
 
-		// Status indicator
-		indicator := StatusIndicatorDisconnected
+		// Status indicator (themed)
+		indicator := CurrentTheme.StatusDisconnected
 		switch status {
 		case trigger.StatusArmed:
-			indicator = StatusIndicatorConnected
+			indicator = CurrentTheme.StatusConnected
 		case trigger.StatusFiring:
-			indicator = StatusIndicatorConnecting
+			indicator = CurrentTheme.StatusConnecting
 		case trigger.StatusCooldown:
-			indicator = "[blue]●[-]"
+			indicator = CurrentTheme.TagPrimary + "●" + CurrentTheme.TagReset
 		case trigger.StatusError:
-			indicator = StatusIndicatorError
+			indicator = CurrentTheme.StatusError
 		}
 
 		// Condition string
@@ -312,6 +319,7 @@ func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(
 	filter := tview.NewInputField().
 		SetLabel("Filter: ").
 		SetFieldWidth(30)
+	ApplyInputFieldTheme(filter)
 
 	// Create list of tags
 	list := tview.NewList().
@@ -420,6 +428,7 @@ func (t *TriggersTab) showAddDialog() {
 	}
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Add Trigger ")
 
 	// Get initial tags for first PLC
@@ -623,6 +632,7 @@ func (t *TriggersTab) showEditDialog() {
 	}
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Edit Trigger ")
 
 	form.AddInputField("Name:", cfg.Name, 30, nil, nil)
@@ -903,4 +913,38 @@ func (t *TriggersTab) testSelected() {
 			})
 		}()
 	}()
+}
+
+func (t *TriggersTab) updateButtonBar() {
+	th := CurrentTheme
+	buttonText := " " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
+		th.TagHotkey + "e" + th.TagActionText + "dit  " +
+		th.TagHotkey + "r" + th.TagActionText + "emove  " +
+		th.TagHotkey + "t" + th.TagActionText + " add tag  " +
+		th.TagHotkey + "x" + th.TagActionText + " remove tag  " +
+		th.TagHotkey + "s" + th.TagActionText + "tart  " +
+		th.TagHotkey + "S" + th.TagActionText + "top  " +
+		th.TagHotkey + "T" + th.TagActionText + "est  " +
+		th.TagActionText + "│  " +
+		th.TagHotkey + "?" + th.TagActionText + " help " + th.TagReset
+	t.buttonBar.SetText(buttonText)
+}
+
+// RefreshTheme updates theme-dependent UI elements.
+func (t *TriggersTab) RefreshTheme() {
+	t.updateButtonBar()
+	th := CurrentTheme
+	t.tableFrame.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.dataTable.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.info.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.info.SetTextColor(th.Text)
+	t.statusBar.SetTextColor(th.Text)
+	ApplyTableTheme(t.table)
+	ApplyTableTheme(t.dataTable)
+	// Update header colors
+	for i := 0; i < t.table.GetColumnCount(); i++ {
+		if cell := t.table.GetCell(0, i); cell != nil {
+			cell.SetTextColor(th.Accent)
+		}
+	}
 }

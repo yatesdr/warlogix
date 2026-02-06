@@ -22,6 +22,7 @@ type BrowserTab struct {
 	plcSelect *tview.DropDown
 	filter    *tview.InputField
 	tree      *tview.TreeView
+	treeFrame *tview.Frame
 	details   *tview.TextView
 	statusBar *tview.TextView
 
@@ -54,6 +55,7 @@ func (t *BrowserTab) setupUI() {
 	t.plcSelect = tview.NewDropDown().
 		SetLabel("PLC: ").
 		SetFieldWidth(20)
+	ApplyDropDownTheme(t.plcSelect)
 	t.plcSelect.SetSelectedFunc(func(text string, index int) {
 		t.selectedPLC = text
 		t.loadTags()
@@ -84,6 +86,7 @@ func (t *BrowserTab) setupUI() {
 		}
 		return event
 	})
+	ApplyInputFieldTheme(t.filter)
 
 	// Header row
 	header := tview.NewFlex().
@@ -93,7 +96,8 @@ func (t *BrowserTab) setupUI() {
 		AddItem(nil, 0, 1, false)
 
 	// Tree view for programs/tags
-	t.treeRoot = tview.NewTreeNode("Tags").SetColor(tcell.ColorYellow)
+	t.treeRoot = tview.NewTreeNode("Tags").SetColor(CurrentTheme.Accent).
+		SetSelectedTextStyle(tcell.StyleDefault.Foreground(CurrentTheme.SelectedText).Background(CurrentTheme.Accent))
 	t.tree = tview.NewTreeView().
 		SetRoot(t.treeRoot).
 		SetCurrentNode(t.treeRoot)
@@ -101,14 +105,15 @@ func (t *BrowserTab) setupUI() {
 	t.tree.SetSelectedFunc(t.onNodeSelected)
 	t.tree.SetInputCapture(t.handleTreeKeys)
 
-	treeFrame := tview.NewFrame(t.tree).SetBorders(0, 0, 0, 0, 0, 0)
-	treeFrame.SetBorder(true).SetTitle(" Programs/Tags ")
+	t.treeFrame = tview.NewFrame(t.tree).SetBorders(0, 0, 0, 0, 0, 0)
+	t.treeFrame.SetBorder(true).SetTitle(" Programs/Tags ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 
 	// Details panel
 	t.details = tview.NewTextView().
 		SetDynamicColors(true).
-		SetScrollable(true)
-	t.details.SetBorder(true).SetTitle(" Tag Details ")
+		SetScrollable(true).
+		SetTextColor(CurrentTheme.Text)
+	t.details.SetBorder(true).SetTitle(" Tag Details ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 	t.details.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyTab {
 			t.app.app.SetFocus(t.tree)
@@ -119,12 +124,13 @@ func (t *BrowserTab) setupUI() {
 
 	// Content area
 	content := tview.NewFlex().
-		AddItem(treeFrame, 0, 1, true).
+		AddItem(t.treeFrame, 0, 1, true).
 		AddItem(t.details, 40, 0, false)
 
 	// Status bar
 	t.statusBar = tview.NewTextView().
-		SetDynamicColors(true)
+		SetDynamicColors(true).
+		SetTextColor(CurrentTheme.Text)
 
 	// Main layout
 	t.flex = tview.NewFlex().
@@ -165,8 +171,12 @@ func (t *BrowserTab) handleTreeKeys(event *tcell.EventKey) *tcell.EventKey {
 		t.app.app.SetFocus(t.filter)
 		return nil
 	case 'p':
-		// Focus PLC dropdown
+		// Focus and open PLC dropdown
 		t.app.app.SetFocus(t.plcSelect)
+		// Simulate Enter key to open the dropdown (provide setFocus function)
+		t.plcSelect.InputHandler()(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone), func(p tview.Primitive) {
+			t.app.app.SetFocus(p)
+		})
 		return nil
 	case 'c':
 		// Clear filter
@@ -241,8 +251,10 @@ func (t *BrowserTab) getTypeName(typeCode uint16) string {
 func (t *BrowserTab) onNodeSelected(node *tview.TreeNode) {
 	ref := node.GetReference()
 	if ref == nil {
-		// It's a program node, expand/collapse
-		node.SetExpanded(!node.IsExpanded())
+		// It's a program/section node - expand/collapse, but not the root
+		if node != t.treeRoot {
+			node.SetExpanded(!node.IsExpanded())
+		}
 		return
 	}
 
@@ -632,22 +644,24 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 		checkbox = CheckboxChecked
 	}
 
+	th := CurrentTheme
+
 	// Writable indicator
 	writeIndicator := ""
 	if writable {
-		writeIndicator = "[red]W[-] "
+		writeIndicator = th.TagWritable + "W" + th.TagReset + " "
 	}
 
 	// Ignore indicator (for UDT members)
 	ignoreIndicator := ""
 	if t.isMemberIgnored(tag.Name) {
-		ignoreIndicator = "[red]I[-] "
+		ignoreIndicator = th.TagError + "I" + th.TagReset + " "
 	}
 
 	// UDT expandable indicator
 	udtIndicator := ""
 	if logix.IsStructure(tag.TypeCode) {
-		udtIndicator = "[yellow]▶[-] "
+		udtIndicator = th.TagAccent + "▶" + th.TagReset + " "
 	}
 
 	typeName := t.getTypeName(tag.TypeCode)
@@ -672,13 +686,18 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 
 	var text string
 	if enabled {
-		text = fmt.Sprintf("%s %s%s%s%s  [gray]%s[-]", checkbox, udtIndicator, ignoreIndicator, writeIndicator, shortName, typeName)
-		node.SetColor(tcell.ColorWhite)
+		// Bold text for enabled items using [::b] inline formatting
+		text = fmt.Sprintf("[::b]%s %s%s%s%s[::-]  %s%s%s", checkbox, udtIndicator, ignoreIndicator, writeIndicator, shortName, th.TagTextDim, typeName, th.TagReset)
+		node.SetColor(th.Secondary) // Theme secondary color for publishing items
+		// When selected/hovered: SelectedText on success color background
+		node.SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Success).Bold(true))
 	} else {
 		// Don't use inline color tags - let node.SetColor handle it
 		// This allows proper color inversion when the node is selected
 		text = fmt.Sprintf("%s %s%s%s%s  %s", checkbox, udtIndicator, ignoreIndicator, writeIndicator, shortName, typeName)
-		node.SetColor(tcell.ColorDarkGray)
+		node.SetColor(th.Text) // Theme text color for non-publishing items
+		// When selected/hovered: SelectedText on dim background
+		node.SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.TextDim))
 	}
 	node.SetText(text)
 }
@@ -712,10 +731,11 @@ func (t *BrowserTab) updateConfigTag(tagName string, enabled, writable bool) {
 }
 
 func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
+	th := CurrentTheme
 	var sb strings.Builder
 
-	sb.WriteString("[yellow]Name:[-] " + tag.Name + "\n")
-	sb.WriteString("[yellow]Type:[-] " + t.getTypeName(tag.TypeCode) + "\n")
+	sb.WriteString(th.Label("Name", tag.Name) + "\n")
+	sb.WriteString(th.Label("Type", t.getTypeName(tag.TypeCode)) + "\n")
 
 	// Get current value if available
 	plc := t.app.manager.GetPLC(t.selectedPLC)
@@ -723,9 +743,9 @@ func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
 		values := plc.GetValues()
 		if val, ok := values[tag.Name]; ok {
 			if val.Error != nil {
-				sb.WriteString("[yellow]Value:[-] [red]" + val.Error.Error() + "[-]\n")
+				sb.WriteString(th.TagAccent + "Value:" + th.TagError + " " + val.Error.Error() + th.TagReset + "\n")
 			} else {
-				sb.WriteString("[yellow]Value:[-] " + formatValue(val.GoValue()) + "\n")
+				sb.WriteString(th.Label("Value", formatValue(val.GoValue())) + "\n")
 			}
 		}
 	}
@@ -735,7 +755,7 @@ func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
 	if cfg != nil {
 		for _, sel := range cfg.Tags {
 			if sel.Name == tag.Name && sel.Alias != "" {
-				sb.WriteString("[yellow]Alias:[-] " + sel.Alias + "\n")
+				sb.WriteString(th.Label("Alias", sel.Alias) + "\n")
 				break
 			}
 		}
@@ -747,21 +767,21 @@ func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
 		for i, d := range tag.Dimensions {
 			dims[i] = fmt.Sprintf("%d", d)
 		}
-		sb.WriteString("[yellow]Dimensions:[-] [" + strings.Join(dims, ",") + "]\n")
+		sb.WriteString(th.Label("Dimensions", "["+strings.Join(dims, ",")+"]") + "\n")
 	}
 
 	enabled := t.enabledTags[tag.Name]
 	writable := t.writableTags[tag.Name]
 	if enabled {
-		sb.WriteString("\n[green]" + CheckboxChecked + " Publishing to REST/MQTT/Valkey[-]")
+		sb.WriteString("\n" + th.SuccessText(CheckboxChecked+" Publishing to REST/MQTT/Valkey"))
 	} else {
-		sb.WriteString("\n[gray]" + CheckboxUnchecked + " Not publishing[-]")
+		sb.WriteString("\n" + th.Dim(CheckboxUnchecked+" Not publishing"))
 	}
 
 	if writable {
-		sb.WriteString("\n[red]W Writable[-]")
+		sb.WriteString("\n" + th.ErrorText("W Writable"))
 	} else {
-		sb.WriteString("\n[gray]  Read-only[-]")
+		sb.WriteString("\n" + th.Dim("  Read-only"))
 	}
 
 	// Show ignore list for UDT tags
@@ -769,7 +789,7 @@ func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
 		if cfg != nil {
 			for _, sel := range cfg.Tags {
 				if sel.Name == tag.Name && len(sel.IgnoreChanges) > 0 {
-					sb.WriteString("\n\n[red]I Ignored for changes:[-]")
+					sb.WriteString("\n\n" + th.ErrorText("I Ignored for changes:"))
 					for _, member := range sel.IgnoreChanges {
 						sb.WriteString("\n  - " + member)
 					}
@@ -781,10 +801,13 @@ func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
 
 	// Show if this member is ignored (for UDT member nodes)
 	if t.isMemberIgnored(tag.Name) {
-		sb.WriteString("\n[red]I Ignored for change detection[-]")
+		sb.WriteString("\n" + th.ErrorText("I Ignored for change detection"))
 	}
 
-	sb.WriteString("\n\n[blue]Space[white] toggle  [blue]w[white] writable  [blue]i[white] ignore  [blue]d[white] details[-]")
+	sb.WriteString("\n\n" + th.TagPrimary + "Space" + th.TagText + " toggle  " +
+		th.TagPrimary + "w" + th.TagText + " writable  " +
+		th.TagPrimary + "i" + th.TagText + " ignore  " +
+		th.TagPrimary + "d" + th.TagText + " details" + th.TagReset)
 
 	t.details.SetText(sb.String())
 }
@@ -800,13 +823,17 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 		return
 	}
 
+	th := CurrentTheme
+	// Bold accent tag: insert ::b before the closing ]
+	boldAccent := th.TagAccent[:len(th.TagAccent)-1] + "::b]"
+
 	// Show immediate feedback
 	var sb strings.Builder
-	sb.WriteString("[yellow::b]Tag Information[-::-]\n")
+	sb.WriteString(boldAccent + "Tag Information[-::-]\n")
 	sb.WriteString("─────────────────────────────\n")
-	sb.WriteString(fmt.Sprintf("[yellow]Name:[-] %s\n", tagInfo.Name))
-	sb.WriteString(fmt.Sprintf("[yellow]Type:[-] %s (0x%04X)\n", t.getTypeName(tagInfo.TypeCode), tagInfo.TypeCode))
-	sb.WriteString(fmt.Sprintf("[yellow]Instance:[-] %d\n", tagInfo.Instance))
+	sb.WriteString(th.Label("Name", tagInfo.Name) + "\n")
+	sb.WriteString(fmt.Sprintf("%sType:%s %s (0x%04X)\n", th.TagAccent, th.TagReset, t.getTypeName(tagInfo.TypeCode), tagInfo.TypeCode))
+	sb.WriteString(fmt.Sprintf("%sInstance:%s %d\n", th.TagAccent, th.TagReset, tagInfo.Instance))
 
 	// Dimensions
 	if len(tagInfo.Dimensions) > 0 {
@@ -814,15 +841,15 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 		for i, d := range tagInfo.Dimensions {
 			dims[i] = fmt.Sprintf("%d", d)
 		}
-		sb.WriteString(fmt.Sprintf("[yellow]Dimensions:[-] [%s]\n", strings.Join(dims, ", ")))
+		sb.WriteString(fmt.Sprintf("%sDimensions:%s [%s]\n", th.TagAccent, th.TagReset, strings.Join(dims, ", ")))
 	} else {
-		sb.WriteString("[yellow]Dimensions:[-] scalar\n")
+		sb.WriteString(fmt.Sprintf("%sDimensions:%s scalar\n", th.TagAccent, th.TagReset))
 	}
 
 
-	sb.WriteString("\n[yellow::b]Live Value[-::-]\n")
+	sb.WriteString("\n" + boldAccent + "Live Value[-::-]\n")
 	sb.WriteString("─────────────────────────────\n")
-	sb.WriteString("[gray]Reading from PLC...[-]\n")
+	sb.WriteString(th.Dim("Reading from PLC...") + "\n")
 	t.details.SetText(sb.String())
 
 	// Read from PLC in background goroutine
@@ -833,10 +860,12 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 	tagDimensions := tagInfo.Dimensions
 
 	go func() {
+		th := CurrentTheme
+		boldAccent := th.TagAccent[:len(th.TagAccent)-1] + "::b]"
 		plc := t.app.manager.GetPLC(plcName)
 		if plc == nil {
 			t.app.QueueUpdateDraw(func() {
-				t.details.SetText(sb.String() + "\n[red]PLC not available[-]\n")
+				t.details.SetText(sb.String() + "\n" + th.ErrorText("PLC not available") + "\n")
 			})
 			return
 		}
@@ -848,18 +877,18 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 		if isArrayType || isStruct {
 			var debugSb strings.Builder
 			if isArrayType {
-				debugSb.WriteString("\n[yellow::b]Array Info[-::-]\n")
+				debugSb.WriteString("\n" + boldAccent + "Array Info[-::-]\n")
 			} else {
-				debugSb.WriteString("\n[yellow::b]Type Info[-::-]\n")
+				debugSb.WriteString("\n" + boldAccent + "Type Info[-::-]\n")
 			}
 			debugSb.WriteString("─────────────────────────────\n")
 			baseType := logix.BaseType(tagTypeCode)
-			debugSb.WriteString(fmt.Sprintf("[yellow]Base Type:[-] %s\n", logix.TypeName(baseType)))
+			debugSb.WriteString(fmt.Sprintf("%sBase Type:%s %s\n", th.TagAccent, th.TagReset, logix.TypeName(baseType)))
 
 			// For structures, show template ID
 			if isStruct {
 				templateID := logix.TemplateID(tagTypeCode)
-				debugSb.WriteString(fmt.Sprintf("[yellow]Template ID:[-] %d (0x%04X)\n", templateID, templateID))
+				debugSb.WriteString(fmt.Sprintf("%sTemplate ID:%s %d (0x%04X)\n", th.TagAccent, th.TagReset, templateID, templateID))
 			}
 
 			// Get element size (handles both atomic and structure types)
@@ -869,7 +898,7 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 			} else {
 				elemSize = uint32(logix.TypeSize(baseType))
 			}
-			debugSb.WriteString(fmt.Sprintf("[yellow]Element Size:[-] %d bytes\n", elemSize))
+			debugSb.WriteString(fmt.Sprintf("%sElement Size:%s %d bytes\n", th.TagAccent, th.TagReset, elemSize))
 			arrayDebugInfo = debugSb.String()
 		}
 
@@ -894,20 +923,20 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 			var result strings.Builder
 
 			// Rebuild header
-			result.WriteString("[yellow::b]Tag Information[-::-]\n")
+			result.WriteString(boldAccent + "Tag Information[-::-]\n")
 			result.WriteString("─────────────────────────────\n")
-			result.WriteString(fmt.Sprintf("[yellow]Name:[-] %s\n", tagName))
-			result.WriteString(fmt.Sprintf("[yellow]Type:[-] %s (0x%04X)\n", t.getTypeName(tagTypeCode), tagTypeCode))
-			result.WriteString(fmt.Sprintf("[yellow]Instance:[-] %d\n", tagInstance))
+			result.WriteString(th.Label("Name", tagName) + "\n")
+			result.WriteString(fmt.Sprintf("%sType:%s %s (0x%04X)\n", th.TagAccent, th.TagReset, t.getTypeName(tagTypeCode), tagTypeCode))
+			result.WriteString(fmt.Sprintf("%sInstance:%s %d\n", th.TagAccent, th.TagReset, tagInstance))
 
 			if len(tagDimensions) > 0 {
 				dims := make([]string, len(tagDimensions))
 				for i, d := range tagDimensions {
 					dims[i] = fmt.Sprintf("%d", d)
 				}
-				result.WriteString(fmt.Sprintf("[yellow]Dimensions:[-] [%s]\n", strings.Join(dims, ", ")))
+				result.WriteString(fmt.Sprintf("%sDimensions:%s [%s]\n", th.TagAccent, th.TagReset, strings.Join(dims, ", ")))
 			} else {
-				result.WriteString("[yellow]Dimensions:[-] scalar\n")
+				result.WriteString(fmt.Sprintf("%sDimensions:%s scalar\n", th.TagAccent, th.TagReset))
 			}
 
 			// Add array debug info if available
@@ -915,41 +944,41 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 				result.WriteString(arrayDebugInfo)
 			}
 
-			result.WriteString("\n[yellow::b]Live Value[-::-]\n")
+			result.WriteString("\n" + boldAccent + "Live Value[-::-]\n")
 			result.WriteString("─────────────────────────────\n")
 
 			if err != nil {
-				result.WriteString(fmt.Sprintf("[red]Read error:[-] %v\n", err))
+				result.WriteString(fmt.Sprintf("%sRead error:%s %v\n", th.TagError, th.TagReset, err))
 				t.details.SetText(result.String())
 				return
 			}
 
 			if val == nil {
-				result.WriteString("[gray]No value returned[-]\n")
+				result.WriteString(th.Dim("No value returned") + "\n")
 				t.details.SetText(result.String())
 				return
 			}
 
 			if val.Error != nil {
-				result.WriteString(fmt.Sprintf("[red]Tag error:[-] %v\n", val.Error))
+				result.WriteString(fmt.Sprintf("%sTag error:%s %v\n", th.TagError, th.TagReset, val.Error))
 				t.details.SetText(result.String())
 				return
 			}
 
 			// Display value
-			result.WriteString("[yellow]Value:[-] " + formatValue(val.GoValue()) + "\n")
-			result.WriteString(fmt.Sprintf("[yellow]Data Type:[-] %s (0x%04X)\n", t.getTypeName(val.DataType), val.DataType))
-			result.WriteString(fmt.Sprintf("[yellow]Size:[-] %d bytes\n", len(val.Bytes)))
+			result.WriteString(th.Label("Value", formatValue(val.GoValue())) + "\n")
+			result.WriteString(fmt.Sprintf("%sData Type:%s %s (0x%04X)\n", th.TagAccent, th.TagReset, t.getTypeName(val.DataType), val.DataType))
+			result.WriteString(fmt.Sprintf("%sSize:%s %d bytes\n", th.TagAccent, th.TagReset, len(val.Bytes)))
 
 			// Raw bytes hex dump
-			result.WriteString("\n[yellow::b]Raw Bytes[-::-]\n")
+			result.WriteString("\n" + boldAccent + "Raw Bytes[-::-]\n")
 			result.WriteString("─────────────────────────────\n")
 
 			if len(val.Bytes) > 0 {
 				// Hex dump with offset
 				for i := 0; i < len(val.Bytes); i += 16 {
 					// Offset
-					result.WriteString(fmt.Sprintf("[gray]%04X:[-] ", i))
+					result.WriteString(fmt.Sprintf("%s%04X:%s ", th.TagTextDim, i, th.TagReset))
 
 					// Hex bytes
 					for j := 0; j < 16; j++ {
@@ -964,7 +993,7 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 					}
 
 					// ASCII representation
-					result.WriteString(" [gray]|")
+					result.WriteString(" " + th.TagTextDim + "|")
 					for j := 0; j < 16 && i+j < len(val.Bytes); j++ {
 						b := val.Bytes[i+j]
 						if b >= 32 && b < 127 {
@@ -973,16 +1002,16 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 							result.WriteString(".")
 						}
 					}
-					result.WriteString("|[-]\n")
+					result.WriteString("|" + th.TagReset + "\n")
 
 					// Limit display to prevent huge outputs
 					if i >= 256 {
-						result.WriteString(fmt.Sprintf("[gray]... (%d more bytes)[-]\n", len(val.Bytes)-i-16))
+						result.WriteString(th.Dim(fmt.Sprintf("... (%d more bytes)", len(val.Bytes)-i-16)) + "\n")
 						break
 					}
 				}
 			} else {
-				result.WriteString("[gray]No data[-]\n")
+				result.WriteString(th.Dim("No data") + "\n")
 			}
 
 			t.details.SetText(result.String())
@@ -991,6 +1020,7 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 }
 
 func (t *BrowserTab) updateStatus() {
+	th := CurrentTheme
 	count := 0
 	for _, enabled := range t.enabledTags {
 		if enabled {
@@ -1003,18 +1033,29 @@ func (t *BrowserTab) updateStatus() {
 	if t.selectedPLC != "" {
 		plc := t.app.manager.GetPLC(t.selectedPLC)
 		if plc == nil || plc.GetStatus() != plcman.StatusConnected {
-			statusPrefix = "[red]OFFLINE[-] | "
+			statusPrefix = th.ErrorText("OFFLINE") + " | "
 		}
 	}
 
-	baseStatus := fmt.Sprintf(" %s%d tags selected | [yellow]/[white] filter  [yellow]c[white] clear  [yellow]p[white] PLC  [yellow]Space[white] toggle  [yellow]w[white] writable  [yellow]i[white] ignore  [yellow]d[white] details", statusPrefix, count)
+	baseStatus := fmt.Sprintf(" %s%d tags selected | %s/%s filter  %sc%s clear  %sp%s PLC  %sSpace%s toggle  %sw%s writable  %si%s ignore  %sd%s details",
+		statusPrefix, count,
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText)
 
 	// Add manual tag keys for non-discovery PLCs
 	if t.isManualPLC() {
-		baseStatus += "  [yellow]a[white] add  [yellow]e[white] edit  [yellow]x[white] delete"
+		baseStatus += fmt.Sprintf("  %sa%s add  %se%s edit  %sx%s delete",
+			th.TagHotkey, th.TagActionText,
+			th.TagHotkey, th.TagActionText,
+			th.TagHotkey, th.TagActionText)
 	}
 
-	baseStatus += "  [gray]│[white]  [yellow]?[white] help"
+	baseStatus += fmt.Sprintf("  %s│%s  %s?%s help", th.TagActionText, th.TagActionText, th.TagHotkey, th.TagActionText)
 	t.statusBar.SetText(baseStatus)
 }
 
@@ -1026,6 +1067,23 @@ func (t *BrowserTab) GetPrimitive() tview.Primitive {
 // GetFocusable returns the element that should receive focus.
 func (t *BrowserTab) GetFocusable() tview.Primitive {
 	return t.tree
+}
+
+// RefreshTheme updates theme-dependent UI elements.
+func (t *BrowserTab) RefreshTheme() {
+	t.updateStatus()
+	th := CurrentTheme
+	t.treeFrame.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.details.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.details.SetTextColor(th.Text)
+	t.statusBar.SetTextColor(th.Text)
+	// Update form field colors
+	ApplyDropDownTheme(t.plcSelect)
+	ApplyInputFieldTheme(t.filter)
+	ApplyTreeViewTheme(t.tree)
+	// Update tree root color
+	t.treeRoot.SetColor(th.Accent).SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
+	t.loadTags() // Refresh tree nodes with new theme colors
 }
 
 // Refresh updates the PLC dropdown and reloads tags.
@@ -1170,11 +1228,13 @@ func (t *BrowserTab) loadTags() {
 		}
 	}
 
+	th := CurrentTheme
+
 	// Show offline notice if PLC is not connected
 	isOffline := plc == nil || plc.GetStatus() != plcman.StatusConnected
 	if isOffline {
-		offlineNode := tview.NewTreeNode("[red]PLC OFFLINE[-] - Tags can still be configured").
-			SetColor(tcell.ColorRed).
+		offlineNode := tview.NewTreeNode(th.ErrorText("PLC OFFLINE") + " - Tags can still be configured").
+			SetColor(th.Error).
 			SetSelectable(false)
 		t.treeRoot.AddChild(offlineNode)
 	}
@@ -1183,8 +1243,9 @@ func (t *BrowserTab) loadTags() {
 	if isManual {
 		sectionName := "Manual Tags"
 		sectionNode := tview.NewTreeNode(sectionName).
-			SetColor(tcell.ColorBlue).
-			SetExpanded(true)
+			SetColor(th.Accent).
+			SetExpanded(true).
+			SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
 
 		// Sort tags by name
 		sort.Slice(tags, func(i, j int) bool {
@@ -1243,8 +1304,9 @@ func (t *BrowserTab) loadTags() {
 	// Add controller tags
 	if len(controllerTags) > 0 {
 		controllerNode := tview.NewTreeNode("Controller").
-			SetColor(tcell.ColorBlue).
-			SetExpanded(true)
+			SetColor(th.Accent).
+			SetExpanded(true).
+			SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
 
 		for i := range controllerTags {
 			tag := &controllerTags[i]
@@ -1280,8 +1342,9 @@ func (t *BrowserTab) loadTags() {
 		})
 
 		progNode := tview.NewTreeNode(prog).
-			SetColor(tcell.ColorBlue).
-			SetExpanded(true)
+			SetColor(th.Accent).
+			SetExpanded(true).
+			SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
 
 		for i := range tags {
 			tag := &tags[i]
@@ -1310,6 +1373,7 @@ func (t *BrowserTab) createTagNode(tag *logix.TagInfo, enabled, writable bool) *
 }
 
 func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writable, hasError bool) *tview.TreeNode {
+	th := CurrentTheme
 	checkbox := CheckboxUnchecked
 	if enabled {
 		checkbox = CheckboxChecked
@@ -1318,25 +1382,25 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 	// Writable indicator
 	writeIndicator := ""
 	if writable {
-		writeIndicator = "[red]W[-] "
+		writeIndicator = th.TagWritable + "W" + th.TagReset + " "
 	}
 
 	// Ignore indicator (for UDT members)
 	ignoreIndicator := ""
 	if t.isMemberIgnored(tag.Name) {
-		ignoreIndicator = "[red]I[-] "
+		ignoreIndicator = th.TagError + "I" + th.TagReset + " "
 	}
 
 	// Error indicator
 	errorIndicator := ""
 	if hasError {
-		errorIndicator = "[red]![-] "
+		errorIndicator = th.TagError + "!" + th.TagReset + " "
 	}
 
 	// UDT expandable indicator
 	udtIndicator := ""
 	if logix.IsStructure(tag.TypeCode) {
-		udtIndicator = "[yellow]▶[-] "
+		udtIndicator = th.TagAccent + "▶" + th.TagReset + " "
 	}
 
 	typeName := t.getTypeName(tag.TypeCode)
@@ -1361,7 +1425,8 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 
 	var text string
 	if enabled {
-		text = fmt.Sprintf("%s %s%s%s%s%s  [gray]%s[-]", checkbox, udtIndicator, ignoreIndicator, errorIndicator, writeIndicator, shortName, typeName)
+		// Bold text for enabled items using [::b] inline formatting
+		text = fmt.Sprintf("[::b]%s %s%s%s%s%s[::-]  %s%s%s", checkbox, udtIndicator, ignoreIndicator, errorIndicator, writeIndicator, shortName, th.TagTextDim, typeName, th.TagReset)
 	} else {
 		// Don't use inline color tags - let node.SetColor handle it
 		// This allows proper color inversion when the node is selected
@@ -1373,9 +1438,13 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 		SetSelectable(true)
 
 	if enabled {
-		node.SetColor(tcell.ColorWhite)
+		node.SetColor(th.Secondary) // Theme secondary color for publishing items
+		// When selected/hovered: SelectedText on success color background
+		node.SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Success).Bold(true))
 	} else {
-		node.SetColor(tcell.ColorDarkGray)
+		node.SetColor(th.Text) // Theme text color for non-publishing items
+		// When selected/hovered: SelectedText on dim background
+		node.SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.TextDim))
 	}
 
 	return node
@@ -1411,6 +1480,7 @@ func (t *BrowserTab) showAddTagDialog() {
 	const pageName = "addtag"
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Add Manual Tag ")
 
 	// Use "Address:" label and S7 types for S7 PLCs
@@ -1538,6 +1608,7 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 	}
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Edit Manual Tag ")
 
 	// Use S7 types for S7 PLCs

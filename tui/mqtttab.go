@@ -16,8 +16,10 @@ type MQTTTab struct {
 	app       *App
 	flex      *tview.Flex
 	table     *tview.Table
+	tableBox  *tview.Flex
 	info      *tview.TextView
 	statusBar *tview.TextView
+	buttonBar *tview.TextView
 }
 
 // NewMQTTTab creates a new MQTT tab.
@@ -29,49 +31,52 @@ func NewMQTTTab(app *App) *MQTTTab {
 }
 
 func (t *MQTTTab) setupUI() {
-	// Button bar
-	buttons := tview.NewTextView().
+	// Button bar (themed)
+	t.buttonBar = tview.NewTextView().
 		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter).
-		SetText(" [yellow]a[white]dd  [yellow]e[white]dit  [yellow]r[white]emove  [yellow]c[white]onnect  dis[yellow]C[white]onnect  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab ")
+		SetTextAlign(tview.AlignCenter)
+	t.updateButtonBar()
 
 	// Broker table
 	t.table = tview.NewTable().
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0)
+	ApplyTableTheme(t.table)
 
 	t.table.SetInputCapture(t.handleKeys)
 	t.table.SetSelectedFunc(t.onSelect)
 
-	// Set up headers
+	// Set up headers (themed)
 	headers := []string{"", "Name", "Broker", "Port", "TLS", "Root Topic", "Status"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
-			SetTextColor(tcell.ColorYellow).
+			SetTextColor(CurrentTheme.Accent).
 			SetSelectable(false).
 			SetAttributes(tcell.AttrBold))
 	}
 
-	tableBox := tview.NewFlex().SetDirection(tview.FlexRow)
-	tableBox.SetBorder(true).SetTitle(" MQTT Brokers ")
-	tableBox.AddItem(buttons, 1, 0, false)
-	tableBox.AddItem(t.table, 0, 1, true)
+	t.tableBox = tview.NewFlex().SetDirection(tview.FlexRow)
+	t.tableBox.SetBorder(true).SetTitle(" MQTT Brokers ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
+	t.tableBox.AddItem(t.buttonBar, 1, 0, false)
+	t.tableBox.AddItem(t.table, 0, 1, true)
 
 	// Info panel
 	t.info = tview.NewTextView().
-		SetDynamicColors(true)
-	t.info.SetBorder(true).SetTitle(" Topic Structure ")
+		SetDynamicColors(true).
+		SetTextColor(CurrentTheme.Text)
+	t.info.SetBorder(true).SetTitle(" Topic Structure ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 	t.updateInfo()
 
 	// Status bar
 	t.statusBar = tview.NewTextView().
-		SetDynamicColors(true)
+		SetDynamicColors(true).
+		SetTextColor(CurrentTheme.Text)
 
 	// Main layout
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(tableBox, 0, 1, true).
+		AddItem(t.tableBox, 0, 1, true).
 		AddItem(t.info, 8, 0, false).
 		AddItem(t.statusBar, 1, 0, false)
 }
@@ -115,12 +120,13 @@ func (t *MQTTTab) onSelect(row, col int) {
 }
 
 func (t *MQTTTab) updateInfo() {
+	th := CurrentTheme
 	text := "\n"
-	text += " [yellow]Topic Format:[white]\n"
+	text += " " + th.TagAccent + "Topic Format:" + th.TagReset + "\n"
 	text += "   {root_topic}/{plc_name}/tags/{tag_name}\n\n"
-	text += " [yellow]Message Format:[white]\n"
+	text += " " + th.TagAccent + "Message Format:" + th.TagReset + "\n"
 	text += "   {\"value\": <value>, \"type\": \"<type>\", \"timestamp\": \"<iso8601>\"}\n\n"
-	text += " [gray]Messages are retained and only published on value change[-]\n"
+	text += " " + th.Dim("Messages are retained and only published on value change") + "\n"
 
 	t.info.SetText(text)
 }
@@ -132,15 +138,16 @@ func (t *MQTTTab) refreshTable() {
 	}
 
 	pubs := t.app.mqttMgr.List()
+	th := CurrentTheme
 	for i, pub := range pubs {
 		row := i + 1
 		cfg := pub.Config()
 
 		var indicator string
 		if pub.IsRunning() {
-			indicator = "[green]●[-]"
+			indicator = th.StatusConnected
 		} else {
-			indicator = "[gray]○[-]"
+			indicator = th.StatusDisconnected
 		}
 
 		status := "Stopped"
@@ -148,9 +155,9 @@ func (t *MQTTTab) refreshTable() {
 			status = "Connected"
 		}
 
-		tlsIndicator := "[gray]No[-]"
+		tlsIndicator := th.Dim("No")
 		if cfg.UseTLS {
-			tlsIndicator = "[green]Yes[-]"
+			tlsIndicator = th.SuccessText("Yes")
 		}
 
 		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
@@ -167,6 +174,7 @@ func (t *MQTTTab) showAddDialog() {
 	const pageName = "add-mqtt"
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Add MQTT Broker ")
 
 	form.AddInputField("Name:", "", 20, nil, nil)
@@ -236,7 +244,7 @@ func (t *MQTTTab) showAddDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 55, 19, func() {
+	t.app.showFormModal(pageName, form, 55, 24, func() {
 		t.app.closeModal(pageName)
 	})
 }
@@ -259,6 +267,7 @@ func (t *MQTTTab) showEditDialog() {
 	originalName := cfg.Name
 
 	form := tview.NewForm()
+	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Edit MQTT Broker ")
 
 	form.AddInputField("Name:", cfg.Name, 20, nil, nil)
@@ -338,7 +347,7 @@ func (t *MQTTTab) showEditDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 55, 19, func() {
+	t.app.showFormModal(pageName, form, 55, 24, func() {
 		t.app.closeModal(pageName)
 	})
 }
@@ -477,5 +486,34 @@ func (t *MQTTTab) Refresh() {
 
 	t.statusBar.SetText(fmt.Sprintf(" %d brokers configured, %d connected", len(pubs), connectedCount))
 	t.refreshTable()
+}
+
+func (t *MQTTTab) updateButtonBar() {
+	th := CurrentTheme
+	buttonText := " " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
+		th.TagHotkey + "e" + th.TagActionText + "dit  " +
+		th.TagHotkey + "r" + th.TagActionText + "emove  " +
+		th.TagHotkey + "c" + th.TagActionText + "onnect  " +
+		th.TagHotkey + "C" + th.TagActionText + " disconnect" + th.TagReset
+	t.buttonBar.SetText(buttonText)
+}
+
+// RefreshTheme updates theme-dependent UI elements.
+func (t *MQTTTab) RefreshTheme() {
+	t.updateButtonBar()
+	th := CurrentTheme
+	t.tableBox.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.info.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.info.SetTextColor(th.Text)
+	t.statusBar.SetTextColor(th.Text)
+	ApplyTableTheme(t.table)
+	// Update header colors
+	for i := 0; i < t.table.GetColumnCount(); i++ {
+		if cell := t.table.GetCell(0, i); cell != nil {
+			cell.SetTextColor(th.Accent)
+		}
+	}
+	// Regenerate info text with new theme colors
+	t.updateInfo()
 }
 

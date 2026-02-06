@@ -18,10 +18,11 @@ import (
 
 // App is the main TUI application.
 type App struct {
-	app       *tview.Application
-	pages     *tview.Pages
-	tabs      *tview.TextView
-	statusBar *tview.TextView
+	app            *tview.Application
+	pages          *tview.Pages
+	tabs           *tview.TextView
+	statusBar      *tview.TextView
+	themeIndicator *tview.TextView
 
 	plcsTab     *PLCsTab
 	browserTab  *BrowserTab
@@ -54,6 +55,11 @@ type App struct {
 
 // NewApp creates a new TUI application.
 func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager) *App {
+	// Apply theme from config
+	if cfg.UI.Theme != "" {
+		SetTheme(cfg.UI.Theme)
+	}
+
 	a := &App{
 		app:        tview.NewApplication(),
 		config:     cfg,
@@ -75,6 +81,11 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiS
 // NewAppWithScreen creates a TUI application that uses the provided tcell.Screen.
 // This is used for daemon mode where the TUI runs on a PTY.
 func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, screen tcell.Screen) *App {
+	// Apply theme from config
+	if cfg.UI.Theme != "" {
+		SetTheme(cfg.UI.Theme)
+	}
+
 	a := &App{
 		app:        tview.NewApplication().SetScreen(screen),
 		config:     cfg,
@@ -97,6 +108,11 @@ func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Man
 // NewAppWithPTY creates a TUI application that uses the provided PTY file descriptors.
 // This is used for daemon mode where the TUI runs on a PTY for SSH multiplexing.
 func NewAppWithPTY(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, ptyFile *os.File) (*App, error) {
+	// Apply theme from config
+	if cfg.UI.Theme != "" {
+		SetTheme(cfg.UI.Theme)
+	}
+
 	// Create a PTYTty wrapper that implements tcell.Tty
 	ptyTty := NewPTYTty(ptyFile)
 
@@ -153,7 +169,14 @@ func (a *App) setupUI() {
 	// Create status bar
 	a.statusBar = tview.NewTextView().
 		SetDynamicColors(true).
-		SetTextAlign(tview.AlignLeft)
+		SetTextAlign(tview.AlignLeft).
+		SetTextColor(CurrentTheme.Text)
+
+	// Create theme indicator (bottom right)
+	// Dynamic colors disabled to ensure all theme names display correctly
+	a.themeIndicator = tview.NewTextView().
+		SetTextAlign(tview.AlignRight)
+	a.updateThemeIndicator()
 
 	// Create pages for tab content
 	a.pages = tview.NewPages()
@@ -178,12 +201,19 @@ func (a *App) setupUI() {
 	a.pages.AddPage(TabTriggers, a.triggersTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabDebug, a.debugTab.GetPrimitive(), true, false)
 
+	// Create bottom bar with status (left) and theme indicator (right)
+	// Width 30 to accommodate "Theme (F6): highcontrast " (longest theme name)
+	bottomBar := tview.NewFlex().
+		SetDirection(tview.FlexColumn).
+		AddItem(a.statusBar, 0, 1, false).
+		AddItem(a.themeIndicator, 30, 0, false)
+
 	// Create main layout
 	mainFlex := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(a.tabs, 1, 0, false).
 		AddItem(a.pages, 0, 1, true).
-		AddItem(a.statusBar, 1, 0, false)
+		AddItem(bottomBar, 1, 0, false)
 
 	// Set up key handling
 	a.app.SetInputCapture(a.handleGlobalKeys)
@@ -238,6 +268,21 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	}
 
+	// F6: Cycle through themes
+	if event.Key() == tcell.KeyF6 {
+		themeName := NextTheme()
+		a.updateTabsDisplay()
+		a.updateThemeIndicator()
+		// Refresh all tabs to apply new theme colors
+		a.refreshAllThemes()
+		// Save theme preference to config
+		a.config.UI.Theme = themeName
+		a.SaveConfig()
+		// Force full redraw to apply theme changes
+		a.app.Sync()
+		return nil
+	}
+
 	// Let the current tab handle the key
 	return event
 }
@@ -284,22 +329,35 @@ func (a *App) focusCurrentTab() {
 }
 
 func (a *App) updateTabsDisplay() {
+	th := CurrentTheme
 	text := ""
 	for i, name := range a.tabNames {
 		if i > 0 {
-			text += "  │  "
+			text += th.TagTextDim + "  │  " + th.TagReset
 		}
 		if i == a.currentTab {
-			text += "[blue::b]" + name + "[-::-]"
+			// TagAccent is "[#RRGGBB]", need to insert "::b" before the closing bracket
+			colorTag := th.TagAccent[:len(th.TagAccent)-1] + "::b]"
+			text += colorTag + name + "[-::-]"
 		} else {
-			text += "[gray]" + name + "[-]"
+			text += th.TagTextDim + name + th.TagReset
 		}
 	}
 	a.tabs.SetText(text)
+	a.tabs.SetTextColor(th.Text)
 }
 
 func (a *App) setStatus(msg string) {
 	a.statusBar.SetText(" " + msg)
+}
+
+func (a *App) updateThemeIndicator() {
+	th := CurrentTheme
+	themeName := GetThemeName()
+	// Simple text without color tags - use SetTextColor for the color
+	a.themeIndicator.SetText("Theme (F6): " + themeName + " ")
+	a.themeIndicator.SetTextColor(th.TextDim)
+	a.statusBar.SetTextColor(th.Text)
 }
 
 func (a *App) showHelp() {
@@ -668,4 +726,32 @@ func (a *App) showFormModal(pageName string, form *tview.Form, width, height int
 func (a *App) closeModal(pageName string) {
 	a.pages.RemovePage(pageName)
 	a.focusCurrentTab()
+}
+
+// refreshAllThemes calls RefreshTheme on all tabs to apply theme changes.
+func (a *App) refreshAllThemes() {
+	if a.plcsTab != nil {
+		a.plcsTab.RefreshTheme()
+	}
+	if a.browserTab != nil {
+		a.browserTab.RefreshTheme()
+	}
+	if a.mqttTab != nil {
+		a.mqttTab.RefreshTheme()
+	}
+	if a.valkeyTab != nil {
+		a.valkeyTab.RefreshTheme()
+	}
+	if a.kafkaTab != nil {
+		a.kafkaTab.RefreshTheme()
+	}
+	if a.triggersTab != nil {
+		a.triggersTab.RefreshTheme()
+	}
+	if a.restTab != nil {
+		a.restTab.RefreshTheme()
+	}
+	if a.debugTab != nil {
+		a.debugTab.RefreshTheme()
+	}
 }

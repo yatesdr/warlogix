@@ -41,8 +41,9 @@ func (t *DebugTab) setupUI() {
 	// Log view
 	t.logView = tview.NewTextView().
 		SetDynamicColors(true).
-		SetScrollable(true)
-	t.logView.SetBorder(true).SetTitle(" Debug Log ")
+		SetScrollable(true).
+		SetTextColor(CurrentTheme.Text)
+	t.logView.SetBorder(true).SetTitle(" Debug Log ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 
 	// Auto-scroll to bottom
 	t.logView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -62,10 +63,11 @@ func (t *DebugTab) setupUI() {
 		return event
 	})
 
-	// Status bar
+	// Status bar (themed)
 	t.statusBar = tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(" [yellow]c[white] clear  [yellow]g[white] top  [yellow]G[white] bottom  [yellow]↑↓[white] scroll  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab")
+		SetTextColor(CurrentTheme.Text)
+	t.updateStatusBar()
 
 	// Main layout
 	t.flex = tview.NewFlex().
@@ -93,7 +95,7 @@ func (t *DebugTab) Log(format string, args ...interface{}) {
 	defer t.mu.Unlock()
 
 	timestamp := time.Now().Format("15:04:05.000")
-	msg := fmt.Sprintf("[gray]%s[-] %s", timestamp, formattedMsg)
+	msg := fmt.Sprintf("%s%s%s %s", CurrentTheme.TagTextDim, timestamp, CurrentTheme.TagReset, formattedMsg)
 	t.messages = append(t.messages, msg)
 
 	// Trim if too many messages
@@ -134,22 +136,26 @@ func stripColorTags(s string) string {
 
 // LogError adds an error message to the debug log.
 func (t *DebugTab) LogError(format string, args ...interface{}) {
-	t.Log("[red]ERROR:[-] "+format, args...)
+	th := CurrentTheme
+	t.Log(th.TagError+"ERROR:"+th.TagReset+" "+format, args...)
 }
 
 // LogInfo adds an info message to the debug log.
 func (t *DebugTab) LogInfo(format string, args ...interface{}) {
-	t.Log("[blue]INFO:[-] "+format, args...)
+	th := CurrentTheme
+	t.Log(th.TagPrimary+"INFO:"+th.TagReset+" "+format, args...)
 }
 
 // LogMQTT adds an MQTT-related message to the debug log.
 func (t *DebugTab) LogMQTT(format string, args ...interface{}) {
-	t.Log("[green]MQTT:[-] "+format, args...)
+	th := CurrentTheme
+	t.Log(th.TagSuccess+"MQTT:"+th.TagReset+" "+format, args...)
 }
 
 // LogValkey adds a Valkey-related message to the debug log.
 func (t *DebugTab) LogValkey(format string, args ...interface{}) {
-	t.Log("[yellow]VALKEY:[-] "+format, args...)
+	th := CurrentTheme
+	t.Log(th.TagAccent+"VALKEY:"+th.TagReset+" "+format, args...)
 }
 
 func (t *DebugTab) buildText() string {
@@ -227,7 +233,8 @@ func DebugLogValkey(format string, args ...interface{}) {
 
 // LogKafka adds a Kafka-related message to the debug log.
 func (t *DebugTab) LogKafka(format string, args ...interface{}) {
-	t.Log("[cyan]KAFKA:[-] "+format, args...)
+	th := CurrentTheme
+	t.Log(th.TagAccent+"KAFKA:"+th.TagReset+" "+format, args...)
 }
 
 // DebugLogKafka logs a Kafka message to the debug tab if it exists.
@@ -239,7 +246,8 @@ func DebugLogKafka(format string, args ...interface{}) {
 
 // LogSSH adds an SSH-related message to the debug log.
 func (t *DebugTab) LogSSH(format string, args ...interface{}) {
-	t.Log("[magenta]SSH:[-] "+format, args...)
+	th := CurrentTheme
+	t.Log(th.TagSecondary+"SSH:"+th.TagReset+" "+format, args...)
 }
 
 // DebugLogSSH logs an SSH message to the debug tab if it exists.
@@ -251,7 +259,8 @@ func DebugLogSSH(format string, args ...interface{}) {
 
 // LogLogix adds a Logix-related message to the debug log.
 func (t *DebugTab) LogLogix(format string, args ...interface{}) {
-	t.Log("[#FFA500]Logix:[-] "+format, args...)
+	th := CurrentTheme
+	t.Log(th.TagSecondary+"Logix:"+th.TagReset+" "+format, args...)
 }
 
 // DebugLogLogix logs a Logix message to the debug tab if it exists.
@@ -266,4 +275,26 @@ func SetDebugFileLogger(logger *logging.FileLogger) {
 	if debugLogger != nil {
 		debugLogger.SetFileLogger(logger)
 	}
+}
+
+func (t *DebugTab) updateStatusBar() {
+	th := CurrentTheme
+	statusText := fmt.Sprintf(" %sc%s clear  %sg%s top  %sG%s bottom  %s↑↓%s scroll  %s│%s  %s?%s help  %sShift+Tab%s next tab%s",
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText,
+		th.TagActionText, th.TagActionText,
+		th.TagHotkey, th.TagActionText,
+		th.TagHotkey, th.TagActionText, th.TagReset)
+	t.statusBar.SetText(statusText)
+}
+
+// RefreshTheme updates theme-dependent UI elements.
+func (t *DebugTab) RefreshTheme() {
+	t.updateStatusBar()
+	th := CurrentTheme
+	t.logView.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.logView.SetTextColor(th.Text)
+	t.statusBar.SetTextColor(th.Text)
 }

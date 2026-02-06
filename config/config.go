@@ -42,6 +42,12 @@ type Config struct {
 	Kafka    []KafkaConfig    `yaml:"kafka,omitempty"`
 	Triggers []TriggerConfig  `yaml:"triggers,omitempty"`
 	PollRate time.Duration    `yaml:"poll_rate"`
+	UI       UIConfig         `yaml:"ui,omitempty"`
+}
+
+// UIConfig stores user interface preferences.
+type UIConfig struct {
+	Theme string `yaml:"theme,omitempty"` // Theme name: default, retro, mono, amber, highcontrast
 }
 
 // PLCConfig stores configuration for a single PLC connection.

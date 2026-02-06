@@ -11,6 +11,7 @@ import (
 type RESTTab struct {
 	app        *App
 	flex       *tview.Flex
+	formBox    *tview.Flex
 	hostInput  *tview.InputField
 	portInput  *tview.InputField
 	startBtn   *tview.Button
@@ -57,9 +58,15 @@ func (t *RESTTab) setupUI() {
 			}
 		})
 
+	// Apply theme to input fields
+	ApplyInputFieldTheme(t.hostInput)
+	ApplyInputFieldTheme(t.portInput)
+
 	// Buttons
 	t.startBtn = tview.NewButton("Start").SetSelectedFunc(t.startServer)
 	t.stopBtn = tview.NewButton("Stop").SetSelectedFunc(t.stopServer)
+	ApplyButtonTheme(t.startBtn)
+	ApplyButtonTheme(t.stopBtn)
 
 	// Track focusable elements for Tab navigation
 	t.focusables = []tview.Primitive{t.hostInput, t.portInput, t.startBtn, t.stopBtn}
@@ -106,24 +113,25 @@ func (t *RESTTab) setupUI() {
 
 	// Status bar showing running state
 	t.statusBar = tview.NewTextView().
-		SetDynamicColors(true)
+		SetDynamicColors(true).
+		SetTextColor(CurrentTheme.Text)
 
 	// Combine status and inputs in config box
-	formBox := tview.NewFlex().SetDirection(tview.FlexRow)
-	formBox.SetBorder(true).SetTitle(" REST API Configuration ")
-	formBox.AddItem(t.statusBar, 1, 0, false)
-	formBox.AddItem(inputRow, 1, 0, true)
+	t.formBox = tview.NewFlex().SetDirection(tview.FlexRow)
+	t.formBox.SetBorder(true).SetTitle(" REST API Configuration ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
+	t.formBox.AddItem(t.statusBar, 1, 0, false)
+	t.formBox.AddItem(inputRow, 1, 0, true)
 
 	// Endpoints display
 	t.endpoints = tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true)
-	t.endpoints.SetBorder(true).SetTitle(" Available Endpoints ")
+	t.endpoints.SetBorder(true).SetTitle(" Available Endpoints ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 
 	// Main layout
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(formBox, 5, 0, true).
+		AddItem(t.formBox, 5, 0, true).
 		AddItem(t.endpoints, 0, 1, false)
 }
 
@@ -138,20 +146,21 @@ func (t *RESTTab) focusPrev() {
 }
 
 func (t *RESTTab) updateEndpointsList() {
+	th := CurrentTheme
 	baseURL := fmt.Sprintf("http://%s:%d", t.app.config.REST.Host, t.app.config.REST.Port)
 
 	text := "\n"
-	text += fmt.Sprintf(" [yellow]GET[white]   %s/\n", baseURL)
+	text += fmt.Sprintf(" %sGET%s   %s/\n", th.TagAccent, th.TagReset, baseURL)
 	text += "        List all configured PLCs\n\n"
-	text += fmt.Sprintf(" [yellow]GET[white]   %s/{plc}\n", baseURL)
+	text += fmt.Sprintf(" %sGET%s   %s/{plc}\n", th.TagAccent, th.TagReset, baseURL)
 	text += "        Get PLC details\n\n"
-	text += fmt.Sprintf(" [yellow]GET[white]   %s/{plc}/programs\n", baseURL)
+	text += fmt.Sprintf(" %sGET%s   %s/{plc}/programs\n", th.TagAccent, th.TagReset, baseURL)
 	text += "        List programs on PLC\n\n"
-	text += fmt.Sprintf(" [yellow]GET[white]   %s/{plc}/tags\n", baseURL)
+	text += fmt.Sprintf(" %sGET%s   %s/{plc}/tags\n", th.TagAccent, th.TagReset, baseURL)
 	text += "        Get all published tags\n\n"
-	text += fmt.Sprintf(" [yellow]GET[white]   %s/{plc}/tags/{tag}\n", baseURL)
+	text += fmt.Sprintf(" %sGET%s   %s/{plc}/tags/{tag}\n", th.TagAccent, th.TagReset, baseURL)
 	text += "        Get specific tag value\n\n"
-	text += fmt.Sprintf(" [green]POST[white]  %s/{plc}/write\n", baseURL)
+	text += fmt.Sprintf(" %sPOST%s  %s/{plc}/write\n", th.TagSuccess, th.TagReset, baseURL)
 	text += "        Write tag value (writable tags only)\n"
 	text += "        Body: {\"plc\": \"name\", \"tag\": \"tagname\", \"value\": <value>}\n"
 
@@ -207,15 +216,38 @@ func (t *RESTTab) GetFocusable() tview.Primitive {
 
 // Refresh updates the display.
 func (t *RESTTab) Refresh() {
+	th := CurrentTheme
 	running := t.app.apiServer.IsRunning()
 
 	var status string
 	if running {
-		status = fmt.Sprintf(" [green]● Running[white] on %s  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab", t.app.apiServer.Address())
+		status = fmt.Sprintf(" %s● Running%s on %s  %s│%s  %s?%s help  %sShift+Tab%s next tab",
+			th.TagSuccess, th.TagReset, t.app.apiServer.Address(),
+			th.TagTextDim, th.TagReset,
+			th.TagAccent, th.TagReset,
+			th.TagAccent, th.TagReset)
 	} else {
-		status = " [red]○ Stopped[white] - Press Tab to reach Start/Stop  [gray]│[white]  [yellow]?[white] help  [yellow]Shift+Tab[white] next tab"
+		status = fmt.Sprintf(" %s○ Stopped%s - Press Tab to reach Start/Stop  %s│%s  %s?%s help  %sShift+Tab%s next tab",
+			th.TagError, th.TagReset,
+			th.TagTextDim, th.TagReset,
+			th.TagAccent, th.TagReset,
+			th.TagAccent, th.TagReset)
 	}
 
 	t.statusBar.SetText(status)
 	t.updateEndpointsList()
+}
+
+// RefreshTheme updates theme-dependent UI elements.
+func (t *RESTTab) RefreshTheme() {
+	th := CurrentTheme
+	t.formBox.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.endpoints.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	t.statusBar.SetTextColor(th.Text)
+	t.endpoints.SetTextColor(th.Text)
+	ApplyInputFieldTheme(t.hostInput)
+	ApplyInputFieldTheme(t.portInput)
+	ApplyButtonTheme(t.startBtn)
+	ApplyButtonTheme(t.stopBtn)
+	t.Refresh() // Update status text with new theme colors
 }
