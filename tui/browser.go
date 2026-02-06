@@ -10,6 +10,7 @@ import (
 
 	"warlogix/ads"
 	"warlogix/config"
+	"warlogix/fins"
 	"warlogix/logix"
 	"warlogix/plcman"
 	"warlogix/s7"
@@ -244,6 +245,8 @@ func (t *BrowserTab) getTypeName(typeCode uint16) string {
 			return s7.TypeName(typeCode)
 		case config.FamilyBeckhoff:
 			return ads.TypeName(typeCode)
+		case config.FamilyOmron:
+			return fins.TypeName(typeCode)
 		}
 	}
 	return logix.TypeName(typeCode)
@@ -671,16 +674,19 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 		shortName = tag.Name[idx+1:]
 	}
 
-	// For S7 PLCs, show alias as primary name if set, with address in gray
+	// For address-based PLCs (S7, Omron), show alias as primary name if set, with address in gray
 	cfg := t.app.config.FindPLC(t.selectedPLC)
-	if cfg != nil && cfg.GetFamily() == config.FamilyS7 {
-		// Look up the alias for this tag
-		for _, sel := range cfg.Tags {
-			if sel.Name == tag.Name && sel.Alias != "" {
-				// Show: checkbox [indicators] Alias  (address) type
-				shortName = sel.Alias
-				typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
-				break
+	if cfg != nil {
+		family := cfg.GetFamily()
+		if family == config.FamilyS7 || family == config.FamilyOmron {
+			// Look up the alias for this tag
+			for _, sel := range cfg.Tags {
+				if sel.Name == tag.Name && sel.Alias != "" {
+					// Show: checkbox [indicators] Alias  (address) type
+					shortName = sel.Alias
+					typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
+					break
+				}
 			}
 		}
 	}
@@ -1426,16 +1432,19 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 		shortName = tag.Name[idx+1:]
 	}
 
-	// For S7 PLCs, show alias as primary name if set, with address in gray
+	// For address-based PLCs (S7, Omron), show alias as primary name if set, with address in gray
 	cfg := t.app.config.FindPLC(t.selectedPLC)
-	if cfg != nil && cfg.GetFamily() == config.FamilyS7 {
-		// Look up the alias for this tag
-		for _, sel := range cfg.Tags {
-			if sel.Name == tag.Name && sel.Alias != "" {
-				// Show: checkbox [indicators] Alias  (address) type
-				shortName = sel.Alias
-				typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
-				break
+	if cfg != nil {
+		family := cfg.GetFamily()
+		if family == config.FamilyS7 || family == config.FamilyOmron {
+			// Look up the alias for this tag
+			for _, sel := range cfg.Tags {
+				if sel.Name == tag.Name && sel.Alias != "" {
+					// Show: checkbox [indicators] Alias  (address) type
+					shortName = sel.Alias
+					typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
+					break
+				}
 			}
 		}
 	}
@@ -1500,22 +1509,40 @@ func (t *BrowserTab) showAddTagDialog() {
 	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Add Manual Tag ")
 
-	// Use "Address:" label and S7 types for S7 PLCs
+	// Determine PLC family and use appropriate labels/types
 	cfg := t.app.config.FindPLC(t.selectedPLC)
-	addressLabel := "Tag Name:"
+	family := config.FamilyLogix
+	if cfg != nil {
+		family = cfg.GetFamily()
+	}
+
+	// Address-based PLCs (S7, Omron) show Alias first, then Address
+	// Tag-based PLCs (Logix) show Tag Name first, then Alias
+	isAddressBased := family == config.FamilyS7 || family == config.FamilyOmron
+
 	var typeOptions []string
-	isS7 := cfg != nil && cfg.GetFamily() == config.FamilyS7
-	if isS7 {
-		addressLabel = "Address:"
+	var addressLabel string
+
+	switch family {
+	case config.FamilyS7:
 		typeOptions = s7.SupportedTypeNames()
-		// S7: Alias first, then Type, then Address (more intuitive)
-		form.AddInputField("Name:", "", 30, nil, nil)
+		addressLabel = "DB.Offset:"
+	case config.FamilyOmron:
+		typeOptions = fins.SupportedTypeNames()
+		addressLabel = "Address:"
+	default:
+		typeOptions = logix.SupportedTypeNames()
+		addressLabel = "Tag Name:"
+	}
+
+	if isAddressBased {
+		// Address-based: Alias first, then Type, then Offset/Address
+		form.AddInputField("Alias:", "", 30, nil, nil)
 		form.AddDropDown("Data Type:", typeOptions, 3, nil) // Default to DINT (index 3)
 		form.AddInputField(addressLabel, "", 30, nil, nil)
 		form.AddCheckbox("Writable:", false, nil)
 	} else {
-		typeOptions = logix.SupportedTypeNames()
-		// Logix: Tag Name, Type, Alias
+		// Tag-based: Tag Name, Type, Alias
 		form.AddInputField(addressLabel, "", 30, nil, nil)
 		form.AddDropDown("Data Type:", typeOptions, 3, nil) // Default to DINT (index 3)
 		form.AddInputField("Alias:", "", 30, nil, nil)
@@ -1524,8 +1551,8 @@ func (t *BrowserTab) showAddTagDialog() {
 
 	form.AddButton("Add", func() {
 		var tagName, alias string
-		if isS7 {
-			alias = form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
+		if isAddressBased {
+			alias = form.GetFormItemByLabel("Alias:").(*tview.InputField).GetText()
 			tagName = form.GetFormItemByLabel(addressLabel).(*tview.InputField).GetText()
 		} else {
 			tagName = form.GetFormItemByLabel(addressLabel).(*tview.InputField).GetText()
@@ -1535,18 +1562,20 @@ func (t *BrowserTab) showAddTagDialog() {
 		writable := form.GetFormItemByLabel("Writable:").(*tview.Checkbox).IsChecked()
 
 		if tagName == "" {
-			if isS7 {
-				t.app.showErrorWithFocus("Error", "Address is required", form)
-			} else {
-				t.app.showErrorWithFocus("Error", "Tag name is required", form)
-			}
+			t.app.showErrorWithFocus("Error", "Address is required", form)
 			return
 		}
 
-		// Validate S7 address format
-		if isS7 {
+		// Validate address format based on PLC family
+		switch family {
+		case config.FamilyS7:
 			if err := s7.ValidateAddress(tagName); err != nil {
 				t.app.showErrorWithFocus("Invalid Address", err.Error(), form)
+				return
+			}
+		case config.FamilyOmron:
+			if err := fins.ValidateAddress(tagName); err != nil {
+				t.app.showErrorWithFocus("Invalid Address", err.Error()+"\nExpected format: DM100, CIO50, HR10, etc.", form)
 				return
 			}
 		}
@@ -1628,13 +1657,23 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Edit Manual Tag ")
 
-	// Use S7 types for S7 PLCs
-	isS7 := cfg.GetFamily() == config.FamilyS7
+	// Determine PLC family and use appropriate labels/types
+	family := cfg.GetFamily()
+	isAddressBased := family == config.FamilyS7 || family == config.FamilyOmron
+
 	var typeOptions []string
-	if isS7 {
+	var addressLabel string
+
+	switch family {
+	case config.FamilyS7:
 		typeOptions = s7.SupportedTypeNames()
-	} else {
+		addressLabel = "DB.Offset:"
+	case config.FamilyOmron:
+		typeOptions = fins.SupportedTypeNames()
+		addressLabel = "Address:"
+	default:
 		typeOptions = logix.SupportedTypeNames()
+		addressLabel = "Tag Name:"
 	}
 
 	selectedType := 3 // Default to DINT
@@ -1645,17 +1684,14 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 		}
 	}
 
-	// Use "Address:" label for S7 PLCs, "Tag Name:" for others
-	addressLabel := "Tag Name:"
-	if isS7 {
-		addressLabel = "Address:"
-		// S7: Name first, then Type, then Address (more intuitive)
-		form.AddInputField("Name:", tagSel.Alias, 30, nil, nil)
+	if isAddressBased {
+		// Address-based: Alias first, then Type, then Offset/Address
+		form.AddInputField("Alias:", tagSel.Alias, 30, nil, nil)
 		form.AddDropDown("Data Type:", typeOptions, selectedType, nil)
 		form.AddInputField(addressLabel, tagSel.Name, 30, nil, nil)
 		form.AddCheckbox("Writable:", tagSel.Writable, nil)
 	} else {
-		// Logix: Tag Name, Type, Alias
+		// Tag-based: Tag Name, Type, Alias
 		form.AddInputField(addressLabel, tagSel.Name, 30, nil, nil)
 		form.AddDropDown("Data Type:", typeOptions, selectedType, nil)
 		form.AddInputField("Alias:", tagSel.Alias, 30, nil, nil)
@@ -1666,8 +1702,8 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 
 	form.AddButton("Save", func() {
 		var tagName, alias string
-		if isS7 {
-			alias = form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
+		if isAddressBased {
+			alias = form.GetFormItemByLabel("Alias:").(*tview.InputField).GetText()
 			tagName = form.GetFormItemByLabel(addressLabel).(*tview.InputField).GetText()
 		} else {
 			tagName = form.GetFormItemByLabel(addressLabel).(*tview.InputField).GetText()
@@ -1677,18 +1713,20 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 		writable := form.GetFormItemByLabel("Writable:").(*tview.Checkbox).IsChecked()
 
 		if tagName == "" {
-			if isS7 {
-				t.app.showErrorWithFocus("Error", "Address is required", form)
-			} else {
-				t.app.showErrorWithFocus("Error", "Tag name is required", form)
-			}
+			t.app.showErrorWithFocus("Error", "Address is required", form)
 			return
 		}
 
-		// Validate S7 address format
-		if isS7 {
+		// Validate address format based on PLC family
+		switch family {
+		case config.FamilyS7:
 			if err := s7.ValidateAddress(tagName); err != nil {
 				t.app.showErrorWithFocus("Invalid Address", err.Error(), form)
+				return
+			}
+		case config.FamilyOmron:
+			if err := fins.ValidateAddress(tagName); err != nil {
+				t.app.showErrorWithFocus("Invalid Address", err.Error()+"\nExpected format: DM100, CIO50, HR10, etc.", form)
 				return
 			}
 		}

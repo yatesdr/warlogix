@@ -2,6 +2,7 @@ package fins
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,8 +23,10 @@ type Client struct {
 	network   byte
 	node      byte
 	unit      byte
+	srcNode   byte // Source node number (local node)
 	connected bool
 	timeout   time.Duration
+	debug     bool // Enable packet logging
 }
 
 // Option is a functional option for configuring the client.
@@ -64,6 +67,22 @@ func WithPort(port int) Option {
 	}
 }
 
+// WithSourceNode sets the source (local) node number for FINS communication.
+// In FINS/UDP, this is typically the last octet of the local IP address.
+// If not set, it will be auto-detected from the local IP.
+func WithSourceNode(node byte) Option {
+	return func(c *Client) {
+		c.srcNode = node
+	}
+}
+
+// WithDebug enables packet logging for debugging.
+func WithDebug(enabled bool) Option {
+	return func(c *Client) {
+		c.debug = enabled
+	}
+}
+
 // Connect establishes a connection to an Omron PLC via FINS/UDP.
 func Connect(address string, opts ...Option) (*Client, error) {
 	c := &Client{
@@ -72,6 +91,7 @@ func Connect(address string, opts ...Option) (*Client, error) {
 		network: 0,
 		node:    0,
 		unit:    0,
+		srcNode: 0, // Will be auto-detected if not set
 		timeout: 2000 * time.Millisecond, // 2 second timeout for reliable communication
 	}
 
@@ -79,9 +99,15 @@ func Connect(address string, opts ...Option) (*Client, error) {
 		opt(c)
 	}
 
+	// Auto-detect source node from local IP if not explicitly configured
+	if c.srcNode == 0 {
+		c.srcNode = detectLocalNode(address)
+	}
+
 	// Create addresses
-	// Local address: use any available port, node 0 lets the library auto-assign
-	c.localAddr = gofins.NewUDPAddress("0.0.0.0", 0, c.network, 0, 0)
+	// Local address: use the detected/configured source node
+	// The source node is important for FINS - many PLCs require it to match the IP address
+	c.localAddr = gofins.NewUDPAddress("0.0.0.0", 0, c.network, c.srcNode, 0)
 
 	// PLC address
 	c.plcAddr = gofins.NewUDPAddress(c.address, c.port, c.network, c.node, c.unit)
@@ -95,10 +121,37 @@ func Connect(address string, opts ...Option) (*Client, error) {
 	// Configure client
 	client.SetTimeoutMs(uint(c.timeout.Milliseconds()))
 
+	// Enable packet logging if debug mode is on
+	if c.debug {
+		client.SetShowPacket(true)
+	}
+
 	c.client = client
 	c.connected = true
 
 	return c, nil
+}
+
+// detectLocalNode attempts to determine the appropriate source node number
+// by looking at the local network interface that would route to the PLC.
+// In FINS/UDP, the source node is typically the last octet of the local IP.
+func detectLocalNode(plcAddress string) byte {
+	// Try to establish a UDP connection to determine the local IP
+	conn, err := net.Dial("udp", plcAddress+":9600")
+	if err != nil {
+		// If we can't determine, use 0 (some PLCs accept this)
+		return 0
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	ip := localAddr.IP.To4()
+	if ip == nil {
+		return 0
+	}
+
+	// Return the last octet as the node number
+	return ip[3]
 }
 
 // Close closes the connection to the PLC.
@@ -119,6 +172,22 @@ func (c *Client) IsConnected() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.connected && c.client != nil
+}
+
+// SetDebug enables or disables packet logging for debugging.
+// When enabled, FINS packets are logged to stdout.
+func (c *Client) SetDebug(enabled bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.debug = enabled
+	if c.client != nil {
+		c.client.SetShowPacket(enabled)
+	}
+}
+
+// GetSourceNode returns the source node number used for this connection.
+func (c *Client) GetSourceNode() byte {
+	return c.srcNode
 }
 
 // SetDisconnected marks the client as disconnected.
@@ -152,6 +221,11 @@ func (c *Client) Reconnect() error {
 	// Configure client
 	client.SetTimeoutMs(uint(c.timeout.Milliseconds()))
 
+	// Enable packet logging if debug mode is on
+	if c.debug {
+		client.SetShowPacket(true)
+	}
+
 	c.client = client
 	c.connected = true
 
@@ -163,7 +237,9 @@ func (c *Client) ConnectionMode() string {
 	if c == nil {
 		return "Not connected"
 	}
-	return fmt.Sprintf("FINS/UDP %s:%d (NET:%d NODE:%d UNIT:%d)", c.address, c.port, c.network, c.node, c.unit)
+	// Show source node for debugging FINS connection issues
+	return fmt.Sprintf("FINS/UDP %s:%d (DST NET:%d NODE:%d UNIT:%d, SRC NODE:%d)",
+		c.address, c.port, c.network, c.node, c.unit, c.srcNode)
 }
 
 // DeviceInfo holds information about the connected PLC.
@@ -431,6 +507,13 @@ func ParseAddressWithType(addr string, typeHint string) (*ParsedAddress, error) 
 	}
 
 	return parsed, nil
+}
+
+// ValidateAddress checks if an address string is a valid FINS address.
+// Returns nil if valid, or an error describing the problem.
+func ValidateAddress(addr string) error {
+	_, err := ParseAddress(addr)
+	return err
 }
 
 // isConnectionError checks if an error indicates the connection is broken.

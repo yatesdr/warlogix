@@ -455,6 +455,17 @@ func MemoryAreaName(area byte) string {
 	}
 }
 
+// SupportedTypeNames returns a list of supported type names for manual tag entry.
+func SupportedTypeNames() []string {
+	return []string{
+		"BOOL", "BYTE", "SINT",
+		"WORD", "INT",
+		"DWORD", "DINT", "REAL",
+		"LWORD", "LINT", "LREAL",
+		"STRING",
+	}
+}
+
 // MemoryAreaFromName returns the memory area code for a name.
 // Returns the word area code for word-level access.
 func MemoryAreaFromName(name string) (byte, bool) {
