@@ -38,6 +38,7 @@ type TagMessage struct {
 // HealthMessage is the JSON structure published to Kafka for PLC health status.
 type HealthMessage struct {
 	PLC       string `json:"plc"`
+	Driver    string `json:"driver"`
 	Online    bool   `json:"online"`
 	Status    string `json:"status"`
 	Error     string `json:"error,omitempty"`
@@ -413,7 +414,7 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 }
 
 // PublishHealth publishes PLC health status to all connected Kafka clusters.
-func (m *Manager) PublishHealth(plcName string, online bool, status, errMsg string) {
+func (m *Manager) PublishHealth(plcName, driver string, online bool, status, errMsg string) {
 	m.startWorkers()
 
 	m.mu.RLock()
@@ -434,6 +435,7 @@ func (m *Manager) PublishHealth(plcName string, online bool, status, errMsg stri
 
 		msg := HealthMessage{
 			PLC:       plcName,
+			Driver:    driver,
 			Online:    online,
 			Status:    status,
 			Error:     errMsg,

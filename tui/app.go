@@ -536,17 +536,17 @@ func (a *App) publishAllHealth() {
 
 		// Publish to MQTT
 		if a.mqttMgr != nil {
-			a.mqttMgr.PublishHealth(plc.Config.Name, health.Online, health.Status, health.Error)
+			a.mqttMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
 		}
 
 		// Publish to Valkey
 		if a.valkeyMgr != nil {
-			a.valkeyMgr.PublishHealth(plc.Config.Name, health.Online, health.Status, health.Error)
+			a.valkeyMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
 		}
 
 		// Publish to Kafka
 		if a.kafkaMgr != nil {
-			a.kafkaMgr.PublishHealth(plc.Config.Name, health.Online, health.Status, health.Error)
+			a.kafkaMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
 		}
 	}
 }

@@ -33,6 +33,21 @@ func (f PLCFamily) String() string {
 	return string(f)
 }
 
+// Driver returns the driver/protocol name used by this PLC family.
+// Returns: "logix", "s7", "ads", or "fins".
+func (f PLCFamily) Driver() string {
+	switch f {
+	case FamilyS7:
+		return "s7"
+	case FamilyBeckhoff:
+		return "ads"
+	case FamilyOmron:
+		return "fins"
+	default:
+		return "logix" // Logix, Micro800, and empty default to logix
+	}
+}
+
 // Config holds the complete application configuration.
 type Config struct {
 	PLCs     []PLCConfig      `yaml:"plcs"`

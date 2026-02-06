@@ -43,6 +43,7 @@ func (s ConnectionStatus) String() string {
 
 // HealthStatus represents the health state of a PLC for publishing.
 type HealthStatus struct {
+	Driver    string    `json:"driver"`
 	Online    bool      `json:"online"`
 	Status    string    `json:"status"`
 	Error     string    `json:"error,omitempty"`
@@ -127,6 +128,11 @@ func (m *ManagedPLC) GetHealthStatus() HealthStatus {
 
 	health := HealthStatus{
 		Timestamp: time.Now().UTC(),
+	}
+
+	// Set driver from config
+	if m.Config != nil {
+		health.Driver = m.Config.GetFamily().Driver()
 	}
 
 	// Check if PLC is enabled

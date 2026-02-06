@@ -62,6 +62,7 @@ type WriteResponse struct {
 type HealthMessage struct {
 	Factory   string    `json:"factory"`
 	PLC       string    `json:"plc"`
+	Driver    string    `json:"driver"`
 	Online    bool      `json:"online"`
 	Status    string    `json:"status"`
 	Error     string    `json:"error,omitempty"`
@@ -293,7 +294,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 }
 
 // PublishHealth publishes PLC health status to Valkey.
-func (p *Publisher) PublishHealth(plcName string, online bool, status, errMsg string) error {
+func (p *Publisher) PublishHealth(plcName, driver string, online bool, status, errMsg string) error {
 	p.mu.RLock()
 	if !p.running || p.client == nil {
 		p.mu.RUnlock()
@@ -309,6 +310,7 @@ func (p *Publisher) PublishHealth(plcName string, online bool, status, errMsg st
 	msg := HealthMessage{
 		Factory:   cfg.Factory,
 		PLC:       plcName,
+		Driver:    driver,
 		Online:    online,
 		Status:    status,
 		Error:     errMsg,

@@ -102,6 +102,7 @@ type TagMessage struct {
 type HealthMessage struct {
 	Topic     string `json:"topic"`
 	PLC       string `json:"plc"`
+	Driver    string `json:"driver"`
 	Online    bool   `json:"online"`
 	Status    string `json:"status"`
 	Error     string `json:"error,omitempty"`
@@ -390,7 +391,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 }
 
 // PublishHealth publishes PLC health status to MQTT.
-func (p *Publisher) PublishHealth(plcName string, online bool, status, errMsg string) bool {
+func (p *Publisher) PublishHealth(plcName, driver string, online bool, status, errMsg string) bool {
 	p.mu.RLock()
 	running := p.running
 	client := p.client
@@ -405,6 +406,7 @@ func (p *Publisher) PublishHealth(plcName string, online bool, status, errMsg st
 	msg := HealthMessage{
 		Topic:     p.config.RootTopic,
 		PLC:       plcName,
+		Driver:    driver,
 		Online:    online,
 		Status:    status,
 		Error:     errMsg,
@@ -1058,7 +1060,7 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 }
 
 // PublishHealth publishes PLC health status to all running MQTT brokers.
-func (m *Manager) PublishHealth(plcName string, online bool, status, errMsg string) {
+func (m *Manager) PublishHealth(plcName, driver string, online bool, status, errMsg string) {
 	m.mu.RLock()
 	pubs := make([]*Publisher, 0, len(m.publishers))
 	for _, pub := range m.publishers {
@@ -1068,7 +1070,7 @@ func (m *Manager) PublishHealth(plcName string, online bool, status, errMsg stri
 
 	for _, pub := range pubs {
 		if pub.IsRunning() {
-			pub.PublishHealth(plcName, online, status, errMsg)
+			pub.PublishHealth(plcName, driver, online, status, errMsg)
 		}
 	}
 }

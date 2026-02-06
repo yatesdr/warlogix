@@ -192,7 +192,7 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 }
 
 // PublishHealth publishes PLC health status to all running Valkey publishers.
-func (m *Manager) PublishHealth(plcName string, online bool, status, errMsg string) {
+func (m *Manager) PublishHealth(plcName, driver string, online bool, status, errMsg string) {
 	m.mu.RLock()
 	publishers := make([]*Publisher, len(m.publishers))
 	copy(publishers, m.publishers)
@@ -200,7 +200,7 @@ func (m *Manager) PublishHealth(plcName string, online bool, status, errMsg stri
 
 	for _, pub := range publishers {
 		if pub.IsRunning() {
-			if err := pub.PublishHealth(plcName, online, status, errMsg); err != nil {
+			if err := pub.PublishHealth(plcName, driver, online, status, errMsg); err != nil {
 				debugLog("Valkey health publish error (%s): %v", pub.config.Name, err)
 			}
 		}
