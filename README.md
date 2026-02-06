@@ -85,6 +85,10 @@ Press `d` to discover PLCs on your network, or `a` to add manually.
 | Browser | `Space` | Toggle publish |
 | Browser | `w` | Toggle writable |
 | Browser | `i` | Toggle ignore (UDT members) |
+| Browser | `p` | Focus PLC dropdown |
+| Browser | `c` | Clear filter |
+| Browser | `d` | Show tag details |
+| Browser | `a/e/x` | Add/Edit/Delete manual tags (S7/Omron) |
 | MQTT/Valkey/Kafka | `a/e/r/c/C` | Add/Edit/Remove/Connect/Disconnect |
 | Triggers | `a/e/r/t/x` | Add/Edit/Remove/Add tag/Remove tag |
 | Triggers | `s/S/T` | Start/Stop/Test |

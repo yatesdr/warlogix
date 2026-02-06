@@ -85,13 +85,16 @@ Returns all enabled tags with current values.
 ```json
 [
   {
-    "tag": "Counter",
+    "plc": "MainPLC",
+    "name": "Counter",
     "value": 42,
     "type": "DINT",
     "timestamp": "2024-01-15T10:30:00Z"
   },
   {
-    "tag": "Temperature",
+    "plc": "MainPLC",
+    "name": "Temperature",
+    "alias": "TempSensor1",
     "value": 72.5,
     "type": "REAL",
     "timestamp": "2024-01-15T10:30:00Z"
@@ -110,7 +113,8 @@ Returns a single tag value. Tag names with slashes are supported.
 **Response:**
 ```json
 {
-  "tag": "Program:MainProgram.Counter",
+  "plc": "MainPLC",
+  "name": "Program:MainProgram.Counter",
   "value": 42,
   "type": "DINT",
   "timestamp": "2024-01-15T10:30:00Z"
