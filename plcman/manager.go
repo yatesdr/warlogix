@@ -1175,11 +1175,11 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 
 // connectS7PLC handles S7 PLC connections.
 func (m *Manager) connectS7PLC(plc *ManagedPLC, address string, slot int) error {
-	// S7-1200/1500: use rack 0, slot 0 (CPU is in the onboard slot)
-	// S7-300/400: use rack 0, slot 2 (or wherever CPU is in the rack)
+	// S7-300/400: use rack 0, slot 2 (CPU typically in slot 2) - this is the default
+	// S7-1200/1500: use rack 0, slot 0 (CPU is onboard)
 	// The slot in config directly maps to S7 slot number
 	rack := 0
-	s7Slot := slot // Use slot as-is - slot 0 is correct for S7-1200/1500
+	s7Slot := slot // Use slot as-is from config
 
 	s7Client, err := s7.Connect(address, s7.WithRackSlot(rack, s7Slot))
 	if err != nil {

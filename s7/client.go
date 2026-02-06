@@ -33,8 +33,8 @@ type options struct {
 type Option func(*options)
 
 // WithRackSlot configures the rack and slot numbers for the PLC.
-// Default is rack 0, slot 0 for S7-1200/1500 (most common modern PLCs).
-// For S7-300/400, use rack 0, slot 2 (or the slot where the CPU is placed).
+// Default is rack 0, slot 2 (common for S7-300/400 where CPU is in slot 2).
+// For S7-1200/1500, use rack 0, slot 0 (CPU is onboard).
 func WithRackSlot(rack, slot int) Option {
 	return func(o *options) {
 		o.rack = rack
@@ -52,11 +52,11 @@ func WithTimeout(d time.Duration) Option {
 // Connect establishes a connection to an S7 PLC at the given address.
 func Connect(address string, opts ...Option) (*Client, error) {
 	// Apply options
-	// Default to slot 0 for S7-1200/1500 (most common modern PLCs)
-	// S7-300/400 users should explicitly set slot 2 or appropriate slot
+	// Default to slot 2 for S7-300/400 (CPU typically in slot 2)
+	// S7-1200/1500 users should explicitly set slot 0
 	cfg := &options{
 		rack:    0,
-		slot:    0,
+		slot:    2,
 		timeout: 10 * time.Second,
 	}
 	for _, opt := range opts {

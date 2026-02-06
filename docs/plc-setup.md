@@ -77,6 +77,19 @@ Same as ControlLogix - EtherNet/IP enabled by default.
 
 ---
 
+## Siemens S7 Rack/Slot Configuration
+
+The S7 driver defaults to **Rack 0, Slot 2** (common for S7-300/400). Configure the slot based on your PLC model:
+
+| PLC Model | Rack | Slot | Notes |
+|-----------|------|------|-------|
+| S7-300 | 0 | 2 | CPU typically in slot 2 (default) |
+| S7-400 | 0 | 2-4 | Varies by chassis configuration |
+| S7-1200 | 0 | 0 | Integrated CPU (onboard) |
+| S7-1500 | 0 | 0 | Integrated CPU (onboard) |
+
+---
+
 ## Siemens S7-1200/1500
 
 ### PLC-Side Setup (TIA Portal)
@@ -95,7 +108,7 @@ Same as ControlLogix - EtherNet/IP enabled by default.
 - name: SiemensPLC
   address: 192.168.1.102
   family: s7
-  slot: 0                 # Use 0 for S7-1200/1500 integrated CPU
+  slot: 0                 # IMPORTANT: Use 0 for S7-1200/1500 (default is 2)
   enabled: true
   tags:
     - name: DB1.0
@@ -132,6 +145,7 @@ Tags must be configured manually with byte offsets:
 | Access denied | Data block has optimized access enabled |
 | Wrong values | Check byte offsets match your DB layout |
 | Timeout | Verify IP address and network connectivity |
+| ISO Invalid Buffer | Wrong slot - use slot 0 for S7-1200/1500 |
 
 ---
 
@@ -147,13 +161,14 @@ No special configuration typically required.
 - name: S7-300
   address: 192.168.1.103
   family: s7
-  slot: 2                 # CPU slot (typically 2 for S7-300)
+  # slot: 2              # Default is 2, omit if using slot 2
   enabled: true
 ```
 
 ### Notes
 
-- Slot is typically 2 for S7-300, varies for S7-400
+- **Slot 2 is the default** - no need to specify for most S7-300 installations
+- S7-400 slot varies by chassis configuration (check where CPU is installed)
 - Uses same addressing format as S7-1200/1500
 
 ---

@@ -372,7 +372,8 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 		return false
 	}
 
-	topic := p.BuildTopic(plcName, tagName)
+	// Use alias for topic if available, otherwise use tagName (address)
+	topic := p.BuildTopic(plcName, displayTag)
 	token := client.Publish(topic, 1, true, payload)
 
 	// Use timeout to prevent blocking
