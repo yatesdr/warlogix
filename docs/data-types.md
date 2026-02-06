@@ -60,7 +60,7 @@ To decode manually:
 
 ## UDT/Structure Support
 
-WarLogix automatically unpacks UDT (User-Defined Type) members when the template is known. Each member is published separately:
+WarLogix automatically unpacks UDT (User-Defined Type) members when the template is known on supported PLCs. The entire UDT can be published as JSOn, or each member can be published separately using dot-notation (MachineStatus.Running).
 
 **PLC Structure:**
 ```
