@@ -174,11 +174,11 @@ func (t *Theme) Dim(msg string) string {
 var ThemeDefault = func() *Theme {
 	t := NewTheme(
 		"default",
-		tcell.ColorWhite,   // Primary: White (tabs, headers)
+		tcell.ColorWhite,   // Primary: White (headers)
 		tcell.ColorGreen,   // Secondary: Green (enabled/publishing items)
-		tcell.ColorWhite,   // Accent: White (selector, section headers)
+		tcell.ColorTeal,    // Accent: Teal (selected tab, selector)
 		tcell.ColorSilver,  // Text: Silver (non-publishing items)
-		tcell.ColorGray,    // TextDim: Dark gray (disabled)
+		tcell.ColorGray,    // TextDim: Dark gray (disabled, unselected tabs)
 		tcell.ColorRed,     // Error: Red
 		tcell.ColorGreen,   // Success: Green
 		tcell.ColorYellow,  // Warning: Yellow
@@ -191,7 +191,7 @@ var ThemeDefault = func() *Theme {
 	t.FieldText = tcell.ColorWhite           // White text in fields
 	t.DropdownBackground = tcell.ColorGray   // Dark gray for dropdown list
 	t.DropdownSelected = tcell.ColorSilver   // Silver for selected item
-	t.Writable = tcell.ColorYellow           // Yellow for writable indicator
+	t.Writable = tcell.ColorRed              // Red for writable indicator
 	t.TagWritable = colorToTag(t.Writable)
 	t.FormLabel = tcell.ColorWhite           // White labels in forms
 	t.ButtonText = tcell.ColorWhite          // White text on buttons
