@@ -60,7 +60,7 @@ To decode manually:
 
 ## UDT/Structure Support
 
-WarLogix automatically unpacks UDT (User-Defined Type) members when the template is known on supported PLCs. The entire UDT can be published as JSOn, or each member can be published separately using dot-notation (MachineStatus.Running).
+WarLogix automatically unpacks UDT (User-Defined Type) members when the template is known on supported PLCs. You can publish the entire UDT as a JSON object, or publish individual members separately using dot-notation.
 
 **PLC Structure:**
 ```
@@ -71,11 +71,36 @@ MachineStatus (UDT)
 └── Timestamp: LINT
 ```
 
-**Published as separate tags:**
+### Publishing Entire UDT as JSON Object
+
+When you enable a UDT tag (e.g., `MachineStatus`), it is published as a nested JSON object:
+
+```json
+{
+  "tag": "MachineStatus",
+  "value": {
+    "Running": true,
+    "Speed": 1500.5,
+    "Counter": 42,
+    "Timestamp": 1705312200000
+  },
+  "type": "UDT",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+Nested UDTs are recursively unpacked into nested JSON objects.
+
+### Publishing Individual Members
+
+You can also enable individual UDT members using dot-notation in the Tag Browser. Each member is published as a separate tag:
+
 - `MachineStatus.Running` = `true`
 - `MachineStatus.Speed` = `1500.5`
 - `MachineStatus.Counter` = `42`
 - `MachineStatus.Timestamp` = `1705312200000`
+
+This is useful when you only need specific members or want finer control over change detection.
 
 ## Change Detection Filtering
 
