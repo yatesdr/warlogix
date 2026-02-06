@@ -14,15 +14,28 @@ type DebugLogger interface {
 }
 
 var debugLogger DebugLogger
+var verboseLogging bool // Controls detailed template/parsing logs
 
 // SetDebugLogger sets the debug logger for Logix.
 func SetDebugLogger(logger DebugLogger) {
 	debugLogger = logger
 }
 
+// SetVerboseLogging enables or disables detailed template/parsing logs.
+func SetVerboseLogging(verbose bool) {
+	verboseLogging = verbose
+}
+
 // debugLog logs a message if a debug logger is configured.
 func debugLog(format string, args ...interface{}) {
 	if debugLogger != nil {
+		debugLogger.LogLogix(format, args...)
+	}
+}
+
+// debugLogVerbose logs detailed messages only when verbose logging is enabled.
+func debugLogVerbose(format string, args ...interface{}) {
+	if debugLogger != nil && verboseLogging {
 		debugLogger.LogLogix(format, args...)
 	}
 }
@@ -371,7 +384,7 @@ func (p *PLC) ReadMultiple(tagNames []string) ([]*Tag, error) {
 			if len(resp.ExtStatus) >= 2 {
 				extStatus = binary.LittleEndian.Uint16(resp.ExtStatus)
 			}
-			debugLog("ReadMultiple: tag %q failed with status 0x%02X (%s), extStatus 0x%04X",
+			debugLogVerbose("ReadMultiple: tag %q failed with status 0x%02X (%s), extStatus 0x%04X",
 				tagNames[i], resp.Status, cipStatusName(resp.Status), extStatus)
 			tags[i] = nil
 			continue

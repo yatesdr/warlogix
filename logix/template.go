@@ -80,16 +80,16 @@ func (p *PLC) GetTemplate(templateID uint16) (*Template, error) {
 		return nil, fmt.Errorf("invalid template ID 0")
 	}
 
-	debugLog("GetTemplate: fetching template ID %d (0x%04X)", templateID, templateID)
+	debugLogVerbose("GetTemplate: fetching template ID %d (0x%04X)", templateID, templateID)
 
 	// Step 1: Get template attributes to know how much data to read
 	attrs, err := p.getTemplateAttributes(templateID)
 	if err != nil {
-		debugLog("GetTemplate: failed to get attributes for template %d: %v", templateID, err)
+		debugLogVerbose("GetTemplate: failed to get attributes for template %d: %v", templateID, err)
 		return nil, fmt.Errorf("failed to get template attributes: %w", err)
 	}
 
-	debugLog("GetTemplate: attributes - defSize=%d, structSize=%d, memberCount=%d, handle=0x%04X",
+	debugLogVerbose("GetTemplate: attributes - defSize=%d, structSize=%d, memberCount=%d, handle=0x%04X",
 		attrs.ObjectDefinitionSize, attrs.StructureSize, attrs.MemberCount, attrs.StructureHandle)
 
 	// Step 2: Read the template definition data
@@ -100,17 +100,17 @@ func (p *PLC) GetTemplate(templateID uint16) (*Template, error) {
 
 	defData, err := p.readTemplateData(templateID, bytesToRead)
 	if err != nil {
-		debugLog("GetTemplate: failed to read definition for template %d: %v", templateID, err)
+		debugLogVerbose("GetTemplate: failed to read definition for template %d: %v", templateID, err)
 		return nil, fmt.Errorf("failed to read template definition: %w", err)
 	}
-	debugLog("GetTemplate: got %d bytes of definition data for template %d", len(defData), templateID)
+	debugLogVerbose("GetTemplate: got %d bytes of definition data for template %d", len(defData), templateID)
 
 	// Debug: show first 64 bytes of template data
 	showLen := len(defData)
 	if showLen > 64 {
 		showLen = 64
 	}
-	debugLog("GetTemplate: first %d bytes of definition: % X", showLen, defData[:showLen])
+	debugLogVerbose("GetTemplate: first %d bytes of definition: % X", showLen, defData[:showLen])
 
 	// Step 3: Parse the template definition
 	tmpl := &Template{
@@ -122,7 +122,7 @@ func (p *PLC) GetTemplate(templateID uint16) (*Template, error) {
 	}
 
 	if err := tmpl.parseDefinition(defData, int(attrs.MemberCount)); err != nil {
-		debugLog("GetTemplate: failed to parse definition for template %d: %v", templateID, err)
+		debugLogVerbose("GetTemplate: failed to parse definition for template %d: %v", templateID, err)
 		return nil, fmt.Errorf("failed to parse template definition: %w", err)
 	}
 
@@ -130,7 +130,7 @@ func (p *PLC) GetTemplate(templateID uint16) (*Template, error) {
 	// (Offsets come from PLC, but bit positions within a DINT need calculation)
 	tmpl.calculateBoolBitOffsets()
 
-	debugLog("GetTemplate: parsed template %d %q with %d visible members", templateID, tmpl.Name, len(tmpl.MemberMap))
+	debugLogVerbose("GetTemplate: parsed template %d %q with %d visible members", templateID, tmpl.Name, len(tmpl.MemberMap))
 	return tmpl, nil
 }
 
@@ -206,10 +206,10 @@ func (p *PLC) getTemplateAttributes(templateID uint16) (*templateAttributes, err
 	}
 
 	// Debug: show raw attribute response data
-	debugLog("getTemplateAttributes: raw response (%d bytes): % X", len(data), data)
+	debugLogVerbose("getTemplateAttributes: raw response (%d bytes): % X", len(data), data)
 
 	attrCount := binary.LittleEndian.Uint16(data[0:2])
-	debugLog("getTemplateAttributes: got %d attributes in response", attrCount)
+	debugLogVerbose("getTemplateAttributes: got %d attributes in response", attrCount)
 
 	attrs := &templateAttributes{}
 	offset := 2
@@ -220,7 +220,7 @@ func (p *PLC) getTemplateAttributes(templateID uint16) (*templateAttributes, err
 		offset += 4
 
 		if attrStatus != 0 {
-			debugLog("getTemplateAttributes: attribute %d has error status 0x%04X", attrID, attrStatus)
+			debugLogVerbose("getTemplateAttributes: attribute %d has error status 0x%04X", attrID, attrStatus)
 			// Still need to skip the value bytes - but we don't know the size
 			// For safety, try to continue based on expected attribute sizes
 			switch attrID {
@@ -272,7 +272,7 @@ func (p *PLC) getTemplateAttributes(templateID uint16) (*templateAttributes, err
 				offset += 4
 			}
 		default:
-			debugLog("getTemplateAttributes: unknown attribute %d", attrID)
+			debugLogVerbose("getTemplateAttributes: unknown attribute %d", attrID)
 			// Skip unknown attributes - assume UINT (2 bytes) as safer default
 			offset += 2
 		}
@@ -329,7 +329,7 @@ func (p *PLC) readTemplateData(templateID uint16, totalBytes uint32) ([]byte, er
 		cipResp, err := p.sendCipRequest(reqData)
 		if err != nil {
 			if len(allData) > 0 {
-				debugLog("readTemplateData: error after %d bytes: %v", len(allData), err)
+				debugLogVerbose("readTemplateData: error after %d bytes: %v", len(allData), err)
 				break
 			}
 			return nil, err
@@ -354,7 +354,7 @@ func (p *PLC) readTemplateData(templateID uint16, totalBytes uint32) ([]byte, er
 		// Status 0x06 = partial transfer, continue reading
 		if status != StatusSuccess && status != StatusPartialTransfer {
 			if len(allData) > 0 {
-				debugLog("readTemplateData: error after %d bytes: %v", len(allData), parseCipError(status, addlStatusSize, cipResp[4:]))
+				debugLogVerbose("readTemplateData: error after %d bytes: %v", len(allData), parseCipError(status, addlStatusSize, cipResp[4:]))
 				break
 			}
 			return nil, parseCipError(status, addlStatusSize, cipResp[4:])
@@ -374,7 +374,7 @@ func (p *PLC) readTemplateData(templateID uint16, totalBytes uint32) ([]byte, er
 		allData = append(allData, chunkData...)
 		offset += uint32(len(chunkData))
 
-		debugLog("readTemplateData: read %d bytes at offset %d, total %d/%d, status=0x%02X",
+		debugLogVerbose("readTemplateData: read %d bytes at offset %d, total %d/%d, status=0x%02X",
 			len(chunkData), offset-uint32(len(chunkData)), len(allData), totalBytes, status)
 
 		// If success (not partial), we're done
@@ -403,7 +403,7 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 	expectedInfoBytes := memberCount * memberInfoSize
 
 	if len(data) < expectedInfoBytes {
-		debugLog("parseDefinition: data too short for %d members (need %d bytes, have %d)",
+		debugLogVerbose("parseDefinition: data too short for %d members (need %d bytes, have %d)",
 			memberCount, expectedInfoBytes, len(data))
 		// Adjust member count to fit available data
 		memberCount = len(data) / memberInfoSize
@@ -413,7 +413,7 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 		expectedInfoBytes = memberCount * memberInfoSize
 	}
 
-	debugLog("parseDefinition: parsing %d members from %d bytes", memberCount, len(data))
+	debugLogVerbose("parseDefinition: parsing %d members from %d bytes", memberCount, len(data))
 
 	// Parse member info entries
 	members := make([]TemplateMember, 0, memberCount)
@@ -449,7 +449,7 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 
 		// Log member details for debugging (show raw bytes for first few)
 		if i < 5 {
-			debugLog("  Member %d: raw=% X -> arraySize=%d typeVal=0x%04X offset=%d",
+			debugLogVerbose("  Member %d: raw=% X -> arraySize=%d typeVal=0x%04X offset=%d",
 				i, entry, arraySize, typeVal, memberOffset)
 		}
 
@@ -461,24 +461,24 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 		members = append(members, member)
 	}
 
-	debugLog("parseDefinition: parsed %d member info entries", len(members))
+	debugLogVerbose("parseDefinition: parsed %d member info entries", len(members))
 
 	// Parse member names from the string table
 	// String table starts after member definitions
 	nameDataStart := len(members) * memberInfoSize
 	if nameDataStart < len(data) {
 		nameData := data[nameDataStart:]
-		debugLog("parseDefinition: parsing names from %d bytes at offset %d", len(nameData), nameDataStart)
+		debugLogVerbose("parseDefinition: parsing names from %d bytes at offset %d", len(nameData), nameDataStart)
 		// Show first 128 bytes of string table for debugging
 		showLen := len(nameData)
 		if showLen > 128 {
 			showLen = 128
 		}
-		debugLog("parseDefinition: string table first %d bytes: % X", showLen, nameData[:showLen])
+		debugLogVerbose("parseDefinition: string table first %d bytes: % X", showLen, nameData[:showLen])
 
 		names := parseNullTerminatedStrings(nameData, len(members)+1) // +1 for template name
 		if len(names) > 0 {
-			debugLog("parseDefinition: found %d names, first: %q", len(names), names[0])
+			debugLogVerbose("parseDefinition: found %d names, first: %q", len(names), names[0])
 		}
 
 		// First name is the template name (may contain semicolon-separated parts)
@@ -490,7 +490,7 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 				templateName = templateName[:idx]
 			}
 			t.Name = templateName
-			debugLog("parseDefinition: template name extracted: %q (full: %q)", templateName, names[0])
+			debugLogVerbose("parseDefinition: template name extracted: %q (full: %q)", templateName, names[0])
 		}
 
 		// Assign names to members
@@ -508,12 +508,12 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 			}
 			// Log first 10 member names for debugging
 			if i < 10 {
-				debugLog("  Assigned member %d: name=%q offset=%d type=0x%04X",
+				debugLogVerbose("  Assigned member %d: name=%q offset=%d type=0x%04X",
 					i, members[i].Name, members[i].Offset, members[i].Type)
 			}
 		}
 		if len(members) > 10 {
-			debugLog("  ... and %d more members", len(members)-10)
+			debugLogVerbose("  ... and %d more members", len(members)-10)
 		}
 	}
 
@@ -525,7 +525,7 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 		}
 	}
 
-	debugLog("parseDefinition: template %q has %d visible members (offsets from PLC)", t.Name, len(t.MemberMap))
+	debugLogVerbose("parseDefinition: template %q has %d visible members (offsets from PLC)", t.Name, len(t.MemberMap))
 	return nil
 }
 
@@ -605,17 +605,17 @@ func (t *Template) calculateOffsetsWithSizes(sizeLookup func(uint16) uint32) {
 	}
 
 	// Log calculated offsets
-	debugLog("calculateOffsetsWithSizes: %s final offset=%d (template size=%d)", t.Name, offset, t.Size)
+	debugLogVerbose("calculateOffsetsWithSizes: %s final offset=%d (template size=%d)", t.Name, offset, t.Size)
 	for i := 0; i < len(t.Members) && i < 20; i++ {
 		m := t.Members[i]
 		arrInfo := ""
 		if m.IsArray() {
 			arrInfo = fmt.Sprintf(" [%d elements]", m.ElementCount())
 		}
-		debugLog("  Member %d %q: offset=%d, type=0x%04X%s", i, m.Name, m.Offset, m.Type, arrInfo)
+		debugLogVerbose("  Member %d %q: offset=%d, type=0x%04X%s", i, m.Name, m.Offset, m.Type, arrInfo)
 	}
 	if len(t.Members) > 20 {
-		debugLog("  ... and %d more members", len(t.Members)-20)
+		debugLogVerbose("  ... and %d more members", len(t.Members)-20)
 	}
 }
 
@@ -640,7 +640,7 @@ func (t *Template) calculateBoolBitOffsets() {
 			boolBitAtOffset[member.Offset] = bitPos + 1
 
 			if bitPos < 5 {
-				debugLog("  BOOL member %q: offset=%d, bitOffset=%d", member.Name, member.Offset, bitPos)
+				debugLogVerbose("  BOOL member %q: offset=%d, bitOffset=%d", member.Name, member.Offset, bitPos)
 			}
 		}
 	}
@@ -742,15 +742,15 @@ func (t *Template) calculateOffsets() {
 	for i := 0; i < len(t.Members) && i < 10; i++ {
 		m := t.Members[i]
 		if m.Type&0x0FFF == TypeBOOL {
-			debugLog("  Calculated member %d %q: offset=%d, bitOffset=%d, type=0x%04X",
+			debugLogVerbose("  Calculated member %d %q: offset=%d, bitOffset=%d, type=0x%04X",
 				i, m.Name, m.Offset, m.BitOffset, m.Type)
 		} else {
-			debugLog("  Calculated member %d %q: offset=%d, type=0x%04X",
+			debugLogVerbose("  Calculated member %d %q: offset=%d, type=0x%04X",
 				i, m.Name, m.Offset, m.Type)
 		}
 	}
 	if len(t.Members) > 10 {
-		debugLog("  ... and %d more members with calculated offsets", len(t.Members)-10)
+		debugLogVerbose("  ... and %d more members with calculated offsets", len(t.Members)-10)
 	}
 }
 

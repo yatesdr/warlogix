@@ -6,12 +6,26 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"warlogix/config"
 )
+
+// joinKey joins key segments with colons, trimming leading/trailing colons
+// from each segment to avoid empty key parts (e.g., "foo::bar" or ":foo:bar:").
+func joinKey(segments ...string) string {
+	var parts []string
+	for _, s := range segments {
+		s = strings.Trim(s, ":")
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, ":")
+}
 
 // TagMessage represents a tag value message stored in Valkey.
 type TagMessage struct {
@@ -225,7 +239,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 
 	// Build key: factory:plc:tags:tag (standard Redis convention)
 	// Note: tag names may contain : but that's OK since tag is always the last segment
-	key := fmt.Sprintf("%s:%s:tags:%s", cfg.Factory, plcName, tagName)
+	key := joinKey(cfg.Factory, plcName, "tags", tagName)
 
 	// For S7 with alias, use alias as "tag" and include address
 	displayTag := tagName
@@ -267,11 +281,11 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 	// Publish to Pub/Sub if enabled
 	if cfg.PublishChanges {
 		// Publish to PLC-specific channel
-		channel := fmt.Sprintf("%s:%s:changes", cfg.Factory, plcName)
+		channel := joinKey(cfg.Factory, plcName, "changes")
 		client.Publish(ctx, channel, data)
 
 		// Also publish to the all-changes channel
-		allChannel := fmt.Sprintf("%s:_all:changes", cfg.Factory)
+		allChannel := joinKey(cfg.Factory, "_all", "changes")
 		client.Publish(ctx, allChannel, data)
 	}
 
@@ -290,7 +304,7 @@ func (p *Publisher) PublishHealth(plcName string, online bool, status, errMsg st
 	p.mu.RUnlock()
 
 	// Build key: factory:plc:health
-	key := fmt.Sprintf("%s:%s:health", cfg.Factory, plcName)
+	key := joinKey(cfg.Factory, plcName, "health")
 
 	msg := HealthMessage{
 		Factory:   cfg.Factory,
@@ -321,7 +335,7 @@ func (p *Publisher) PublishHealth(plcName string, online bool, status, errMsg st
 
 	// Publish to health-specific Pub/Sub channel
 	if cfg.PublishChanges {
-		channel := fmt.Sprintf("%s:%s:health", cfg.Factory, plcName)
+		channel := joinKey(cfg.Factory, plcName, "health")
 		client.Publish(ctx, channel, data)
 	}
 
@@ -360,8 +374,8 @@ func (p *Publisher) SetOnConnectCallback(callback func()) {
 func (p *Publisher) writebackListener() {
 	defer p.wg.Done()
 
-	queueKey := fmt.Sprintf("%s:writes", p.config.Factory)
-	responseChannel := fmt.Sprintf("%s:write:responses", p.config.Factory)
+	queueKey := joinKey(p.config.Factory, "writes")
+	responseChannel := joinKey(p.config.Factory, "write", "responses")
 
 	for {
 		select {

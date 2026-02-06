@@ -421,27 +421,27 @@ func (c *Client) Read(tagNames ...string) ([]*TagValue, error) {
 		if isStruct {
 			if info, ok := c.tagInfo[name]; ok {
 				expectedSize = c.GetElementSize(info.TypeCode)
-				debugLog("Read struct %q: typeCode=0x%04X, expectedSize=%d, count=%d",
+				debugLogVerbose("Read struct %q: typeCode=0x%04X, expectedSize=%d, count=%d",
 					name, info.TypeCode, expectedSize, count)
 				// For arrays of structures, multiply by element count
 				if count > 1 {
 					expectedSize *= uint32(count)
 				}
 			} else {
-				debugLog("Read struct %q: NOT FOUND in tagInfo", name)
+				debugLogVerbose("Read struct %q: NOT FOUND in tagInfo", name)
 			}
 		}
 
 		tag, err := c.plc.ReadTagCountWithInstance(name, count, instanceID)
 		if err != nil {
-			debugLog("Read individual tag %q (count=%d, instance=%d) failed: %v", name, count, instanceID, err)
+			debugLogVerbose("Read individual tag %q (count=%d, instance=%d) failed: %v", name, count, instanceID, err)
 
 			// If direct read failed and this is a structure, try fragmented read
 			if isStruct && expectedSize > 0 {
-				debugLog("Trying fragmented read for %q (expected size: %d)", name, expectedSize)
+				debugLogVerbose("Trying fragmented read for %q (expected size: %d)", name, expectedSize)
 				tag, err = c.plc.ReadTagFragmented(name, expectedSize)
 				if err == nil {
-					debugLog("Fragmented read for %q succeeded: got %d bytes", name, len(tag.Bytes))
+					debugLogVerbose("Fragmented read for %q succeeded: got %d bytes", name, len(tag.Bytes))
 				}
 			}
 
@@ -450,11 +450,11 @@ func (c *Client) Read(tagNames ...string) ([]*TagValue, error) {
 				if isStruct {
 					memberResults, memberErr := c.readStructMembers(name)
 					if memberErr == nil && len(memberResults) > 0 {
-						debugLog("Read UDT %q via %d members succeeded", name, len(memberResults))
+						debugLogVerbose("Read UDT %q via %d members succeeded", name, len(memberResults))
 						results = append(results, memberResults...)
 						continue
 					}
-					debugLog("Read UDT %q members also failed: %v", name, memberErr)
+					debugLogVerbose("Read UDT %q members also failed: %v", name, memberErr)
 				}
 
 				results = append(results, &TagValue{
@@ -466,19 +466,19 @@ func (c *Client) Read(tagNames ...string) ([]*TagValue, error) {
 		}
 
 		// Check if we got incomplete data for structures
-		debugLog("Read %q got %d bytes (isStruct=%v, expectedSize=%d)",
+		debugLogVerbose("Read %q got %d bytes (isStruct=%v, expectedSize=%d)",
 			name, len(tag.Bytes), isStruct, expectedSize)
 		if isStruct && expectedSize > 0 && uint32(len(tag.Bytes)) < expectedSize {
-			debugLog("Read %q got incomplete data (%d/%d bytes), trying fragmented read",
+			debugLogVerbose("Read %q got incomplete data (%d/%d bytes), trying fragmented read",
 				name, len(tag.Bytes), expectedSize)
 			fragTag, fragErr := c.plc.ReadTagFragmented(name, expectedSize)
 			if fragErr == nil && len(fragTag.Bytes) > len(tag.Bytes) {
-				debugLog("Fragmented read for %q got more data: %d bytes", name, len(fragTag.Bytes))
+				debugLogVerbose("Fragmented read for %q got more data: %d bytes", name, len(fragTag.Bytes))
 				tag = fragTag
 			} else if fragErr != nil {
-				debugLog("Fragmented read for %q failed: %v", name, fragErr)
+				debugLogVerbose("Fragmented read for %q failed: %v", name, fragErr)
 			} else {
-				debugLog("Fragmented read for %q got same or less data: %d bytes", name, len(fragTag.Bytes))
+				debugLogVerbose("Fragmented read for %q got same or less data: %d bytes", name, len(fragTag.Bytes))
 			}
 		}
 
@@ -640,7 +640,7 @@ func (c *Client) readStructMembers(tagName string) ([]*TagValue, error) {
 		return nil, fmt.Errorf("template %q has no members", tmpl.Name)
 	}
 
-	debugLog("readStructMembers: reading %d members of %q (template: %q)", len(tmpl.MemberMap), tagName, tmpl.Name)
+	debugLogVerbose("readStructMembers: reading %d members of %q (template: %q)", len(tmpl.MemberMap), tagName, tmpl.Name)
 
 	// Expand all member paths, recursively handling nested UDTs
 	// maxDepth prevents infinite recursion
@@ -650,7 +650,7 @@ func (c *Client) readStructMembers(tagName string) ([]*TagValue, error) {
 		return nil, fmt.Errorf("no readable members in template %q", tmpl.Name)
 	}
 
-	debugLog("readStructMembers: expanded to %d atomic member paths", len(memberPaths))
+	debugLogVerbose("readStructMembers: expanded to %d atomic member paths", len(memberPaths))
 
 	// Read all members - use batch read if possible
 	results := make([]*TagValue, 0, len(memberPaths))
@@ -673,7 +673,7 @@ func (c *Client) readStructMembers(tagName string) ([]*TagValue, error) {
 		tags, err := c.plc.ReadMultiple(batch)
 		if err != nil {
 			// Batch failed - try reading individually
-			debugLog("Batch read of UDT members failed: %v, trying individual reads", err)
+			debugLogVerbose("Batch read of UDT members failed: %v, trying individual reads", err)
 			for j, path := range batch {
 				tag, readErr := c.plc.ReadTagCount(path, 1)
 				if readErr != nil {
@@ -727,7 +727,7 @@ func (c *Client) readStructMembers(tagName string) ([]*TagValue, error) {
 // Returns parallel slices of paths and types.
 func (c *Client) expandMemberPaths(basePath string, tmpl *Template, maxDepth int) ([]string, []uint16) {
 	if maxDepth <= 0 {
-		debugLog("expandMemberPaths: max depth reached for %q", basePath)
+		debugLogVerbose("expandMemberPaths: max depth reached for %q", basePath)
 		return nil, nil
 	}
 
@@ -746,13 +746,13 @@ func (c *Client) expandMemberPaths(basePath string, tmpl *Template, maxDepth int
 			// Get template for nested UDT
 			nestedTmpl, err := c.GetTemplate(member.Type)
 			if err != nil {
-				debugLog("expandMemberPaths: failed to get template for nested UDT %q (type 0x%04X): %v",
+				debugLogVerbose("expandMemberPaths: failed to get template for nested UDT %q (type 0x%04X): %v",
 					memberPath, member.Type, err)
 				// Skip this nested UDT - can't expand it
 				continue
 			}
 
-			debugLog("expandMemberPaths: expanding nested UDT %q (template: %q) with %d members",
+			debugLogVerbose("expandMemberPaths: expanding nested UDT %q (template: %q) with %d members",
 				memberPath, nestedTmpl.Name, len(nestedTmpl.MemberMap))
 
 			// Recursively expand nested UDT
@@ -1020,7 +1020,7 @@ func (c *Client) GetTemplate(typeCode uint16) (*Template, error) {
 	}
 	c.templates[templateID] = tmpl
 
-	debugLog("Cached template %q (ID: %d) with %d total members (%d visible)",
+	debugLogVerbose("Cached template %q (ID: %d) with %d total members (%d visible)",
 		tmpl.Name, tmpl.ID, len(tmpl.Members), len(tmpl.MemberMap))
 
 	// Dump full template structure for debugging
@@ -1029,7 +1029,7 @@ func (c *Client) GetTemplate(typeCode uint16) (*Template, error) {
 		if m.Hidden {
 			hiddenStr = " [HIDDEN]"
 		}
-		debugLog("  Template member %d: %q offset=%d type=0x%04X%s",
+		debugLogVerbose("  Template member %d: %q offset=%d type=0x%04X%s",
 			i, m.Name, m.Offset, m.Type, hiddenStr)
 	}
 
@@ -1052,7 +1052,7 @@ func (c *Client) ClearTemplateCache() {
 	c.templates = nil
 	c.templateSizes = nil
 	c.failedTemplates = nil
-	debugLog("Template cache cleared")
+	debugLogVerbose("Template cache cleared")
 }
 
 // FetchTemplatesForTags eagerly fetches and caches templates for all structure-type tags.
@@ -1072,20 +1072,20 @@ func (c *Client) FetchTemplatesForTags() {
 				failed++
 				// Only log first few failures to avoid spam
 				if failed <= 3 {
-					debugLog("Failed to fetch template for tag %q: %v", tag.Name, err)
+					debugLogVerbose("Failed to fetch template for tag %q: %v", tag.Name, err)
 				}
 			} else {
 				fetched++
-				debugLog("Fetched template %q for tag %q", tmpl.Name, tag.Name)
+				debugLogVerbose("Fetched template %q for tag %q", tmpl.Name, tag.Name)
 			}
 		}
 	}
 
 	if failed > 3 {
-		debugLog("... and %d more template fetch failures (built-in types don't have fetchable templates)", failed-3)
+		debugLogVerbose("... and %d more template fetch failures (built-in types don't have fetchable templates)", failed-3)
 	}
 	if fetched > 0 || failed > 0 {
-		debugLog("Template fetch summary: %d successful, %d failed", fetched, failed)
+		debugLogVerbose("Template fetch summary: %d successful, %d failed", fetched, failed)
 	}
 }
 
@@ -1116,7 +1116,7 @@ func (c *Client) decodeUDTWithTemplateInternal(tmpl *Template, data []byte, topL
 	// Nested structures within parent UDT data do NOT have this prefix.
 	if topLevel && len(data) >= 2 {
 		handle := binary.LittleEndian.Uint16(data[0:2])
-		debugLog("decodeUDTWithTemplate: stripping 2-byte structure handle 0x%04X (template handle 0x%04X)",
+		debugLogVerbose("decodeUDTWithTemplate: stripping 2-byte structure handle 0x%04X (template handle 0x%04X)",
 			handle, tmpl.RawHandle)
 		data = data[2:] // Skip the structure handle
 	}
@@ -1125,7 +1125,7 @@ func (c *Client) decodeUDTWithTemplateInternal(tmpl *Template, data []byte, topL
 	skipped := 0
 	decoded := 0
 
-	debugLog("decodeUDTWithTemplate: template %q (size=%d) with %d bytes of member data (topLevel=%v)",
+	debugLogVerbose("decodeUDTWithTemplate: template %q (size=%d) with %d bytes of member data (topLevel=%v)",
 		tmpl.Name, tmpl.Size, dataLen, topLevel)
 
 	// Debug: show first 32 bytes of member data
@@ -1133,7 +1133,7 @@ func (c *Client) decodeUDTWithTemplateInternal(tmpl *Template, data []byte, topL
 	if showLen > 32 {
 		showLen = 32
 	}
-	debugLog("decodeUDTWithTemplate: member data first %d bytes: % X", showLen, data[:showLen])
+	debugLogVerbose("decodeUDTWithTemplate: member data first %d bytes: % X", showLen, data[:showLen])
 
 	for _, member := range tmpl.Members {
 		if member.Hidden || member.Name == "" {
@@ -1143,7 +1143,7 @@ func (c *Client) decodeUDTWithTemplateInternal(tmpl *Template, data []byte, topL
 		// Check if we have enough data
 		if member.Offset >= dataLen {
 			if skipped < 5 {
-				debugLog("decodeUDTWithTemplate: SKIPPED member %q at offset %d (data len %d, type 0x%04X)",
+				debugLogVerbose("decodeUDTWithTemplate: SKIPPED member %q at offset %d (data len %d, type 0x%04X)",
 					member.Name, member.Offset, dataLen, member.Type)
 			}
 			skipped++
@@ -1153,7 +1153,7 @@ func (c *Client) decodeUDTWithTemplateInternal(tmpl *Template, data []byte, topL
 		memberData := data[member.Offset:]
 		value, err := c.decodeMemberValue(&member, memberData)
 		if err != nil {
-			debugLog("Failed to decode member %q: %v", member.Name, err)
+			debugLogVerbose("Failed to decode member %q: %v", member.Name, err)
 			continue
 		}
 
@@ -1163,7 +1163,7 @@ func (c *Client) decodeUDTWithTemplateInternal(tmpl *Template, data []byte, topL
 			if len(bytesAtOffset) > 8 {
 				bytesAtOffset = bytesAtOffset[:8]
 			}
-			debugLog("  Decoded %q: offset=%d type=0x%04X bytes=% X -> value=%v",
+			debugLogVerbose("  Decoded %q: offset=%d type=0x%04X bytes=% X -> value=%v",
 				member.Name, member.Offset, member.Type, bytesAtOffset, value)
 		}
 		decoded++
@@ -1172,7 +1172,7 @@ func (c *Client) decodeUDTWithTemplateInternal(tmpl *Template, data []byte, topL
 	}
 
 	if skipped > 0 {
-		debugLog("decodeUDTWithTemplate: skipped %d members due to insufficient data", skipped)
+		debugLogVerbose("decodeUDTWithTemplate: skipped %d members due to insufficient data", skipped)
 	}
 
 	return result, nil

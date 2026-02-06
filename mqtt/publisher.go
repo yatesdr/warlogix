@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,19 @@ import (
 
 	"warlogix/config"
 )
+
+// joinTopic joins topic segments, trimming leading/trailing slashes from each
+// segment to avoid empty topic levels (e.g., "foo//bar" or "/foo/bar/").
+func joinTopic(segments ...string) string {
+	var parts []string
+	for _, s := range segments {
+		s = strings.Trim(s, "/")
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, "/")
+}
 
 // DebugLogger is an interface for debug logging.
 type DebugLogger interface {
@@ -309,7 +323,7 @@ func (p *Publisher) Stop() {
 
 // BuildTopic constructs the full topic path.
 func (p *Publisher) BuildTopic(plcName, tagName string) string {
-	return fmt.Sprintf("%s/%s/tags/%s", p.config.RootTopic, plcName, tagName)
+	return joinTopic(p.config.RootTopic, plcName, "tags", tagName)
 }
 
 // Publish sends a tag value to MQTT if it has changed.
@@ -386,7 +400,7 @@ func (p *Publisher) PublishHealth(plcName string, online bool, status, errMsg st
 		return false
 	}
 
-	topic := fmt.Sprintf("%s/%s/health", p.config.RootTopic, plcName)
+	topic := joinTopic(p.config.RootTopic, plcName, "health")
 
 	msg := HealthMessage{
 		Topic:     p.config.RootTopic,
@@ -473,7 +487,7 @@ func (p *Publisher) subscribeWriteTopics() {
 	}
 
 	for _, plcName := range plcNames {
-		topic := fmt.Sprintf("%s/%s/write", rootTopic, plcName)
+		topic := joinTopic(rootTopic, plcName, "write")
 		logMQTT("Subscribing to write topic: %s", topic)
 		token := client.Subscribe(topic, 1, p.handleWriteMessage)
 		if !token.WaitTimeout(2*time.Second) || token.Error() != nil {
@@ -884,10 +898,7 @@ func (p *Publisher) publishWriteResponse(client pahomqtt.Client, rootTopic, plcN
 	payload, _ := json.Marshal(resp)
 
 	// Publish to response topic
-	responseTopic := fmt.Sprintf("%s/%s/write/response", rootTopic, plcName)
-	if plcName == "" {
-		responseTopic = fmt.Sprintf("%s/write/response", rootTopic)
-	}
+	responseTopic := joinTopic(rootTopic, plcName, "write", "response")
 	token := client.Publish(responseTopic, 1, false, payload)
 	token.WaitTimeout(2 * time.Second)
 }

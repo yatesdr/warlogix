@@ -217,15 +217,15 @@ func (v *TagValue) GoValueDecoded(client *Client) interface{} {
 	if isStruct && client != nil {
 		decoded, err := client.DecodeUDT(v.DataType, v.Bytes)
 		if err == nil {
-			debugLog("GoValueDecoded: decoded UDT %q (type 0x%04X) with %d members",
+			debugLogVerbose("GoValueDecoded: decoded UDT %q (type 0x%04X) with %d members",
 				v.Name, v.DataType, len(decoded))
 			return decoded
 		}
-		debugLog("GoValueDecoded: failed to decode UDT %q (type 0x%04X): %v",
+		debugLogVerbose("GoValueDecoded: failed to decode UDT %q (type 0x%04X): %v",
 			v.Name, v.DataType, err)
 		// Fall back to raw bytes on decode error
 	} else if isStruct && client == nil {
-		debugLog("GoValueDecoded: no client for UDT %q (type 0x%04X)", v.Name, v.DataType)
+		debugLogVerbose("GoValueDecoded: no client for UDT %q (type 0x%04X)", v.Name, v.DataType)
 	}
 
 	// For non-structures or if decoding failed, use standard conversion

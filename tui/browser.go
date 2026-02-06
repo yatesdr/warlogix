@@ -26,9 +26,10 @@ type BrowserTab struct {
 	details   *tview.TextView
 	statusBar *tview.TextView
 
-	selectedPLC       string
-	lastPLCOptions    []string // Track dropdown options to avoid unnecessary updates
-	updatingDropdown  bool     // True when programmatically updating dropdown
+	selectedPLC          string
+	lastPLCOptions       []string              // Track dropdown options to avoid unnecessary updates
+	lastConnectionStatus plcman.ConnectionStatus // Track connection status to reload tags on connect
+	updatingDropdown     bool                  // True when programmatically updating dropdown
 	treeRoot          *tview.TreeNode
 	tagNodes          map[string]*tview.TreeNode // Tag name -> tree node for quick lookup
 	enabledTags       map[string]bool            // Tag name -> enabled for current PLC
@@ -1098,13 +1099,26 @@ func (t *BrowserTab) Refresh() {
 
 	options := make([]string, 0)
 	selectedIdx := -1
+	var selectedPLCStatus plcman.ConnectionStatus
 
 	for _, plc := range plcs {
 		// Show all configured PLCs in the dropdown
 		if plc.Config.Name == t.selectedPLC {
 			selectedIdx = len(options)
+			selectedPLCStatus = plc.Status
 		}
 		options = append(options, plc.Config.Name)
+	}
+
+	// Check if the selected PLC's connection status changed to connected
+	// This triggers a tag reload when PLC connects
+	if t.selectedPLC != "" && selectedIdx >= 0 {
+		if selectedPLCStatus == plcman.StatusConnected && t.lastConnectionStatus != plcman.StatusConnected {
+			t.lastConnectionStatus = selectedPLCStatus
+			t.loadTags()
+			return
+		}
+		t.lastConnectionStatus = selectedPLCStatus
 	}
 
 	// Check if options have changed before updating
@@ -1120,6 +1134,7 @@ func (t *BrowserTab) Refresh() {
 		// Use the callback version of SetOptions to preserve selection behavior
 		t.plcSelect.SetOptions(options, func(text string, index int) {
 			t.selectedPLC = text
+			t.lastConnectionStatus = 0 // Reset so next Refresh detects status
 			t.loadTags()
 			// Only change focus if this was a user selection, not programmatic
 			if !t.updatingDropdown {
@@ -1133,9 +1148,11 @@ func (t *BrowserTab) Refresh() {
 			// Only auto-select if nothing was selected before
 			t.plcSelect.SetCurrentOption(0)
 			t.selectedPLC = options[0]
+			t.lastConnectionStatus = 0 // Reset so next Refresh detects status
 			t.loadTags()
 		} else if len(options) == 0 {
 			t.selectedPLC = ""
+			t.lastConnectionStatus = 0
 			t.clearTree()
 		}
 

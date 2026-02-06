@@ -4,9 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
+
+// sanitizeTopic trims leading/trailing dots from a topic name to avoid
+// issues with user-provided topic prefixes.
+func sanitizeTopic(topic string) string {
+	return strings.Trim(topic, ".")
+}
+
+// buildHealthTopic creates the health topic from a base topic.
+func buildHealthTopic(baseTopic string) string {
+	base := sanitizeTopic(baseTopic)
+	if base == "" {
+		return "health"
+	}
+	return base + ".health"
+}
 
 // TagMessage is the JSON structure published to Kafka for tag changes.
 type TagMessage struct {
@@ -380,7 +396,7 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 		// Queue the publish job (non-blocking with drop on overflow)
 		job := publishJob{
 			producer: p,
-			topic:    p.config.Topic,
+			topic:    sanitizeTopic(p.config.Topic),
 			key:      key,
 			payload:  payload,
 			cacheKey: cacheKey,
@@ -430,7 +446,7 @@ func (m *Manager) PublishHealth(plcName string, online bool, status, errMsg stri
 		}
 
 		// Use health topic: base topic with .health suffix
-		healthTopic := p.config.Topic + ".health"
+		healthTopic := buildHealthTopic(p.config.Topic)
 		key := []byte(plcName)
 
 		job := publishJob{
