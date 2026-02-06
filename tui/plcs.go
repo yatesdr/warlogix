@@ -246,6 +246,8 @@ func (t *PLCsTab) discover() {
 }
 
 func (t *PLCsTab) showDiscoveryResults(devices []logix.DeviceInfo) {
+	const pageName = "discovery"
+
 	list := tview.NewList()
 	list.SetBorder(true).SetTitle(" Discovered Devices ")
 
@@ -258,33 +260,22 @@ func (t *PLCsTab) showDiscoveryResults(devices []logix.DeviceInfo) {
 	list.AddItem("Cancel", "", 'c', nil)
 
 	list.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		t.app.pages.RemovePage("discovery")
+		t.app.closeModal(pageName)
 		if index < len(devices) {
 			dev := devices[index]
 			t.showAddDialogWithDevice(&dev)
 		}
-		t.app.focusCurrentTab()
 	})
 
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("discovery")
-			t.app.focusCurrentTab()
+			t.app.closeModal(pageName)
 			return nil
 		}
 		return event
 	})
 
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(list, 15, 1, true).
-			AddItem(nil, 0, 1, false), 60, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("discovery", modal, true, true)
-	t.app.app.SetFocus(list)
+	t.app.showCenteredModal(pageName, list, 60, 15)
 }
 
 func (t *PLCsTab) showAddDialog() {
@@ -325,8 +316,10 @@ func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 }
 
 func (t *PLCsTab) buildAddForm(state *plcFormState) {
+	const pageName = "add"
+
 	// Remove existing form if present
-	t.app.pages.RemovePage("add")
+	t.app.pages.RemovePage(pageName)
 
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(" Add PLC ")
@@ -430,24 +423,13 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 		}
 		t.app.UpdateMQTTPLCNames()
 
-		t.app.pages.RemovePage("add")
+		t.app.closeModal(pageName)
 		t.Refresh()
-		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Added PLC: %s", state.name))
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("add")
-		t.app.focusCurrentTab()
-	})
-
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("add")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+		t.app.closeModal(pageName)
 	})
 
 	// Calculate form height based on number of fields
@@ -456,16 +438,9 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 		formHeight = 21 // Extra fields for Beckhoff
 	}
 
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, formHeight, 1, true).
-			AddItem(nil, 0, 1, false), 55, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("add", modal, true, true)
-	t.app.app.SetFocus(form)
+	t.app.showFormModal(pageName, form, 55, formHeight, func() {
+		t.app.closeModal(pageName)
+	})
 
 	// Enable dropdown callback after form is displayed
 	initialized = true
@@ -558,8 +533,10 @@ func (t *PLCsTab) showEditDialog() {
 }
 
 func (t *PLCsTab) buildEditForm(state *editFormState) {
+	const pageName = "edit"
+
 	// Remove existing form if present
-	t.app.pages.RemovePage("edit")
+	t.app.pages.RemovePage(pageName)
 
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(" Edit PLC ")
@@ -661,8 +638,7 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		t.app.SaveConfig()
 
 		// Close dialog first
-		t.app.pages.RemovePage("edit")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 		t.app.setStatus(fmt.Sprintf("Updating PLC: %s...", state.name))
 
 		// Update manager in background to avoid blocking UI
@@ -688,17 +664,7 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("edit")
-		t.app.focusCurrentTab()
-	})
-
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("edit")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+		t.app.closeModal(pageName)
 	})
 
 	// Calculate form height based on number of fields
@@ -707,16 +673,9 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		formHeight = 21 // Extra fields for Beckhoff
 	}
 
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, formHeight, 1, true).
-			AddItem(nil, 0, 1, false), 55, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("edit", modal, true, true)
-	t.app.app.SetFocus(form)
+	t.app.showFormModal(pageName, form, 55, formHeight, func() {
+		t.app.closeModal(pageName)
+	})
 
 	// Enable dropdown callback after form is displayed
 	initialized = true
@@ -818,6 +777,8 @@ func (t *PLCsTab) disconnectSelected() {
 }
 
 func (t *PLCsTab) showInfoDialog() {
+	const pageName = "info"
+
 	name := t.getSelectedPLCName()
 	if name == "" {
 		return
@@ -866,21 +827,11 @@ func (t *PLCsTab) showInfoDialog() {
 
 	textView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyEnter || event.Rune() == 'i' {
-			t.app.pages.RemovePage("info")
-			t.app.focusCurrentTab()
+			t.app.closeModal(pageName)
 			return nil
 		}
 		return event
 	})
 
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(textView, 20, 1, true).
-			AddItem(nil, 0, 1, false), 55, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("info", modal, true, true)
-	t.app.app.SetFocus(textView)
+	t.app.showCenteredModal(pageName, textView, 55, 20)
 }

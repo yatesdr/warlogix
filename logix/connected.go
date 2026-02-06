@@ -412,6 +412,60 @@ func (p *PLC) buildConnectionPath() []byte {
 	return path
 }
 
+// Keepalive sends a NOP (No Operation) via connected messaging to keep
+// the CIP ForwardOpen connection alive. This should be called periodically
+// when no other connected operations are being performed.
+// Returns nil if not connected (unconnected messaging mode).
+func (p *PLC) Keepalive() error {
+	if p.cipConn == nil {
+		// Not using connected messaging, nothing to keep alive
+		return nil
+	}
+
+	// Build NOP request targeting Identity object (class 1, instance 1)
+	// Format: service, path_size, path (class segment, instance segment)
+	reqData := []byte{
+		SvcNop, // Service code 0x17
+		0x02,   // Path size (2 words)
+		0x20, 0x01, // Class segment: class 1 (Identity)
+		0x24, 0x01, // Instance segment: instance 1
+	}
+
+	// Wrap with sequence number for connected messaging
+	connData := p.cipConn.WrapConnected(reqData)
+
+	// Build CPF for connected messaging
+	cpf := p.buildConnectedCpf(connData)
+
+	// Send via SendUnitDataTransaction
+	resp, err := p.Connection.SendUnitDataTransaction(*cpf)
+	if err != nil {
+		return fmt.Errorf("Keepalive: %w", err)
+	}
+
+	if len(resp.Items) < 2 {
+		return fmt.Errorf("Keepalive: expected 2 CPF items, got %d", len(resp.Items))
+	}
+
+	// Unwrap connected response to check status
+	_, cipResp, err := p.cipConn.UnwrapConnected(resp.Items[1].Data)
+	if err != nil {
+		return fmt.Errorf("Keepalive: %w", err)
+	}
+
+	// Check CIP status - NOP should return success (0x00)
+	// But we accept any non-error response as success for keepalive purposes
+	if len(cipResp) >= 2 {
+		status := cipResp[1]
+		// 0x00 = success, 0x08 = service not supported (still a valid response)
+		if status != 0x00 && status != StatusServiceNotSupport {
+			return fmt.Errorf("Keepalive: CIP status 0x%02X", status)
+		}
+	}
+
+	return nil
+}
+
 // buildConnectedCpf builds a CPF packet for connected messaging.
 func (p *PLC) buildConnectedCpf(data []byte) *eip.EipCommonPacket {
 	return &eip.EipCommonPacket{

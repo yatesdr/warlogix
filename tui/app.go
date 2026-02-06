@@ -303,6 +303,8 @@ func (a *App) setStatus(msg string) {
 }
 
 func (a *App) showHelp() {
+	const pageName = "help"
+
 	helpText := HelpText
 	if a.daemonMode {
 		helpText = HelpTextDaemon
@@ -314,23 +316,13 @@ func (a *App) showHelp() {
 
 	textView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyEnter || event.Rune() == '?' {
-			a.pages.RemovePage("help")
-			a.focusCurrentTab()
+			a.closeModal(pageName)
 			return nil
 		}
 		return event
 	})
 
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(textView, 24, 1, true).
-			AddItem(nil, 0, 1, false), 45, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	a.pages.AddPage("help", modal, true, true)
-	a.app.SetFocus(textView)
+	a.showCenteredModal(pageName, textView, 45, 24)
 }
 
 func (a *App) showError(title, message string) {
@@ -633,4 +625,47 @@ func (a *App) UpdateMQTTPLCNames() {
 	}
 	a.mqttMgr.SetPLCNames(plcNames)
 	a.mqttMgr.UpdateWriteSubscriptions()
+}
+
+// showCenteredModal displays a modal dialog centered on the screen.
+// pageName is the unique identifier for this modal in the pages stack.
+// content is the tview primitive to display.
+// width and height are the dimensions of the modal.
+// The content will receive focus automatically.
+func (a *App) showCenteredModal(pageName string, content tview.Primitive, width, height int) {
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(content, height, 1, true).
+			AddItem(nil, 0, 1, false), width, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	a.pages.AddPage(pageName, modal, true, true)
+	a.app.SetFocus(content)
+}
+
+// showFormModal displays a form in a centered modal dialog.
+// pageName is the unique identifier for this modal.
+// form is the form to display.
+// width and height are the dimensions of the modal.
+// onEscape is called when Escape is pressed (typically to close the modal).
+func (a *App) showFormModal(pageName string, form *tview.Form, width, height int, onEscape func()) {
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			if onEscape != nil {
+				onEscape()
+			}
+			return nil
+		}
+		return event
+	})
+
+	a.showCenteredModal(pageName, form, width, height)
+}
+
+// closeModal removes a modal from the pages stack and restores focus to the current tab.
+func (a *App) closeModal(pageName string) {
+	a.pages.RemovePage(pageName)
+	a.focusCurrentTab()
 }

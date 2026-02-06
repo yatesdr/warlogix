@@ -724,7 +724,7 @@ func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
 			if val.Error != nil {
 				sb.WriteString("[yellow]Value:[-] [red]" + val.Error.Error() + "[-]\n")
 			} else {
-				sb.WriteString(fmt.Sprintf("[yellow]Value:[-] %v\n", val.GoValue()))
+				sb.WriteString("[yellow]Value:[-] " + formatValue(val.GoValue()) + "\n")
 			}
 		}
 	}
@@ -922,7 +922,7 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 			}
 
 			// Display value
-			result.WriteString(fmt.Sprintf("[yellow]Value:[-] %v\n", val.GoValue()))
+			result.WriteString("[yellow]Value:[-] " + formatValue(val.GoValue()) + "\n")
 			result.WriteString(fmt.Sprintf("[yellow]Data Type:[-] %s (0x%04X)\n", t.getTypeName(val.DataType), val.DataType))
 			result.WriteString(fmt.Sprintf("[yellow]Size:[-] %d bytes\n", len(val.Bytes)))
 
@@ -1393,6 +1393,8 @@ func (t *BrowserTab) isManualPLC() bool {
 
 // showAddTagDialog shows a dialog to add a manual tag.
 func (t *BrowserTab) showAddTagDialog() {
+	const pageName = "addtag"
+
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(" Add Manual Tag ")
 
@@ -1472,40 +1474,24 @@ func (t *BrowserTab) showAddTagDialog() {
 			t.app.manager.RefreshManualTags(t.selectedPLC)
 		}
 
-		t.app.pages.RemovePage("addtag")
+		t.app.closeModal(pageName)
 		t.loadTags()
-		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Added tag: %s", tagName))
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("addtag")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("addtag")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 50, 14, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 14, 1, true).
-			AddItem(nil, 0, 1, false), 50, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("addtag", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 // showEditTagDialog shows a dialog to edit a manual tag.
 func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
+	const pageName = "edittag"
+
 	ref := node.GetReference()
 	if ref == nil {
 		return
@@ -1625,36 +1611,18 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 		// Refresh manual tags in manager
 		t.app.manager.RefreshManualTags(t.selectedPLC)
 
-		t.app.pages.RemovePage("edittag")
+		t.app.closeModal(pageName)
 		t.loadTags()
-		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Updated tag: %s", tagName))
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("edittag")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("edittag")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 50, 14, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 14, 1, true).
-			AddItem(nil, 0, 1, false), 50, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("edittag", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 // expandUDTMembers adds child nodes for UDT members to the given parent node.
@@ -1748,4 +1716,79 @@ func (t *BrowserTab) deleteManualTag(node *tview.TreeNode) {
 		t.loadTags()
 		t.app.setStatus(fmt.Sprintf("Deleted tag: %s", tagName))
 	})
+}
+
+// formatValue formats a value for display, handling maps (UDTs) specially.
+func formatValue(v interface{}) string {
+	if v == nil {
+		return "<nil>"
+	}
+
+	switch val := v.(type) {
+	case map[string]interface{}:
+		return formatMapValue(val, 0)
+	case []interface{}:
+		if len(val) == 0 {
+			return "[]"
+		}
+		// For arrays, show first few elements
+		var sb strings.Builder
+		sb.WriteString("[")
+		for i, elem := range val {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			if i >= 5 {
+				sb.WriteString(fmt.Sprintf("... (%d more)", len(val)-5))
+				break
+			}
+			sb.WriteString(formatValue(elem))
+		}
+		sb.WriteString("]")
+		return sb.String()
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// formatMapValue formats a map value with optional indentation for nested display.
+func formatMapValue(m map[string]interface{}, indent int) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+
+	// Sort keys for consistent display
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var sb strings.Builder
+	prefix := strings.Repeat("  ", indent)
+
+	sb.WriteString("{\n")
+	for i, k := range keys {
+		v := m[k]
+		sb.WriteString(prefix)
+		sb.WriteString("  ")
+		sb.WriteString(k)
+		sb.WriteString(": ")
+
+		// Handle nested maps
+		if nested, ok := v.(map[string]interface{}); ok {
+			sb.WriteString(formatMapValue(nested, indent+1))
+		} else {
+			sb.WriteString(formatValue(v))
+		}
+
+		if i < len(keys)-1 {
+			sb.WriteString(",")
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(prefix)
+	sb.WriteString("}")
+
+	return sb.String()
 }

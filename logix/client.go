@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 )
 
 // Client is a high-level wrapper that manages connection lifecycle
@@ -139,6 +140,17 @@ func (c *Client) ConnectionMode() string {
 		return "Connected (Standard Forward Open, 504 bytes)"
 	}
 	return "Unconnected messaging"
+}
+
+// Keepalive sends a NOP (No Operation) via connected messaging to keep
+// the CIP ForwardOpen connection alive. Should be called periodically
+// when no other operations are being performed to prevent connection timeout.
+// Returns nil if not using connected messaging.
+func (c *Client) Keepalive() error {
+	if c == nil || c.plc == nil {
+		return nil
+	}
+	return c.plc.Keepalive()
 }
 
 // SetTags stores discovered tag information for element count lookup during reads.
@@ -950,11 +962,22 @@ func (c *Client) GetTemplate(typeCode uint16) (*Template, error) {
 	// Fetch from PLC
 	tmpl, err := c.plc.GetTemplate(templateID)
 	if err != nil {
-		// Cache the failure to avoid retrying
-		if c.failedTemplates == nil {
-			c.failedTemplates = make(map[uint16]bool)
+		// Only cache permanent failures, not transient network errors
+		// Timeouts and connection errors should be retried on next attempt
+		errStr := err.Error()
+		isTransient := strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "connection reset") ||
+			strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "i/o timeout") ||
+			strings.Contains(errStr, "broken pipe")
+
+		if !isTransient {
+			// Cache only permanent failures (e.g., template doesn't exist)
+			if c.failedTemplates == nil {
+				c.failedTemplates = make(map[uint16]bool)
+			}
+			c.failedTemplates[templateID] = true
 		}
-		c.failedTemplates[templateID] = true
 		return nil, err
 	}
 

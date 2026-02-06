@@ -478,6 +478,17 @@ func (w *PLCWorker) poll() {
 	}
 
 	if len(tagsToRead) == 0 {
+		// No tags to poll, but we need to keep the CIP connection alive
+		// by sending periodic traffic. The CIP ForwardOpen connection
+		// times out after ~30 seconds of inactivity (RPI × 2^multiplier).
+		if family == config.FamilyLogix {
+			if client != nil {
+				// Send CIP NOP to keep ForwardOpen connection alive
+				_ = client.Keepalive()
+			}
+		}
+		// Other families (S7, Beckhoff, Omron) have their own keepalive mechanisms
+
 		w.statsMu.Lock()
 		w.tagsPolled = 0
 		w.changesFound = 0

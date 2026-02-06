@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -21,12 +22,14 @@ type AuthConfig struct {
 }
 
 // PasswordHandler returns an ssh.PasswordHandler that validates against the configured password.
+// Uses constant-time comparison to prevent timing attacks.
 func PasswordHandler(password string) ssh.PasswordHandler {
 	if password == "" {
 		return nil
 	}
 	return func(ctx ssh.Context, pass string) bool {
-		return pass == password
+		// Use constant-time comparison to prevent timing attacks
+		return subtle.ConstantTimeCompare([]byte(pass), []byte(password)) == 1
 	}
 }
 

@@ -166,6 +166,8 @@ func (t *ValkeyTab) refreshTable() {
 }
 
 func (t *ValkeyTab) showAddDialog() {
+	const pageName = "add-valkey"
+
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(" Add Valkey Server ")
 
@@ -219,9 +221,8 @@ func (t *ValkeyTab) showAddDialog() {
 		// Add to manager
 		pub := t.app.valkeyMgr.Add(&t.app.config.Valkey[len(t.app.config.Valkey)-1])
 
-		t.app.pages.RemovePage("add-valkey")
+		t.app.closeModal(pageName)
 		t.Refresh()
-		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Added Valkey server: %s", name))
 
 		if autoConnect {
@@ -240,32 +241,17 @@ func (t *ValkeyTab) showAddDialog() {
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("add-valkey")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("add-valkey")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 55, 21, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 21, 1, true).
-			AddItem(nil, 0, 1, false), 55, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("add-valkey", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 func (t *ValkeyTab) showEditDialog() {
+	const pageName = "edit-valkey"
+
 	row, _ := t.table.GetSelection()
 	if row <= 0 {
 		return
@@ -331,8 +317,7 @@ func (t *ValkeyTab) showEditDialog() {
 		t.app.SaveConfig()
 
 		// Close dialog immediately
-		t.app.pages.RemovePage("edit-valkey")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 		t.app.setStatus(fmt.Sprintf("Updating Valkey server: %s...", name))
 		DebugLogValkey("Valkey server %s updated (address: %s, factory: %s)", name, address, factory)
 
@@ -361,29 +346,12 @@ func (t *ValkeyTab) showEditDialog() {
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("edit-valkey")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("edit-valkey")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 55, 21, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 21, 1, true).
-			AddItem(nil, 0, 1, false), 55, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("edit-valkey", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 func (t *ValkeyTab) removeSelected() {

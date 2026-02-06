@@ -164,6 +164,8 @@ func (t *MQTTTab) refreshTable() {
 }
 
 func (t *MQTTTab) showAddDialog() {
+	const pageName = "add-mqtt"
+
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(" Add MQTT Broker ")
 
@@ -225,39 +227,23 @@ func (t *MQTTTab) showAddDialog() {
 			}()
 		}
 
-		t.app.pages.RemovePage("add-mqtt")
+		t.app.closeModal(pageName)
 		t.Refresh()
-		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Added MQTT broker: %s", name))
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("add-mqtt")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("add-mqtt")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 55, 19, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 19, 1, true).
-			AddItem(nil, 0, 1, false), 55, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("add-mqtt", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 func (t *MQTTTab) showEditDialog() {
+	const pageName = "edit-mqtt"
+
 	row, _ := t.table.GetSelection()
 	if row <= 0 {
 		return
@@ -322,8 +308,7 @@ func (t *MQTTTab) showEditDialog() {
 		t.app.SaveConfig()
 
 		// Close dialog immediately
-		t.app.pages.RemovePage("edit-mqtt")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 		t.app.setStatus(fmt.Sprintf("Updating MQTT broker: %s...", name))
 
 		// Update manager in background to avoid blocking UI
@@ -350,29 +335,12 @@ func (t *MQTTTab) showEditDialog() {
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("edit-mqtt")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("edit-mqtt")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 55, 19, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 19, 1, true).
-			AddItem(nil, 0, 1, false), 55, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("edit-mqtt", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 func (t *MQTTTab) removeSelected() {

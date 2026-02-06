@@ -4,6 +4,9 @@ package logix
 const (
 	// Get Attribute Single - read single attribute from object instance
 	SvcGetAttributeSingle byte = 0x0E
+
+	// NOP (No Operation) - used for keepalive without state change
+	SvcNop byte = 0x17
 )
 
 // Logix-specific CIP services (Allen-Bradley extensions to CIP).

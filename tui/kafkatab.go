@@ -255,6 +255,8 @@ func (t *KafkaTab) Refresh() {
 }
 
 func (t *KafkaTab) showAddDialog() {
+	const pageName = "add-kafka"
+
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(" Add Kafka Cluster ")
 
@@ -326,39 +328,23 @@ func (t *KafkaTab) showAddDialog() {
 			go t.app.kafkaMgr.Connect(name)
 		}
 
-		t.app.pages.RemovePage("add-kafka")
+		t.app.closeModal(pageName)
 		t.Refresh()
-		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Added Kafka cluster: %s", name))
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("add-kafka")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("add-kafka")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 60, 24, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 24, 1, true).
-			AddItem(nil, 0, 1, false), 60, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("add-kafka", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 func (t *KafkaTab) showEditDialog() {
+	const pageName = "edit-kafka"
+
 	name := t.getSelectedName()
 	if name == "" {
 		return
@@ -453,36 +439,18 @@ func (t *KafkaTab) showEditDialog() {
 			go t.app.kafkaMgr.Connect(newName)
 		}
 
-		t.app.pages.RemovePage("edit-kafka")
+		t.app.closeModal(pageName)
 		t.Refresh()
-		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Updated Kafka cluster: %s", newName))
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("edit-kafka")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("edit-kafka")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 60, 24, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 24, 1, true).
-			AddItem(nil, 0, 1, false), 60, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("edit-kafka", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 func (t *KafkaTab) removeSelected() {

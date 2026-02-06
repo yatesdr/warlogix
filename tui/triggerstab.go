@@ -293,6 +293,8 @@ func (t *TriggersTab) Refresh() {
 
 // showTagPicker shows a filterable tag picker dialog and calls onSelect with the chosen tag.
 func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(tagName string)) {
+	const pageName = "tag-picker"
+
 	// Get PLC and its tags
 	plc := t.app.manager.GetPLC(plcName)
 	if plc == nil {
@@ -323,9 +325,8 @@ func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(
 			if filterText == "" || strings.Contains(strings.ToLower(tag.Name), filterLower) {
 				tagName := tag.Name
 				list.AddItem(tagName, "", 0, func() {
-					t.app.pages.RemovePage("tag-picker")
+					t.app.closeModal(pageName)
 					onSelect(tagName)
-					t.app.focusCurrentTab()
 				})
 			}
 		}
@@ -342,8 +343,7 @@ func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(
 			t.app.app.SetFocus(list)
 			return nil
 		case tcell.KeyEscape:
-			t.app.pages.RemovePage("tag-picker")
-			t.app.focusCurrentTab()
+			t.app.closeModal(pageName)
 			return nil
 		case tcell.KeyEnter:
 			// Select first item if any
@@ -359,8 +359,7 @@ func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
-			t.app.pages.RemovePage("tag-picker")
-			t.app.focusCurrentTab()
+			t.app.closeModal(pageName)
 			return nil
 		case tcell.KeyUp:
 			if list.GetCurrentItem() == 0 {
@@ -382,15 +381,7 @@ func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(
 		AddItem(list, 0, 1, false)
 	content.SetBorder(true).SetTitle(" " + title + " (/ to filter, Enter to select) ")
 
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(content, 20, 1, true).
-			AddItem(nil, 0, 1, false), 60, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("tag-picker", modal, true, true)
+	t.app.showCenteredModal(pageName, content, 60, 20)
 	t.app.app.SetFocus(filter)
 }
 
@@ -410,6 +401,8 @@ func (t *TriggersTab) getRepublishedTags(plcName string) []string {
 }
 
 func (t *TriggersTab) showAddDialog() {
+	const pageName = "add-trigger"
+
 	// Get list of PLCs
 	plcNames := make([]string, 0)
 	for _, plc := range t.app.config.PLCs {
@@ -551,39 +544,23 @@ func (t *TriggersTab) showAddDialog() {
 
 		t.app.triggerMgr.StartTrigger(name)
 
-		t.app.pages.RemovePage("add-trigger")
+		t.app.closeModal(pageName)
 		t.Refresh()
-		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Added trigger: %s - use 't' to add data tags", name))
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("add-trigger")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("add-trigger")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 65, 24, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 24, 1, true).
-			AddItem(nil, 0, 1, false), 65, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("add-trigger", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 func (t *TriggersTab) showEditDialog() {
+	const pageName = "edit-trigger"
+
 	name := t.getSelectedName()
 	if name == "" {
 		return
@@ -765,36 +742,18 @@ func (t *TriggersTab) showEditDialog() {
 			t.app.triggerMgr.StartTrigger(newName)
 		}
 
-		t.app.pages.RemovePage("edit-trigger")
+		t.app.closeModal(pageName)
 		t.Refresh()
-		t.app.focusCurrentTab()
 		t.app.setStatus(fmt.Sprintf("Updated trigger: %s", newName))
 	})
 
 	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("edit-trigger")
-		t.app.focusCurrentTab()
+		t.app.closeModal(pageName)
 	})
 
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			t.app.pages.RemovePage("edit-trigger")
-			t.app.focusCurrentTab()
-			return nil
-		}
-		return event
+	t.app.showFormModal(pageName, form, 65, 24, func() {
+		t.app.closeModal(pageName)
 	})
-
-	modal := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(form, 24, 1, true).
-			AddItem(nil, 0, 1, false), 65, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	t.app.pages.AddPage("edit-trigger", modal, true, true)
-	t.app.app.SetFocus(form)
 }
 
 func (t *TriggersTab) showAddDataTagDialog() {
