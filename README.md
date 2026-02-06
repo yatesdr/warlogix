@@ -4,7 +4,8 @@ A TUI (Text User Interface) gateway for industrial PLCs. Connect to Allen-Bradle
 
 > **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff and Omron support are works in progress.
 
-<img width="961" height="579" alt="WarLogix TUI" src="https://github.com/user-attachments/assets/4bdbc47e-6ca1-41a1-992d-c46356d6415c" />
+<img width="1071" height="633" alt="image" src="https://github.com/user-attachments/assets/ea44d18f-5685-4fa7-91d3-0dd0fdb7ee47" />
+
 
 ## Why WarLogix?
 
