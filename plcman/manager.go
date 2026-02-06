@@ -1871,6 +1871,50 @@ func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 	}
 }
 
+// ReadTagWithCount reads a single tag with a specified element count from a connected PLC.
+// This is useful for reading arrays where you know the exact element count.
+func (m *Manager) ReadTagWithCount(plcName, tagName string, count uint16) (*TagValue, error) {
+	m.mu.RLock()
+	plc, exists := m.plcs[plcName]
+	m.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("PLC not found: %s", plcName)
+	}
+
+	plc.mu.RLock()
+	client := plc.Client
+	status := plc.Status
+	family := plc.Config.GetFamily()
+	plc.mu.RUnlock()
+
+	// Check connection status first
+	if status != StatusConnected {
+		return nil, fmt.Errorf("PLC not connected: %s (status: %s)", plcName, status)
+	}
+
+	// Currently only supported for Logix/Micro800 PLCs
+	switch family {
+	case config.FamilyLogix, config.FamilyMicro800:
+		if client == nil {
+			return nil, fmt.Errorf("Logix client not available for %s", plcName)
+		}
+		value, err := client.ReadWithCount(tagName, count)
+		if err != nil {
+			if isLikelyConnectionError(err) {
+				m.handleConnectionError(plcName, plc, err)
+			}
+			return nil, err
+		}
+		// Use decoded version to get UDT member names in output
+		return FromLogixTagValueDecoded(value, client), nil
+
+	default:
+		// For other families, fall back to regular ReadTag (count not supported)
+		return m.ReadTag(plcName, tagName)
+	}
+}
+
 // handleConnectionError marks a PLC as disconnected and schedules reconnection.
 func (m *Manager) handleConnectionError(plcName string, plc *ManagedPLC, err error) {
 	plc.mu.Lock()

@@ -547,6 +547,39 @@ func (c *Client) Read(tagNames ...string) ([]*TagValue, error) {
 	return results, nil
 }
 
+// ReadWithCount reads a single tag with a specified element count.
+// This is useful for reading arrays where you know the exact element count.
+// For structures, the count typically represents the number of structure instances.
+func (c *Client) ReadWithCount(tagName string, count uint16) (*TagValue, error) {
+	if c == nil || c.plc == nil {
+		return nil, fmt.Errorf("ReadWithCount: nil client")
+	}
+	if tagName == "" {
+		return nil, fmt.Errorf("ReadWithCount: empty tag name")
+	}
+	if count == 0 {
+		count = 1
+	}
+
+	tag, err := c.plc.ReadTagCount(tagName, count)
+	if err != nil {
+		return nil, err
+	}
+
+	// Prefer tag info type code (from discovery) over read response
+	dataType := tag.DataType
+	if info, ok := c.tagInfo[tagName]; ok && info.TypeCode != 0 {
+		dataType = info.TypeCode
+	}
+
+	return &TagValue{
+		Name:     tag.Name,
+		DataType: dataType,
+		Bytes:    tag.Bytes,
+		Error:    nil,
+	}, nil
+}
+
 // readIndividual reads tags one at a time (for Micro800 which doesn't support batch reads).
 func (c *Client) readIndividual(tagNames []string) ([]*TagValue, error) {
 	results := make([]*TagValue, 0, len(tagNames))
@@ -987,7 +1020,18 @@ func (c *Client) GetTemplate(typeCode uint16) (*Template, error) {
 	}
 	c.templates[templateID] = tmpl
 
-	debugLog("Cached template %q (ID: %d) with %d members", tmpl.Name, tmpl.ID, len(tmpl.Members))
+	debugLog("Cached template %q (ID: %d) with %d total members (%d visible)",
+		tmpl.Name, tmpl.ID, len(tmpl.Members), len(tmpl.MemberMap))
+
+	// Dump full template structure for debugging
+	for i, m := range tmpl.Members {
+		hiddenStr := ""
+		if m.Hidden {
+			hiddenStr = " [HIDDEN]"
+		}
+		debugLog("  Template member %d: %q offset=%d type=0x%04X%s",
+			i, m.Name, m.Offset, m.Type, hiddenStr)
+	}
 
 	return tmpl, nil
 }
@@ -997,6 +1041,18 @@ func (c *Client) GetTemplateByID(templateID uint16) (*Template, error) {
 	// Construct a type code with structure flag
 	typeCode := TypeStructureMask | templateID
 	return c.GetTemplate(typeCode)
+}
+
+// ClearTemplateCache clears all cached templates, forcing re-fetch on next access.
+// Use this for debugging template parsing issues.
+func (c *Client) ClearTemplateCache() {
+	if c == nil {
+		return
+	}
+	c.templates = nil
+	c.templateSizes = nil
+	c.failedTemplates = nil
+	debugLog("Template cache cleared")
 }
 
 // FetchTemplatesForTags eagerly fetches and caches templates for all structure-type tags.
@@ -1046,13 +1102,38 @@ func (c *Client) DecodeUDT(typeCode uint16, data []byte) (map[string]interface{}
 }
 
 // decodeUDTWithTemplate decodes UDT data using a specific template.
+// Set topLevel=true for data read directly from PLC (has structure handle prefix).
+// Set topLevel=false for nested structures within parent UDT data (no handle prefix).
 func (c *Client) decodeUDTWithTemplate(tmpl *Template, data []byte) (map[string]interface{}, error) {
+	return c.decodeUDTWithTemplateInternal(tmpl, data, true)
+}
+
+// decodeUDTWithTemplateInternal decodes UDT data with control over handle stripping.
+func (c *Client) decodeUDTWithTemplateInternal(tmpl *Template, data []byte, topLevel bool) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
+
+	// Only top-level UDT responses from the PLC have a 2-byte structure handle prefix.
+	// Nested structures within parent UDT data do NOT have this prefix.
+	if topLevel && len(data) >= 2 {
+		handle := binary.LittleEndian.Uint16(data[0:2])
+		debugLog("decodeUDTWithTemplate: stripping 2-byte structure handle 0x%04X (template handle 0x%04X)",
+			handle, tmpl.RawHandle)
+		data = data[2:] // Skip the structure handle
+	}
+
 	dataLen := uint32(len(data))
 	skipped := 0
+	decoded := 0
 
-	debugLog("decodeUDTWithTemplate: template %q (size=%d) with %d bytes of data",
-		tmpl.Name, tmpl.Size, dataLen)
+	debugLog("decodeUDTWithTemplate: template %q (size=%d) with %d bytes of member data (topLevel=%v)",
+		tmpl.Name, tmpl.Size, dataLen, topLevel)
+
+	// Debug: show first 32 bytes of member data
+	showLen := len(data)
+	if showLen > 32 {
+		showLen = 32
+	}
+	debugLog("decodeUDTWithTemplate: member data first %d bytes: % X", showLen, data[:showLen])
 
 	for _, member := range tmpl.Members {
 		if member.Hidden || member.Name == "" {
@@ -1075,6 +1156,17 @@ func (c *Client) decodeUDTWithTemplate(tmpl *Template, data []byte) (map[string]
 			debugLog("Failed to decode member %q: %v", member.Name, err)
 			continue
 		}
+
+		// Debug: show what we decoded for first 10 members
+		if decoded < 10 {
+			bytesAtOffset := memberData
+			if len(bytesAtOffset) > 8 {
+				bytesAtOffset = bytesAtOffset[:8]
+			}
+			debugLog("  Decoded %q: offset=%d type=0x%04X bytes=% X -> value=%v",
+				member.Name, member.Offset, member.Type, bytesAtOffset, value)
+		}
+		decoded++
 
 		result[member.Name] = value
 	}
@@ -1104,7 +1196,8 @@ func (c *Client) decodeScalarMember(typeCode uint16, data []byte) (interface{}, 
 			// Return raw bytes as fallback
 			return data, nil
 		}
-		return c.decodeUDTWithTemplate(tmpl, data)
+		// Nested structures don't have a handle prefix - only top-level reads do
+		return c.decodeUDTWithTemplateInternal(tmpl, data, false)
 	}
 
 	// Handle atomic types

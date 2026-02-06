@@ -322,10 +322,11 @@ func (t *BrowserTab) lazyExpandUDT(node *tview.TreeNode, tagInfo *logix.TagInfo)
 
 		memberPath := basePath + "." + member.Name
 
-		// Create synthetic TagInfo for member
+		// Create synthetic TagInfo for member, including array dimensions from template
 		memberInfo := &logix.TagInfo{
-			Name:     memberPath,
-			TypeCode: member.Type,
+			Name:       memberPath,
+			TypeCode:   member.Type,
+			Dimensions: member.ArrayDims, // Pass array dimensions from template
 		}
 
 		enabled := t.enabledTags[memberPath]
@@ -872,8 +873,22 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 			arrayDebugInfo = debugSb.String()
 		}
 
-		// Try to read the tag directly
-		val, err := t.app.manager.ReadTag(plcName, tagName)
+		// Calculate element count from dimensions
+		var elemCount uint16 = 1
+		for _, d := range tagDimensions {
+			if d > 0 {
+				elemCount *= uint16(d)
+			}
+		}
+
+		// Try to read the tag directly, using count for arrays
+		var val *plcman.TagValue
+		var err error
+		if elemCount > 1 {
+			val, err = t.app.manager.ReadTagWithCount(plcName, tagName, elemCount)
+		} else {
+			val, err = t.app.manager.ReadTag(plcName, tagName)
+		}
 
 		t.app.QueueUpdateDraw(func() {
 			var result strings.Builder
@@ -1649,10 +1664,11 @@ func (t *BrowserTab) expandUDTMembers(parentNode *tview.TreeNode, basePath strin
 		memberPath := basePath + "." + member.Name
 		memberMatches := t.matchesFilter(memberPath)
 
-		// Create a synthetic TagInfo for this member
+		// Create a synthetic TagInfo for this member, including array dimensions
 		memberInfo := &logix.TagInfo{
-			Name:     memberPath,
-			TypeCode: member.Type,
+			Name:       memberPath,
+			TypeCode:   member.Type,
+			Dimensions: member.ArrayDims, // Pass array dimensions from template
 		}
 
 		enabled := t.enabledTags[memberPath]

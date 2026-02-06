@@ -126,20 +126,9 @@ func (p *PLC) GetTemplate(templateID uint16) (*Template, error) {
 		return nil, fmt.Errorf("failed to parse template definition: %w", err)
 	}
 
-	// Calculate member offsets using a size lookup that can query nested UDT sizes
-	sizeLookup := func(typeCode uint16) uint32 {
-		if !IsStructure(typeCode) {
-			return uint32(TypeSize(typeCode & 0x0FFF))
-		}
-		// Query nested structure size from PLC
-		size, err := p.GetTemplateSize(typeCode)
-		if err != nil {
-			debugLog("GetTemplate: failed to get size for nested type 0x%04X: %v", typeCode, err)
-			return 0
-		}
-		return size
-	}
-	tmpl.calculateOffsetsWithSizes(sizeLookup)
+	// Calculate BOOL bit positions for packed BOOLs sharing the same offset
+	// (Offsets come from PLC, but bit positions within a DINT need calculation)
+	tmpl.calculateBoolBitOffsets()
 
 	debugLog("GetTemplate: parsed template %d %q with %d visible members", templateID, tmpl.Name, len(tmpl.MemberMap))
 	return tmpl, nil
@@ -436,20 +425,21 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 
 		entry := data[idx : idx+8]
 
-		// Parse member entry (per pylogix format):
-		// Bytes 0-1: Array size (UINT) - number of elements if array
+		// Parse member entry (per pycomm3/CIP format):
+		// Bytes 0-1: Type info (UINT) - array size for arrays
 		// Bytes 2-3: Type code (UINT) - lower 12 bits = type, bit 13-14 = array flag, bit 15 = struct flag
-		// Bytes 4-7: Additional info (varies by PLC - not reliable as offset)
+		// Bytes 4-7: Member offset (UDINT) - actual byte offset within structure provided by PLC
 		arraySize := binary.LittleEndian.Uint16(entry[0:2])
 		typeVal := binary.LittleEndian.Uint16(entry[2:4])
+		memberOffset := binary.LittleEndian.Uint32(entry[4:8])
 
 		// Extract type info from typeVal
 		dataTypeValue := typeVal & 0x0FFF   // Lower 12 bits (base type)
 		isArray := (typeVal & 0x6000) >> 13 // Bits 13-14
 
 		member := TemplateMember{
-			Type:   typeVal, // Keep full type value for IsStructure() check
-			Offset: 0,       // Will be calculated by calculateOffsets()
+			Type:   typeVal,      // Keep full type value for IsStructure() check
+			Offset: memberOffset, // Use actual offset from PLC, not calculated
 		}
 
 		// Set array dimensions if this is an array
@@ -459,8 +449,8 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 
 		// Log member details for debugging (show raw bytes for first few)
 		if i < 5 {
-			debugLog("  Member %d: raw=% X -> arraySize=%d typeVal=0x%04X",
-				i, entry, arraySize, typeVal)
+			debugLog("  Member %d: raw=% X -> arraySize=%d typeVal=0x%04X offset=%d",
+				i, entry, arraySize, typeVal, memberOffset)
 		}
 
 		// Check for hidden/internal members (type 0)
@@ -535,11 +525,7 @@ func (t *Template) parseDefinition(data []byte, memberCount int) error {
 		}
 	}
 
-	// Note: Offsets will be calculated by calculateOffsetsWithSizes() after template is cached
-	// This allows looking up nested UDT sizes from the cache
-	debugLog("parseDefinition: template %q has %d visible members", t.Name, len(t.MemberMap))
-
-	debugLog("parseDefinition: template %q has %d visible members", t.Name, len(t.MemberMap))
+	debugLog("parseDefinition: template %q has %d visible members (offsets from PLC)", t.Name, len(t.MemberMap))
 	return nil
 }
 
@@ -630,6 +616,33 @@ func (t *Template) calculateOffsetsWithSizes(sizeLookup func(uint16) uint32) {
 	}
 	if len(t.Members) > 20 {
 		debugLog("  ... and %d more members", len(t.Members)-20)
+	}
+}
+
+// calculateBoolBitOffsets calculates bit positions for BOOL members that share the same byte offset.
+// PLC provides byte offsets, but BOOLs packed into a DINT share the same offset with different bit positions.
+func (t *Template) calculateBoolBitOffsets() {
+	if len(t.Members) == 0 {
+		return
+	}
+
+	// Track bit position for BOOLs at each offset
+	boolBitAtOffset := make(map[uint32]uint8)
+
+	for i := range t.Members {
+		member := &t.Members[i]
+		baseType := member.Type & 0x0FFF
+
+		if baseType == TypeBOOL {
+			// Get current bit position for this offset, then increment
+			bitPos := boolBitAtOffset[member.Offset]
+			member.BitOffset = bitPos
+			boolBitAtOffset[member.Offset] = bitPos + 1
+
+			if bitPos < 5 {
+				debugLog("  BOOL member %q: offset=%d, bitOffset=%d", member.Name, member.Offset, bitPos)
+			}
+		}
 	}
 }
 
