@@ -1,6 +1,6 @@
 # Configuration Reference
 
-In normal use the config file will not need to be edited by hand, but for automation and use with Ansible or other deployments it is useful to document the format.  
+In normal use the config file will not need to be edited by hand, but for pre-configuring automation or BigFix/Ansible deployments it is useful to document the format.  
 
 WarLogix uses a YAML configuration file stored at `~/.warlogix/config.yaml` by default. Use `-config /path/to/file` to specify an alternate location.
 
