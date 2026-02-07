@@ -275,6 +275,7 @@ This runs a 10-second stress test against all enabled Kafka clusters in your con
 | `--test-duration` | 10s | Duration of each test |
 | `--test-tags` | 100 | Number of simulated tags |
 | `--test-plcs` | 5 | Number of simulated PLCs |
+| `-y` | false | Skip confirmation prompt |
 
 ### Example Output
 

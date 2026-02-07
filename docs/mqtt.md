@@ -142,11 +142,12 @@ This publishes simulated PLC tag data to a test topic (`warlogix-test-stress/+/t
 | `--test-duration` | 10s | Duration of each test |
 | `--test-tags` | 100 | Number of simulated tags |
 | `--test-plcs` | 5 | Number of simulated PLCs |
+| `-y` | false | Skip confirmation prompt |
 
 ### Example
 
 ```bash
-warlogix --test-brokers --test-duration 30s --test-tags 200
+warlogix --test-brokers --test-duration 30s --test-tags 200 -y
 ```
 
 The test measures throughput (messages per second) and reports any publish failures. MQTT publishes are asynchronous with QoS 1, so the throughput represents the queue rate to the broker.

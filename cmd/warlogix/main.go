@@ -5,10 +5,12 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -60,10 +62,11 @@ var (
 	sshKeys     = flag.String("ssh-keys", "", "Path to authorized_keys file or directory (daemon mode only)")
 	logFile     = flag.String("log", "", "Path to log file (optional, writes alongside debug window)")
 	logDebug    = flag.String("log-debug", "", "Enable debug logging to debug.log. Use without value for all, or specify protocol (omron,ads,logix,s7,mqtt,kafka,valkey,tui)")
-	testBrokers = flag.Bool("test-brokers", false, "Run broker stress tests (Kafka, MQTT, Valkey) and exit")
+	testBrokers  = flag.Bool("test-brokers", false, "Run broker stress tests (Kafka, MQTT, Valkey) and exit")
 	testDuration = flag.Duration("test-duration", 10*time.Second, "Duration for each broker stress test")
 	testTags     = flag.Int("test-tags", 100, "Number of simulated tags for stress test")
 	testPLCs     = flag.Int("test-plcs", 5, "Number of simulated PLCs for stress test")
+	testYes      = flag.Bool("y", false, "Skip confirmation prompt for stress tests")
 )
 
 func main() {
@@ -109,6 +112,61 @@ func main() {
 
 // runBrokerTests runs stress tests against configured message brokers.
 func runBrokerTests(cfg *config.Config) {
+	// Count enabled brokers
+	enabledCount := 0
+	var brokerList []string
+	for _, k := range cfg.Kafka {
+		if k.Enabled {
+			enabledCount++
+			brokerList = append(brokerList, fmt.Sprintf("Kafka/%s (%s)", k.Name, strings.Join(k.Brokers, ",")))
+		}
+	}
+	for _, m := range cfg.MQTT {
+		if m.Enabled {
+			enabledCount++
+			brokerList = append(brokerList, fmt.Sprintf("MQTT/%s (%s:%d)", m.Name, m.Broker, m.Port))
+		}
+	}
+	for _, v := range cfg.Valkey {
+		if v.Enabled {
+			enabledCount++
+			brokerList = append(brokerList, fmt.Sprintf("Valkey/%s (%s)", v.Name, v.Address))
+		}
+	}
+
+	if enabledCount == 0 {
+		fmt.Println("No enabled brokers found in configuration.")
+		fmt.Println("Enable brokers in your config file to run stress tests.")
+		return
+	}
+
+	// Warning and confirmation (skip if -y flag is set)
+	if !*testYes {
+		fmt.Println()
+		fmt.Println("╔══════════════════════════════════════════════════════════════════╗")
+		fmt.Println("║                         ⚠ WARNING ⚠                              ║")
+		fmt.Println("╚══════════════════════════════════════════════════════════════════╝")
+		fmt.Println()
+		fmt.Printf("This will stress test %d broker(s) for %v:\n\n", enabledCount, *testDuration)
+		for _, b := range brokerList {
+			fmt.Printf("  • %s\n", b)
+		}
+		fmt.Println()
+		fmt.Println("The test will send significant traffic to these brokers.")
+		fmt.Println("Test topics/keys are prefixed with 'warlogix-test-stress'.")
+		fmt.Println()
+		fmt.Print("Continue? [y/N]: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		response, _ := reader.ReadString('\n')
+		response = strings.TrimSpace(strings.ToLower(response))
+
+		if response != "y" && response != "yes" {
+			fmt.Println("Aborted.")
+			return
+		}
+	}
+
 	testCfg := brokertest.TestConfig{
 		Duration: *testDuration,
 		NumTags:  *testTags,
