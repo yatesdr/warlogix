@@ -257,3 +257,49 @@ kafkacat -b localhost:9092 -t plc-tags.health -C
 ```bash
 kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic plc-tags
 ```
+
+## Stress Testing
+
+Use the built-in stress test to benchmark your Kafka broker and detect publishing regressions:
+
+```bash
+warlogix --test-brokers
+```
+
+This runs a 10-second stress test against all enabled Kafka clusters in your configuration, publishing simulated PLC tag data to a test topic (`warlogix-test-stress`).
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--test-duration` | 10s | Duration of each test |
+| `--test-tags` | 100 | Number of simulated tags |
+| `--test-plcs` | 5 | Number of simulated PLCs |
+
+### Example Output
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║                         TEST RESULTS                             ║
+╚══════════════════════════════════════════════════════════════════╝
+
+  ┌─────────┬────────────────┬────────────────┬──────────────┬────────┐
+  │ Type    │ Name           │ Throughput     │ Messages     │ Status │
+  ├─────────┼────────────────┼────────────────┼──────────────┼────────┤
+  │ Kafka   │ local          │       2341 msg/s │        23415 │ ✓ PASS │
+  └─────────┴────────────────┴────────────────┴──────────────┴────────┘
+
+  Kafka/local:
+    Address:    localhost:9092
+    Duration:   10.001s
+    Messages:   23415 sent, 0 errors
+    Throughput: 2341.3 msg/s
+    Latency:
+      avg: 1.2ms, p50: 980µs, p95: 2.1ms, p99: 5.3ms, max: 12ms
+```
+
+### Use Cases
+
+- **Baseline performance** - Record expected throughput for your broker setup
+- **Regression testing** - Detect publishing performance changes after updates
+- **Capacity planning** - Determine if broker can handle expected tag volume

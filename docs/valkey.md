@@ -179,3 +179,44 @@ redis-cli KEYS "factory:MainPLC:tags:*"
 ```bash
 redis-cli RPUSH factory:writes '{"factory":"factory","plc":"MainPLC","tag":"Counter","value":100}'
 ```
+
+## Stress Testing
+
+Use the built-in stress test to benchmark your Valkey/Redis server:
+
+```bash
+warlogix --test-brokers
+```
+
+This runs a 10-second stress test against all enabled Valkey servers, writing simulated PLC tag data to test keys (`warlogix-test-stress:*`).
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--test-duration` | 10s | Duration of each test |
+| `--test-tags` | 100 | Number of simulated tags |
+| `--test-plcs` | 5 | Number of simulated PLCs |
+
+### Example Output
+
+```
+  Valkey/local:
+    Address:    localhost:6379
+    Duration:   10.001s
+    Messages:   45123 sent, 0 errors
+    Throughput: 4512.1 msg/s
+    Latency:
+      avg: 180µs, p50: 150µs, p95: 320µs, p99: 890µs, max: 2.1ms
+```
+
+The test measures:
+- **Throughput** - SET operations per second
+- **Latency** - Per-operation latency (avg, p50, p95, p99, max)
+- **Errors** - Failed operations
+
+### Use Cases
+
+- **Baseline performance** - Record expected throughput for your Redis setup
+- **Regression testing** - Detect performance changes after updates
+- **Capacity planning** - Determine if server can handle expected tag volume
