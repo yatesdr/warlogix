@@ -168,6 +168,11 @@ func (r *Runner) testKafka(cfg *kafka.Config) TestResult {
 
 	// Create producer directly for synchronous testing (confirmed delivery)
 	producer := kafka.NewProducer(&testCfg)
+	if err := producer.Connect(); err != nil {
+		result.Error = fmt.Errorf("connect failed: %w", err)
+		fmt.Printf("  Status: FAILED - %v\n\n", result.Error)
+		return result
+	}
 	defer producer.Disconnect()
 
 	fmt.Printf("  Running... ")
