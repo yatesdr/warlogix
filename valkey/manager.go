@@ -296,11 +296,13 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 		},
 	}
 
+	// Block until queued (with timeout) - no message dropping
 	select {
 	case m.batchChan <- job:
 		// Queued for batching
-	default:
-		debugLog("Valkey batch queue full, dropping message for %s/%s", plcName, tagName)
+	case <-time.After(5 * time.Second):
+		debugLog("WARN: Valkey batch queue blocked >5s for %s/%s", plcName, tagName)
+		m.batchChan <- job
 	}
 }
 

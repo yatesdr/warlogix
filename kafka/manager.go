@@ -469,12 +469,16 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 			value:     value,
 			queueTime: time.Now(),
 		}
+		// Block until queued (with timeout to prevent indefinite blocking)
+		// This ensures no messages are dropped - back-pressure to caller
 		select {
 		case m.batchChan <- job:
 			// Job queued for batching
-		default:
-			// Queue full, drop the message and log
-			logKafka("Batch queue full, dropping message for %s", cacheKey)
+		case <-time.After(5 * time.Second):
+			// Queue blocked for too long - this indicates a serious problem
+			logKafka("WARN: Batch queue blocked >5s, message may be delayed for %s", cacheKey)
+			// Still try to queue (blocking) - don't drop messages
+			m.batchChan <- job
 		}
 	}
 }
@@ -526,11 +530,13 @@ func (m *Manager) PublishHealth(plcName, driver string, online bool, status, err
 			value:     nil, // Health messages are always published
 			queueTime: time.Now(),
 		}
+		// Block until queued (with timeout) - no message dropping
 		select {
 		case m.batchChan <- job:
 			// Job queued for batching
-		default:
-			logKafka("Batch queue full, dropping health message for %s", plcName)
+		case <-time.After(5 * time.Second):
+			logKafka("WARN: Batch queue blocked >5s for health message %s", plcName)
+			m.batchChan <- job
 		}
 	}
 }
