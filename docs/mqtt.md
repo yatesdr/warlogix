@@ -141,7 +141,7 @@ This publishes simulated PLC tag data to a test topic (`warlogix-test-stress/+/t
 |------|---------|-------------|
 | `--test-duration` | 10s | Duration of each test |
 | `--test-tags` | 100 | Number of simulated tags |
-| `--test-plcs` | 5 | Number of simulated PLCs |
+| `--test-plcs` | 50 | Number of simulated PLCs |
 | `-y` | false | Skip confirmation prompt |
 
 ### Example

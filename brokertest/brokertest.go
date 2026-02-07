@@ -57,7 +57,7 @@ func DefaultTestConfig() TestConfig {
 	return TestConfig{
 		Duration: 10 * time.Second,
 		NumTags:  100,
-		NumPLCs:  5,
+		NumPLCs:  50,
 	}
 }
 

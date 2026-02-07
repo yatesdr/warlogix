@@ -65,7 +65,7 @@ var (
 	testBrokers  = flag.Bool("test-brokers", false, "Run broker stress tests (Kafka, MQTT, Valkey) and exit")
 	testDuration = flag.Duration("test-duration", 10*time.Second, "Duration for each broker stress test")
 	testTags     = flag.Int("test-tags", 100, "Number of simulated tags for stress test")
-	testPLCs     = flag.Int("test-plcs", 5, "Number of simulated PLCs for stress test")
+	testPLCs     = flag.Int("test-plcs", 50, "Number of simulated PLCs for stress test")
 	testYes      = flag.Bool("y", false, "Skip confirmation prompt for stress tests")
 )
 
