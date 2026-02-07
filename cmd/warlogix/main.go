@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"warlogix/api"
+	"warlogix/brokertest"
 	"warlogix/config"
 	"warlogix/kafka"
 	"warlogix/logging"
-	"warlogix/logix"
 	"warlogix/mqtt"
 	"warlogix/plcman"
 	"warlogix/ssh"
@@ -28,32 +28,26 @@ import (
 // Version is set at build time via -ldflags
 var Version = "dev"
 
-// tuiDebugLogger adapts the TUI debug logging for MQTT.
-type tuiDebugLogger struct{}
-
-func (t tuiDebugLogger) LogMQTT(format string, args ...interface{}) {
-	tui.DebugLogMQTT(format, args...)
-}
-
-// tuiValkeyDebugLogger adapts the TUI debug logging for Valkey.
-type tuiValkeyDebugLogger struct{}
-
-func (t tuiValkeyDebugLogger) LogValkey(format string, args ...interface{}) {
-	tui.DebugLogValkey(format, args...)
-}
-
-// tuiKafkaDebugLogger adapts the TUI debug logging for Kafka.
-type tuiKafkaDebugLogger struct{}
-
-func (t tuiKafkaDebugLogger) LogKafka(format string, args ...interface{}) {
-	tui.DebugLogKafka(format, args...)
-}
-
-// tuiLogixDebugLogger adapts the TUI debug logging for Logix.
-type tuiLogixDebugLogger struct{}
-
-func (t tuiLogixDebugLogger) LogLogix(format string, args ...interface{}) {
-	tui.DebugLogLogix(format, args...)
+// preprocessLogDebugFlag handles --log-debug without a value by injecting "all" as the default.
+// This allows users to use `--log-debug` alone to enable all protocol logging.
+func preprocessLogDebugFlag() {
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		// Check for --log-debug or -log-debug without =
+		if arg == "--log-debug" || arg == "-log-debug" {
+			// Check if next arg exists and is not another flag
+			if i+1 >= len(args) || (len(args[i+1]) > 0 && args[i+1][0] == '-') {
+				// No value provided, inject "all"
+				os.Args = append(os.Args[:i+2], append([]string{"all"}, os.Args[i+2:]...)...)
+			}
+			return
+		}
+		// If it has = sign, value is already provided
+		if len(arg) > 11 && (arg[:12] == "--log-debug=" || arg[:11] == "-log-debug=") {
+			return
+		}
+	}
 }
 
 // Command line flags
@@ -65,9 +59,19 @@ var (
 	sshPassword = flag.String("ssh-password", "", "Password for SSH authentication (daemon mode only)")
 	sshKeys     = flag.String("ssh-keys", "", "Path to authorized_keys file or directory (daemon mode only)")
 	logFile     = flag.String("log", "", "Path to log file (optional, writes alongside debug window)")
+	logDebug    = flag.String("log-debug", "", "Enable debug logging to debug.log. Use without value for all, or specify protocol (omron,ads,logix,s7,mqtt,kafka,valkey,tui)")
+	testBrokers = flag.Bool("test-brokers", false, "Run broker stress tests (Kafka, MQTT, Valkey) and exit")
+	testDuration = flag.Duration("test-duration", 10*time.Second, "Duration for each broker stress test")
+	testTags     = flag.Int("test-tags", 100, "Number of simulated tags for stress test")
+	testPLCs     = flag.Int("test-plcs", 5, "Number of simulated PLCs for stress test")
 )
 
 func main() {
+	// Pre-process args to handle --log-debug without a value
+	// Go's flag package requires a value for string flags, but we want --log-debug
+	// alone to mean "all protocols"
+	preprocessLogDebugFlag()
+
 	flag.Parse()
 
 	if *showVersion {
@@ -90,10 +94,35 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Run broker stress tests if requested
+	if *testBrokers {
+		runBrokerTests(cfg)
+		return
+	}
+
 	if *daemonMode {
 		runDaemonMode(cfg)
 	} else {
 		runLocalMode(cfg)
+	}
+}
+
+// runBrokerTests runs stress tests against configured message brokers.
+func runBrokerTests(cfg *config.Config) {
+	testCfg := brokertest.TestConfig{
+		Duration: *testDuration,
+		NumTags:  *testTags,
+		NumPLCs:  *testPLCs,
+	}
+
+	runner := brokertest.NewRunner(cfg, testCfg)
+	results := runner.Run()
+
+	// Exit with error code if any test failed
+	for _, result := range results {
+		if !result.Success {
+			os.Exit(1)
+		}
 	}
 }
 
@@ -119,19 +148,20 @@ func runLocalMode(cfg *config.Config) {
 	for i := range cfg.Kafka {
 		kc := cfg.Kafka[i]
 		kafkaMgr.AddCluster(&kafka.Config{
-			Name:           kc.Name,
-			Enabled:        kc.Enabled,
-			Brokers:        kc.Brokers,
-			UseTLS:         kc.UseTLS,
-			TLSSkipVerify:  kc.TLSSkipVerify,
-			SASLMechanism:  kafka.SASLMechanism(kc.SASLMechanism),
-			Username:       kc.Username,
-			Password:       kc.Password,
-			RequiredAcks:   kc.RequiredAcks,
-			MaxRetries:     kc.MaxRetries,
-			RetryBackoff:   kc.RetryBackoff,
-			PublishChanges: kc.PublishChanges,
-			Topic:          kc.Topic,
+			Name:             kc.Name,
+			Enabled:          kc.Enabled,
+			Brokers:          kc.Brokers,
+			UseTLS:           kc.UseTLS,
+			TLSSkipVerify:    kc.TLSSkipVerify,
+			SASLMechanism:    kafka.SASLMechanism(kc.SASLMechanism),
+			Username:         kc.Username,
+			Password:         kc.Password,
+			RequiredAcks:     kc.RequiredAcks,
+			MaxRetries:       kc.MaxRetries,
+			RetryBackoff:     kc.RetryBackoff,
+			PublishChanges:   kc.PublishChanges,
+			Topic:            kc.Topic,
+			AutoCreateTopics: kc.AutoCreateTopics == nil || *kc.AutoCreateTopics,
 		})
 	}
 
@@ -169,11 +199,29 @@ func runLocalMode(cfg *config.Config) {
 		}
 	}
 
-	// Set up debug loggers
-	mqtt.SetDebugLogger(tuiDebugLogger{})
-	valkey.SetDebugLogger(tuiValkeyDebugLogger{})
-	kafka.SetDebugLogger(tuiKafkaDebugLogger{})
-	logix.SetDebugLogger(tuiLogixDebugLogger{})
+	// Set up debug logging if specified
+	// Supports: --log-debug=all (or true/1) for all protocols
+	//           --log-debug=omron,ads for specific protocols
+	if *logDebug != "" {
+		debugLogger, err := logging.NewDebugLogger("debug.log")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to open debug log: %v\n", err)
+		} else {
+			// Parse filter: "all", "true", "1" = no filter, otherwise use as protocol filter
+			filter := *logDebug
+			if filter == "all" || filter == "true" || filter == "1" {
+				filter = "" // Empty = log all
+			}
+			debugLogger.SetFilter(filter)
+			logging.SetGlobalDebugLogger(debugLogger)
+			defer debugLogger.Close()
+			if filter == "" {
+				tui.DebugLog("Debug logging enabled (all protocols) - writing to debug.log")
+			} else {
+				tui.DebugLog("Debug logging enabled (filter: %s) - writing to debug.log", filter)
+			}
+		}
+	}
 
 	// Set up Valkey on-connect callback
 	valkeyMgr.SetOnConnectCallback(func() {
@@ -249,19 +297,20 @@ func runDaemonMode(cfg *config.Config) {
 	for i := range cfg.Kafka {
 		kc := cfg.Kafka[i]
 		kafkaMgr.AddCluster(&kafka.Config{
-			Name:           kc.Name,
-			Enabled:        kc.Enabled,
-			Brokers:        kc.Brokers,
-			UseTLS:         kc.UseTLS,
-			TLSSkipVerify:  kc.TLSSkipVerify,
-			SASLMechanism:  kafka.SASLMechanism(kc.SASLMechanism),
-			Username:       kc.Username,
-			Password:       kc.Password,
-			RequiredAcks:   kc.RequiredAcks,
-			MaxRetries:     kc.MaxRetries,
-			RetryBackoff:   kc.RetryBackoff,
-			PublishChanges: kc.PublishChanges,
-			Topic:          kc.Topic,
+			Name:             kc.Name,
+			Enabled:          kc.Enabled,
+			Brokers:          kc.Brokers,
+			UseTLS:           kc.UseTLS,
+			TLSSkipVerify:    kc.TLSSkipVerify,
+			SASLMechanism:    kafka.SASLMechanism(kc.SASLMechanism),
+			Username:         kc.Username,
+			Password:         kc.Password,
+			RequiredAcks:     kc.RequiredAcks,
+			MaxRetries:       kc.MaxRetries,
+			RetryBackoff:     kc.RetryBackoff,
+			PublishChanges:   kc.PublishChanges,
+			Topic:            kc.Topic,
+			AutoCreateTopics: kc.AutoCreateTopics == nil || *kc.AutoCreateTopics,
 		})
 	}
 
@@ -318,11 +367,30 @@ func runDaemonMode(cfg *config.Config) {
 		}
 	}
 
-	// Set up debug loggers
-	mqtt.SetDebugLogger(tuiDebugLogger{})
-	valkey.SetDebugLogger(tuiValkeyDebugLogger{})
-	kafka.SetDebugLogger(tuiKafkaDebugLogger{})
-	logix.SetDebugLogger(tuiLogixDebugLogger{})
+	// Set up debug logging if specified
+	// Supports: --log-debug=all (or true/1) for all protocols
+	//           --log-debug=omron,ads for specific protocols
+	var debugLogger *logging.DebugLogger
+	if *logDebug != "" {
+		var err error
+		debugLogger, err = logging.NewDebugLogger("debug.log")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to open debug log: %v\n", err)
+		} else {
+			// Parse filter: "all", "true", "1" = no filter, otherwise use as protocol filter
+			filter := *logDebug
+			if filter == "all" || filter == "true" || filter == "1" {
+				filter = "" // Empty = log all
+			}
+			debugLogger.SetFilter(filter)
+			logging.SetGlobalDebugLogger(debugLogger)
+			if filter == "" {
+				tui.DebugLog("Debug logging enabled (all protocols) - writing to debug.log")
+			} else {
+				tui.DebugLog("Debug logging enabled (filter: %s) - writing to debug.log", filter)
+			}
+		}
+	}
 
 	// Set up Valkey on-connect callback
 	valkeyMgr.SetOnConnectCallback(func() {
@@ -424,6 +492,9 @@ func runDaemonMode(cfg *config.Config) {
 
 	if fileLogger != nil {
 		fileLogger.Close()
+	}
+	if debugLogger != nil {
+		debugLogger.Close()
 	}
 
 	fmt.Println("Daemon stopped")
