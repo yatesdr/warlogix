@@ -431,21 +431,21 @@ func (r *Runner) testValkey(cfg *config.ValkeyConfig) TestResult {
 	// Create a test config with test factory prefix
 	testCfg := *cfg
 	testCfg.Factory = "warlogix-test-stress"
+	testCfg.PublishChanges = false // Disable pub/sub for pure SET throughput
 
-	// Use the Manager for batched publishing (matches real-world usage)
-	mgr := valkey.NewManager()
-	mgr.Add(&testCfg)
-	if err := mgr.Start(testCfg.Name); err != nil {
+	// Create publisher directly for synchronous testing
+	pub := valkey.NewPublisher(&testCfg)
+	if err := pub.Start(); err != nil {
 		result.Error = fmt.Errorf("connect failed: %w", err)
 		fmt.Printf("  Status: FAILED - %v\n\n", result.Error)
 		return result
 	}
-	defer mgr.StopAll()
+	defer pub.Stop()
 
 	fmt.Printf("  Running... ")
 
-	// Run the stress test using batched Manager.Publish
-	result = r.runValkeyManagerStress(mgr, result)
+	// Run the stress test with synchronous publishing (measures real throughput)
+	result = r.runValkeyStress(pub, result)
 
 	if result.Success {
 		fmt.Printf("DONE\n\n")
@@ -456,20 +456,21 @@ func (r *Runner) testValkey(cfg *config.ValkeyConfig) TestResult {
 	return result
 }
 
-// runValkeyManagerStress executes a Valkey stress test using the batched Manager.
-// This better reflects real-world usage where Publish() is called per tag change.
-func (r *Runner) runValkeyManagerStress(mgr *valkey.Manager, result TestResult) TestResult {
-	var sent int64
+// runValkeyStress executes the Valkey stress test with synchronous publishing.
+// This measures actual Redis throughput, not queue rate.
+func (r *Runner) runValkeyStress(pub *valkey.Publisher, result TestResult) TestResult {
+	var sent, errors int64
+	latencies := make([]time.Duration, 0, 100000)
 
-	stopChan := make(chan struct{})
-	time.AfterFunc(r.testCfg.Duration, func() { close(stopChan) })
+	ctx, cancel := context.WithTimeout(context.Background(), r.testCfg.Duration)
+	defer cancel()
 
 	startTime := time.Now()
 
-	// Simulate PLC tag changes (single-threaded like real polling)
+	// Generate test messages with synchronous SET operations
 	for {
 		select {
-		case <-stopChan:
+		case <-ctx.Done():
 			goto done
 		default:
 			plcNum := rand.Intn(r.testCfg.NumPLCs)
@@ -478,21 +479,31 @@ func (r *Runner) runValkeyManagerStress(mgr *valkey.Manager, result TestResult) 
 			tagName := fmt.Sprintf("Tag%d", tagNum)
 			value := rand.Intn(10000)
 
-			// This queues to the batch processor (non-blocking)
-			mgr.Publish(plcName, tagName, "", "", "DINT", value, false)
-			atomic.AddInt64(&sent, 1)
+			msgStart := time.Now()
+			err := pub.Publish(plcName, tagName, "", "", "DINT", value, false)
+			latency := time.Since(msgStart)
+
+			if err != nil {
+				atomic.AddInt64(&errors, 1)
+			} else {
+				atomic.AddInt64(&sent, 1)
+				latencies = append(latencies, latency)
+			}
 		}
 	}
 
 done:
-	// Allow time for batches to flush
-	time.Sleep(100 * time.Millisecond)
-
 	result.Duration = time.Since(startTime)
 	result.MessagesSent = sent
-	result.MessagesAcked = sent // Batched publish is fire-and-forget from caller's perspective
+	result.MessagesAcked = sent
+	result.Errors = errors
 	result.Throughput = float64(sent) / result.Duration.Seconds()
-	result.Success = sent > 0
+	result.Success = errors == 0 && sent > 0
+
+	// Calculate latency percentiles
+	if len(latencies) > 0 {
+		result.AvgLatency, result.P50Latency, result.P95Latency, result.P99Latency, result.MaxLatency = calculateLatencyStats(latencies)
+	}
 
 	return result
 }
