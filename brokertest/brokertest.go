@@ -166,25 +166,100 @@ func (r *Runner) testKafka(cfg *kafka.Config) TestResult {
 	testCfg.PublishChanges = true
 	testCfg.AutoCreateTopics = true
 
-	// Create producer directly for synchronous testing (confirmed delivery)
-	producer := kafka.NewProducer(&testCfg)
-	if err := producer.Connect(); err != nil {
+	// Use the Manager for batched publishing (matches real-world usage)
+	mgr := kafka.NewManager()
+	mgr.AddCluster(&testCfg)
+	if err := mgr.Connect(testCfg.Name); err != nil {
 		result.Error = fmt.Errorf("connect failed: %w", err)
 		fmt.Printf("  Status: FAILED - %v\n\n", result.Error)
 		return result
 	}
-	defer producer.Disconnect()
+	defer mgr.StopAll()
 
 	fmt.Printf("  Running... ")
 
-	// Run the stress test with synchronous publishing (measures confirmed delivery)
-	result = r.runKafkaStress(producer, &testCfg, result)
+	// Run the stress test with batched publishing and confirmed delivery tracking
+	result = r.runKafkaBatchedStress(mgr, &testCfg, result)
 
 	if result.Success {
 		fmt.Printf("DONE\n\n")
 	} else {
 		fmt.Printf("FAILED\n\n")
 	}
+
+	return result
+}
+
+// runKafkaBatchedStress executes a Kafka stress test using batched publishing.
+// This matches real-world usage and tracks confirmed delivery, not just queue rate.
+func (r *Runner) runKafkaBatchedStress(mgr *kafka.Manager, cfg *kafka.Config, result TestResult) TestResult {
+	var queued int64
+
+	// Get initial stats
+	producer := mgr.GetProducer(cfg.Name)
+	var initialSent, initialErrors int64
+	if producer != nil {
+		initialSent, initialErrors, _ = producer.GetStats()
+	}
+
+	stopChan := make(chan struct{})
+	time.AfterFunc(r.testCfg.Duration, func() { close(stopChan) })
+
+	startTime := time.Now()
+
+	// Simulate PLC tag changes using batched publishing (like real-world)
+	for {
+		select {
+		case <-stopChan:
+			goto done
+		default:
+			plcNum := rand.Intn(r.testCfg.NumPLCs)
+			tagNum := rand.Intn(r.testCfg.NumTags)
+			plcName := fmt.Sprintf("TestPLC%d", plcNum)
+			tagName := fmt.Sprintf("Tag%d", tagNum)
+			value := rand.Intn(10000)
+
+			// Queue to batch processor (non-blocking, like real-world)
+			mgr.Publish(plcName, tagName, "", "", "DINT", value, false, true)
+			atomic.AddInt64(&queued, 1)
+		}
+	}
+
+done:
+	// Wait for batches to flush completely (batch interval is 20ms, give extra time)
+	// Poll until no new messages are being sent
+	var lastSent int64
+	for i := 0; i < 50; i++ { // Up to 5 seconds
+		time.Sleep(100 * time.Millisecond)
+		if producer != nil {
+			currentSent, _, _ := producer.GetStats()
+			if currentSent == lastSent {
+				// No new messages sent, batches are flushed
+				break
+			}
+			lastSent = currentSent
+		}
+	}
+
+	result.Duration = time.Since(startTime)
+	result.MessagesSent = queued
+
+	// Get actual confirmed delivery count from producer
+	if producer != nil {
+		finalSent, finalErrors, _ := producer.GetStats()
+		result.MessagesAcked = finalSent - initialSent
+		result.Errors = finalErrors - initialErrors
+	} else {
+		result.MessagesAcked = 0
+		result.Errors = queued
+	}
+
+	// Throughput based on confirmed deliveries
+	result.Throughput = float64(result.MessagesAcked) / result.Duration.Seconds()
+
+	// Success if we delivered most of what we queued (allow some queue drops)
+	deliveryRate := float64(result.MessagesAcked) / float64(queued)
+	result.Success = result.MessagesAcked > 0 && deliveryRate > 0.95
 
 	return result
 }
