@@ -166,76 +166,20 @@ func (r *Runner) testKafka(cfg *kafka.Config) TestResult {
 	testCfg.PublishChanges = true
 	testCfg.AutoCreateTopics = true
 
-	// Use the Manager for batched publishing (matches real-world usage)
-	mgr := kafka.NewManager()
-	mgr.AddCluster(&testCfg)
-	if err := mgr.Connect(testCfg.Name); err != nil {
-		result.Error = fmt.Errorf("connect failed: %w", err)
-		fmt.Printf("  Status: FAILED - %v\n\n", result.Error)
-		return result
-	}
-	defer mgr.StopAll()
+	// Create producer directly for synchronous testing (confirmed delivery)
+	producer := kafka.NewProducer(&testCfg)
+	defer producer.Disconnect()
 
 	fmt.Printf("  Running... ")
 
-	// Run the stress test using batched Manager.Publish
-	result = r.runKafkaManagerStress(mgr, &testCfg, result)
+	// Run the stress test with synchronous publishing (measures confirmed delivery)
+	result = r.runKafkaStress(producer, &testCfg, result)
 
 	if result.Success {
 		fmt.Printf("DONE\n\n")
 	} else {
 		fmt.Printf("FAILED\n\n")
 	}
-
-	return result
-}
-
-// runKafkaManagerStress executes a Kafka stress test using the batched Manager.
-// This better reflects real-world usage where Publish() is called per tag change.
-func (r *Runner) runKafkaManagerStress(mgr *kafka.Manager, cfg *kafka.Config, result TestResult) TestResult {
-	var sent int64
-
-	stopChan := make(chan struct{})
-	time.AfterFunc(r.testCfg.Duration, func() { close(stopChan) })
-
-	startTime := time.Now()
-
-	// Simulate PLC tag changes (single-threaded like real polling)
-	for {
-		select {
-		case <-stopChan:
-			goto done
-		default:
-			plcNum := rand.Intn(r.testCfg.NumPLCs)
-			tagNum := rand.Intn(r.testCfg.NumTags)
-			plcName := fmt.Sprintf("TestPLC%d", plcNum)
-			tagName := fmt.Sprintf("Tag%d", tagNum)
-			value := rand.Intn(10000)
-
-			// This queues to the batch processor (non-blocking)
-			mgr.Publish(plcName, tagName, "", "", "DINT", value, false, true)
-			atomic.AddInt64(&sent, 1)
-		}
-	}
-
-done:
-	// Allow time for batches to flush
-	time.Sleep(100 * time.Millisecond)
-
-	result.Duration = time.Since(startTime)
-	result.MessagesSent = sent
-	result.MessagesAcked = sent // Batched publish is fire-and-forget from caller's perspective
-
-	// Get actual stats from producer
-	producer := mgr.GetProducer(cfg.Name)
-	if producer != nil {
-		actualSent, actualErrors, _ := producer.GetStats()
-		result.MessagesAcked = actualSent
-		result.Errors = actualErrors
-	}
-
-	result.Throughput = float64(sent) / result.Duration.Seconds()
-	result.Success = sent > 0 && result.Errors == 0
 
 	return result
 }
@@ -370,16 +314,18 @@ func (r *Runner) testMQTT(cfg *config.MQTTConfig) TestResult {
 	return result
 }
 
-// runMQTTStress executes the actual MQTT stress test.
+// runMQTTStress executes the MQTT stress test with synchronous publishing.
+// This measures actual confirmed delivery, not queue rate.
 func (r *Runner) runMQTTStress(pub *mqtt.Publisher, result TestResult) TestResult {
 	var sent, errors int64
+	latencies := make([]time.Duration, 0, 100000)
 
 	ctx, cancel := context.WithTimeout(context.Background(), r.testCfg.Duration)
 	defer cancel()
 
 	startTime := time.Now()
 
-	// MQTT publishes are async, so we just count queued messages
+	// Synchronous publish - wait for broker ack on each message
 	for {
 		select {
 		case <-ctx.Done():
@@ -391,9 +337,11 @@ func (r *Runner) runMQTTStress(pub *mqtt.Publisher, result TestResult) TestResul
 			tagName := fmt.Sprintf("Tag%d", tagNum)
 			value := rand.Intn(10000)
 
-			// Force=true to always publish (bypass change detection)
-			if pub.Publish(plcName, tagName, "", "", "DINT", value, false, true) {
+			msgStart := time.Now()
+			if pub.PublishSync(plcName, tagName, "", "", "DINT", value, false) {
+				latency := time.Since(msgStart)
 				atomic.AddInt64(&sent, 1)
+				latencies = append(latencies, latency)
 			} else {
 				atomic.AddInt64(&errors, 1)
 			}
@@ -403,13 +351,15 @@ func (r *Runner) runMQTTStress(pub *mqtt.Publisher, result TestResult) TestResul
 done:
 	result.Duration = time.Since(startTime)
 	result.MessagesSent = sent
-	result.MessagesAcked = sent // MQTT async - we assume sent = queued successfully
+	result.MessagesAcked = sent
 	result.Errors = errors
 	result.Throughput = float64(sent) / result.Duration.Seconds()
 	result.Success = errors == 0 && sent > 0
 
-	// Note: MQTT is async so we can't measure per-message latency easily
-	// The throughput represents queue rate, not delivery rate
+	// Calculate latency percentiles
+	if len(latencies) > 0 {
+		result.AvgLatency, result.P50Latency, result.P95Latency, result.P99Latency, result.MaxLatency = calculateLatencyStats(latencies)
+	}
 
 	return result
 }

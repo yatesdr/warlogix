@@ -389,6 +389,51 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 	return true
 }
 
+// PublishSync publishes a tag value synchronously, waiting for broker acknowledgment.
+// Returns true if the message was confirmed delivered, false otherwise.
+// This is slower than Publish() but provides confirmed delivery for stress testing.
+func (p *Publisher) PublishSync(plcName, tagName, alias, address, typeName string, value interface{}, writable bool) bool {
+	p.mu.RLock()
+	running := p.running
+	client := p.client
+	p.mu.RUnlock()
+
+	if !running || client == nil {
+		return false
+	}
+
+	// For S7 with alias, use alias as "tag" and include address
+	displayTag := tagName
+	if alias != "" {
+		displayTag = alias
+	}
+
+	msg := TagMessage{
+		Topic:     p.config.RootTopic,
+		PLC:       plcName,
+		Tag:       displayTag,
+		Address:   address,
+		Value:     value,
+		Type:      typeName,
+		Writable:  writable,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return false
+	}
+
+	topic := p.BuildTopic(plcName, displayTag)
+
+	// Synchronous publish - wait for broker ack (QoS 1)
+	token := client.Publish(topic, 1, true, payload)
+	if !token.WaitTimeout(5 * time.Second) {
+		return false
+	}
+	return token.Error() == nil
+}
+
 // PublishHealth publishes PLC health status to MQTT.
 func (p *Publisher) PublishHealth(plcName, driver string, online bool, status, errMsg string) bool {
 	p.mu.RLock()
