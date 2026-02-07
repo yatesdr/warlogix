@@ -197,10 +197,20 @@ func (r *Runner) runKafkaBatchedStress(mgr *kafka.Manager, cfg *kafka.Config, re
 
 	// Get initial stats
 	producer := mgr.GetProducer(cfg.Name)
-	var initialSent, initialErrors int64
-	if producer != nil {
-		initialSent, initialErrors, _ = producer.GetStats()
+	if producer == nil {
+		result.Error = fmt.Errorf("producer not found for cluster '%s'", cfg.Name)
+		return result
 	}
+
+	// Verify producer is connected
+	status := producer.GetStatus()
+	if status != kafka.StatusConnected {
+		result.Error = fmt.Errorf("producer not connected (status: %s)", status.String())
+		return result
+	}
+
+	var initialSent, initialErrors int64
+	initialSent, initialErrors, _ = producer.GetStats()
 
 	stopChan := make(chan struct{})
 	time.AfterFunc(r.testCfg.Duration, func() { close(stopChan) })
@@ -257,9 +267,14 @@ done:
 	// Throughput based on confirmed deliveries
 	result.Throughput = float64(result.MessagesAcked) / result.Duration.Seconds()
 
-	// Success if we delivered most of what we queued (allow some queue drops)
-	deliveryRate := float64(result.MessagesAcked) / float64(queued)
-	result.Success = result.MessagesAcked > 0 && deliveryRate > 0.95
+	// Success if we delivered messages with low error rate
+	// (queue rate may exceed delivery rate, that's expected)
+	if result.MessagesAcked > 0 {
+		errorRate := float64(result.Errors) / float64(result.MessagesAcked+result.Errors)
+		result.Success = errorRate < 0.01 // Less than 1% errors
+	} else {
+		result.Success = false
+	}
 
 	return result
 }
