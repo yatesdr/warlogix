@@ -10,8 +10,9 @@ import (
 
 	"warlogix/ads"
 	"warlogix/config"
-	"warlogix/fins"
+	"warlogix/driver"
 	"warlogix/logix"
+	"warlogix/omron"
 	"warlogix/plcman"
 	"warlogix/s7"
 )
@@ -246,7 +247,7 @@ func (t *BrowserTab) getTypeName(typeCode uint16) string {
 		case config.FamilyBeckhoff:
 			return ads.TypeName(typeCode)
 		case config.FamilyOmron:
-			return fins.TypeName(typeCode)
+			return omron.TypeName(typeCode)
 		}
 	}
 	return logix.TypeName(typeCode)
@@ -263,7 +264,7 @@ func (t *BrowserTab) onNodeSelected(node *tview.TreeNode) {
 	}
 
 	// It's a tag node, show details
-	tagInfo, ok := ref.(*logix.TagInfo)
+	tagInfo, ok := ref.(*driver.TagInfo)
 	if !ok {
 		return
 	}
@@ -285,7 +286,7 @@ func (t *BrowserTab) onNodeSelected(node *tview.TreeNode) {
 
 // lazyExpandUDT expands a UDT node by fetching its template and adding member children.
 // This is done lazily when the user first selects/expands the node.
-func (t *BrowserTab) lazyExpandUDT(node *tview.TreeNode, tagInfo *logix.TagInfo) {
+func (t *BrowserTab) lazyExpandUDT(node *tview.TreeNode, tagInfo *driver.TagInfo) {
 	plc := t.app.manager.GetPLC(t.selectedPLC)
 	if plc == nil {
 		DebugLog("lazyExpandUDT: no PLC for %s", tagInfo.Name)
@@ -339,10 +340,14 @@ func (t *BrowserTab) lazyExpandUDT(node *tview.TreeNode, tagInfo *logix.TagInfo)
 		memberPath := basePath + "." + member.Name
 
 		// Create synthetic TagInfo for member, including array dimensions from template
-		memberInfo := &logix.TagInfo{
+		dims := make([]uint32, len(member.ArrayDims))
+		for i, d := range member.ArrayDims {
+			dims[i] = uint32(d)
+		}
+		memberInfo := &driver.TagInfo{
 			Name:       memberPath,
 			TypeCode:   member.Type,
-			Dimensions: member.ArrayDims, // Pass array dimensions from template
+			Dimensions: dims,
 		}
 
 		enabled := t.enabledTags[memberPath]
@@ -366,7 +371,7 @@ func (t *BrowserTab) toggleNodeSelection(node *tview.TreeNode) {
 		return
 	}
 
-	tagInfo, ok := ref.(*logix.TagInfo)
+	tagInfo, ok := ref.(*driver.TagInfo)
 	if !ok {
 		return
 	}
@@ -487,7 +492,7 @@ func (t *BrowserTab) toggleNodeWritable(node *tview.TreeNode) {
 		return
 	}
 
-	tagInfo, ok := ref.(*logix.TagInfo)
+	tagInfo, ok := ref.(*driver.TagInfo)
 	if !ok {
 		return
 	}
@@ -517,7 +522,7 @@ func (t *BrowserTab) toggleNodeIgnore(node *tview.TreeNode) {
 		return
 	}
 
-	tagInfo, ok := ref.(*logix.TagInfo)
+	tagInfo, ok := ref.(*driver.TagInfo)
 	if !ok {
 		return
 	}
@@ -642,7 +647,7 @@ func (t *BrowserTab) isMemberIgnored(tagPath string) bool {
 	return false
 }
 
-func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, enabled, writable bool) {
+func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *driver.TagInfo, enabled, writable bool) {
 	checkbox := CheckboxUnchecked
 	if enabled {
 		checkbox = CheckboxChecked
@@ -674,11 +679,11 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *logix.TagInfo, en
 		shortName = tag.Name[idx+1:]
 	}
 
-	// For address-based PLCs (S7, Omron), show alias as primary name if set, with address in gray
+	// For address-based PLCs (S7, Omron FINS), show alias as primary name if set, with address in gray
 	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg != nil {
 		family := cfg.GetFamily()
-		if family == config.FamilyS7 || family == config.FamilyOmron {
+		if family == config.FamilyS7 || (family == config.FamilyOmron && cfg.IsOmronFINS()) {
 			// Look up the alias for this tag
 			for _, sel := range cfg.Tags {
 				if sel.Name == tag.Name && sel.Alias != "" {
@@ -737,7 +742,7 @@ func (t *BrowserTab) updateConfigTag(tagName string, enabled, writable bool) {
 	t.app.SaveConfig()
 }
 
-func (t *BrowserTab) showTagDetails(tag *logix.TagInfo) {
+func (t *BrowserTab) showTagDetails(tag *driver.TagInfo) {
 	th := CurrentTheme
 	var sb strings.Builder
 
@@ -825,7 +830,7 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 		return
 	}
 
-	tagInfo, ok := ref.(*logix.TagInfo)
+	tagInfo, ok := ref.(*driver.TagInfo)
 	if !ok {
 		return
 	}
@@ -1210,7 +1215,7 @@ func (t *BrowserTab) loadTags() {
 
 	plc := t.app.manager.GetPLC(t.selectedPLC)
 
-	var tags []logix.TagInfo
+	var tags []driver.TagInfo
 	var programs []string
 	var values map[string]*plcman.TagValue
 
@@ -1229,9 +1234,10 @@ func (t *BrowserTab) loadTags() {
 			if !ok {
 				typeCode = logix.TypeDINT
 			}
-			tags = append(tags, logix.TagInfo{
+			tags = append(tags, driver.TagInfo{
 				Name:     sel.Name,
 				TypeCode: typeCode,
+				TypeName: logix.TypeName(typeCode),
 			})
 		}
 	}
@@ -1303,8 +1309,8 @@ func (t *BrowserTab) loadTags() {
 	}
 
 	// Discovery-based PLCs: organize tags by program
-	controllerTags := []logix.TagInfo{}
-	programTags := make(map[string][]logix.TagInfo)
+	controllerTags := []driver.TagInfo{}
+	programTags := make(map[string][]driver.TagInfo)
 
 	for _, tag := range tags {
 		if strings.HasPrefix(tag.Name, "Program:") {
@@ -1391,11 +1397,11 @@ func (t *BrowserTab) loadTags() {
 	t.updateStatus()
 }
 
-func (t *BrowserTab) createTagNode(tag *logix.TagInfo, enabled, writable bool) *tview.TreeNode {
+func (t *BrowserTab) createTagNode(tag *driver.TagInfo, enabled, writable bool) *tview.TreeNode {
 	return t.createTagNodeWithError(tag, enabled, writable, false)
 }
 
-func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writable, hasError bool) *tview.TreeNode {
+func (t *BrowserTab) createTagNodeWithError(tag *driver.TagInfo, enabled, writable, hasError bool) *tview.TreeNode {
 	th := CurrentTheme
 	checkbox := CheckboxUnchecked
 	if enabled {
@@ -1432,11 +1438,11 @@ func (t *BrowserTab) createTagNodeWithError(tag *logix.TagInfo, enabled, writabl
 		shortName = tag.Name[idx+1:]
 	}
 
-	// For address-based PLCs (S7, Omron), show alias as primary name if set, with address in gray
+	// For address-based PLCs (S7, Omron FINS), show alias as primary name if set, with address in gray
 	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg != nil {
 		family := cfg.GetFamily()
-		if family == config.FamilyS7 || family == config.FamilyOmron {
+		if family == config.FamilyS7 || (family == config.FamilyOmron && cfg.IsOmronFINS()) {
 			// Look up the alias for this tag
 			for _, sel := range cfg.Tags {
 				if sel.Name == tag.Name && sel.Alias != "" {
@@ -1516,9 +1522,9 @@ func (t *BrowserTab) showAddTagDialog() {
 		family = cfg.GetFamily()
 	}
 
-	// Address-based PLCs (S7, Omron) show Alias first, then Address
-	// Tag-based PLCs (Logix) show Tag Name first, then Alias
-	isAddressBased := family == config.FamilyS7 || family == config.FamilyOmron
+	// Address-based PLCs (S7, Omron FINS) show Alias first, then Address
+	// Tag-based PLCs (Logix, Omron EIP) show Tag Name first, then Alias
+	isAddressBased := family == config.FamilyS7 || (family == config.FamilyOmron && cfg.IsOmronFINS())
 
 	var typeOptions []string
 	var addressLabel string
@@ -1528,8 +1534,12 @@ func (t *BrowserTab) showAddTagDialog() {
 		typeOptions = s7.SupportedTypeNames()
 		addressLabel = "DB.Offset:"
 	case config.FamilyOmron:
-		typeOptions = fins.SupportedTypeNames()
-		addressLabel = "Address:"
+		typeOptions = omron.SupportedTypeNames()
+		if cfg.IsOmronFINS() {
+			addressLabel = "Address:"
+		} else {
+			addressLabel = "Tag Name:"
+		}
 	default:
 		typeOptions = logix.SupportedTypeNames()
 		addressLabel = "Tag Name:"
@@ -1574,9 +1584,11 @@ func (t *BrowserTab) showAddTagDialog() {
 				return
 			}
 		case config.FamilyOmron:
-			if err := fins.ValidateAddress(tagName); err != nil {
-				t.app.showErrorWithFocus("Invalid Address", err.Error()+"\nExpected format: DM100, CIO50, HR10, etc.", form)
-				return
+			if cfg.IsOmronFINS() {
+				if err := omron.ValidateAddress(tagName); err != nil {
+					t.app.showErrorWithFocus("Invalid Address", err.Error()+"\nExpected format: DM100, CIO50, HR10, etc.", form)
+					return
+				}
 			}
 		}
 
@@ -1628,7 +1640,7 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 		return
 	}
 
-	tagInfo, ok := ref.(*logix.TagInfo)
+	tagInfo, ok := ref.(*driver.TagInfo)
 	if !ok {
 		return
 	}
@@ -1659,7 +1671,7 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 
 	// Determine PLC family and use appropriate labels/types
 	family := cfg.GetFamily()
-	isAddressBased := family == config.FamilyS7 || family == config.FamilyOmron
+	isAddressBased := family == config.FamilyS7 || (family == config.FamilyOmron && cfg.IsOmronFINS())
 
 	var typeOptions []string
 	var addressLabel string
@@ -1669,8 +1681,12 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 		typeOptions = s7.SupportedTypeNames()
 		addressLabel = "DB.Offset:"
 	case config.FamilyOmron:
-		typeOptions = fins.SupportedTypeNames()
-		addressLabel = "Address:"
+		typeOptions = omron.SupportedTypeNames()
+		if cfg.IsOmronFINS() {
+			addressLabel = "Address:"
+		} else {
+			addressLabel = "Tag Name:"
+		}
 	default:
 		typeOptions = logix.SupportedTypeNames()
 		addressLabel = "Tag Name:"
@@ -1725,9 +1741,11 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 				return
 			}
 		case config.FamilyOmron:
-			if err := fins.ValidateAddress(tagName); err != nil {
-				t.app.showErrorWithFocus("Invalid Address", err.Error()+"\nExpected format: DM100, CIO50, HR10, etc.", form)
-				return
+			if cfg.IsOmronFINS() {
+				if err := omron.ValidateAddress(tagName); err != nil {
+					t.app.showErrorWithFocus("Invalid Address", err.Error()+"\nExpected format: DM100, CIO50, HR10, etc.", form)
+					return
+				}
 			}
 		}
 
@@ -1791,10 +1809,14 @@ func (t *BrowserTab) expandUDTMembers(parentNode *tview.TreeNode, basePath strin
 		memberMatches := t.matchesFilter(memberPath)
 
 		// Create a synthetic TagInfo for this member, including array dimensions
-		memberInfo := &logix.TagInfo{
+		dims := make([]uint32, len(member.ArrayDims))
+		for i, d := range member.ArrayDims {
+			dims[i] = uint32(d)
+		}
+		memberInfo := &driver.TagInfo{
 			Name:       memberPath,
 			TypeCode:   member.Type,
-			Dimensions: member.ArrayDims, // Pass array dimensions from template
+			Dimensions: dims,
 		}
 
 		enabled := t.enabledTags[memberPath]
@@ -1832,7 +1854,7 @@ func (t *BrowserTab) deleteManualTag(node *tview.TreeNode) {
 		return
 	}
 
-	tagInfo, ok := ref.(*logix.TagInfo)
+	tagInfo, ok := ref.(*driver.TagInfo)
 	if !ok {
 		return
 	}

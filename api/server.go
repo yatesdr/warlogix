@@ -240,8 +240,8 @@ func (s *Server) handleListPLCs(w http.ResponseWriter) {
 			Status:  plc.GetStatus().String(),
 		}
 
-		if identity := plc.GetIdentity(); identity != nil {
-			resp.ProductName = identity.ProductName
+		if info := plc.GetDeviceInfo(); info != nil {
+			resp.ProductName = info.Model
 		}
 		if err := plc.GetError(); err != nil {
 			resp.Error = err.Error()
@@ -261,8 +261,8 @@ func (s *Server) handlePLCDetails(w http.ResponseWriter, plc *plcman.ManagedPLC)
 		Status:  plc.GetStatus().String(),
 	}
 
-	if identity := plc.GetIdentity(); identity != nil {
-		resp.ProductName = identity.ProductName
+	if info := plc.GetDeviceInfo(); info != nil {
+		resp.ProductName = info.Model
 	}
 	if err := plc.GetError(); err != nil {
 		resp.Error = err.Error()

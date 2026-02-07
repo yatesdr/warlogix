@@ -1,8 +1,11 @@
 package plcman
 
 import (
+	"warlogix/ads"
 	"warlogix/config"
+	"warlogix/driver"
 	"warlogix/logix"
+	"warlogix/omron"
 	"warlogix/s7"
 )
 
@@ -35,6 +38,10 @@ func (v *TagValue) TypeName() string {
 	switch v.Family {
 	case "s7":
 		return s7.TypeName(v.DataType)
+	case "beckhoff":
+		return ads.TypeName(v.DataType)
+	case "omron":
+		return omron.TypeName(v.DataType)
 	default:
 		return logix.TypeName(v.DataType)
 	}
@@ -163,5 +170,70 @@ func (v *TagValue) ToLogixTagValue() *logix.TagValue {
 		Bytes:    v.Bytes,
 		Count:    v.Count,
 		Error:    v.Error,
+	}
+}
+
+// FromDriverTagValue creates a unified TagValue from a driver.TagValue.
+// This is used when reading via the driver package's unified interface.
+func FromDriverTagValue(dv *driver.TagValue) *TagValue {
+	if dv == nil {
+		return nil
+	}
+	return &TagValue{
+		Name:        dv.Name,
+		DataType:    dv.DataType,
+		Family:      dv.Family,
+		Value:       dv.Value,
+		StableValue: dv.StableValue,
+		Bytes:       dv.Bytes,
+		Count:       dv.Count,
+		Error:       dv.Error,
+	}
+}
+
+// ToDriverTagValue converts the unified TagValue to a driver.TagValue.
+func (v *TagValue) ToDriverTagValue() *driver.TagValue {
+	if v == nil {
+		return nil
+	}
+	return &driver.TagValue{
+		Name:        v.Name,
+		DataType:    v.DataType,
+		Family:      v.Family,
+		Value:       v.Value,
+		StableValue: v.StableValue,
+		Bytes:       v.Bytes,
+		Count:       v.Count,
+		Error:       v.Error,
+	}
+}
+
+// LogixTagInfoToDriver converts a logix.TagInfo to a driver.TagInfo.
+func LogixTagInfoToDriver(t logix.TagInfo) driver.TagInfo {
+	dims := make([]uint32, len(t.Dimensions))
+	for i, d := range t.Dimensions {
+		dims[i] = uint32(d)
+	}
+	return driver.TagInfo{
+		Name:       t.Name,
+		TypeCode:   t.TypeCode,
+		Instance:   t.Instance,
+		Dimensions: dims,
+		TypeName:   t.TypeName(),
+		Writable:   t.IsReadable(),
+	}
+}
+
+// DriverTagInfoToLogix converts a driver.TagInfo to a logix.TagInfo.
+func DriverTagInfoToLogix(t driver.TagInfo) logix.TagInfo {
+	dims := make([]int, len(t.Dimensions))
+	for i, d := range t.Dimensions {
+		dims[i] = int(d)
+	}
+	return logix.TagInfo{
+		Name:       t.Name,
+		TypeCode:   t.TypeCode,
+		Instance:   t.Instance,
+		Dimensions: dims,
 	}
 }

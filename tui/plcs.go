@@ -222,8 +222,8 @@ func (t *PLCsTab) Refresh() {
 
 		// Product name
 		productName := ""
-		if identity := plc.GetIdentity(); identity != nil {
-			productName = identity.ProductName
+		if info := plc.GetDeviceInfo(); info != nil {
+			productName = info.Model
 		}
 
 		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
@@ -325,12 +325,14 @@ type plcFormState struct {
 	slot        string
 	amsNetId    string
 	amsPort     string
+	protocol    int    // 0=fins (default), 1=eip - used for Omron PLCs
 	pollRateMs  string // Poll rate in milliseconds (250-10000, empty = use global)
 	autoConnect bool
 	healthCheck bool // Publish health status
 }
 
 var familyOptions = []string{"logix", "micro800", "s7", "beckhoff", "omron"}
+var omronProtocolOptions = []string{"fins", "eip"}
 
 func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 	state := &plcFormState{
@@ -383,7 +385,7 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 
 	// Family-specific fields
 	switch family {
-	case config.FamilyLogix, config.FamilyMicro800, config.FamilyOmron:
+	case config.FamilyLogix, config.FamilyMicro800:
 		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
 			_, err := strconv.Atoi(text)
 			return err == nil || text == ""
@@ -399,6 +401,15 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			_, err := strconv.Atoi(text)
 			return err == nil || text == ""
 		}, nil)
+	case config.FamilyOmron:
+		form.AddDropDown("Protocol:", omronProtocolOptions, state.protocol, nil)
+		// Slot field only needed for FINS (EIP doesn't use slot)
+		if state.protocol == 0 {
+			form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+				_, err := strconv.Atoi(text)
+				return err == nil || text == ""
+			}, nil)
+		}
 	}
 
 	// Poll rate field (common to all families)
@@ -440,11 +451,16 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 		}
 
 		healthCheck := state.healthCheck
+		protocol := ""
+		if family == config.FamilyOmron {
+			protocol = omronProtocolOptions[state.protocol]
+		}
 		cfg := config.PLCConfig{
 			Name:               state.name,
 			Address:            state.address,
 			Slot:               byte(slot),
 			Family:             family,
+			Protocol:           protocol,
 			Enabled:            state.autoConnect,
 			HealthCheckEnabled: &healthCheck,
 			PollRate:           pollRate,
@@ -498,6 +514,9 @@ func (t *PLCsTab) saveAddFormState(form *tview.Form, state *plcFormState, family
 	if item := form.GetFormItemByLabel("AMS Port:"); item != nil {
 		state.amsPort = item.(*tview.InputField).GetText()
 	}
+	if item := form.GetFormItemByLabel("Protocol:"); item != nil {
+		state.protocol, _ = item.(*tview.DropDown).GetCurrentOption()
+	}
 	if item := form.GetFormItemByLabel("Poll Rate (ms):"); item != nil {
 		state.pollRateMs = item.(*tview.InputField).GetText()
 	}
@@ -537,6 +556,12 @@ func (t *PLCsTab) showEditDialog() {
 		}
 	}
 
+	// Determine protocol index (0=fins, 1=eip)
+	protocolIndex := 0
+	if cfg.IsOmronEIP() {
+		protocolIndex = 1
+	}
+
 	// Set default AMS port if not configured
 	amsPort := "851"
 	if cfg.AmsPort > 0 {
@@ -557,6 +582,7 @@ func (t *PLCsTab) showEditDialog() {
 			slot:        strconv.Itoa(int(cfg.Slot)),
 			amsNetId:    cfg.AmsNetId,
 			amsPort:     amsPort,
+			protocol:    protocolIndex,
 			pollRateMs:  pollRateMs,
 			autoConnect: cfg.Enabled,
 			healthCheck: cfg.IsHealthCheckEnabled(),
@@ -601,7 +627,7 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 
 	// Family-specific fields
 	switch family {
-	case config.FamilyLogix, config.FamilyMicro800, config.FamilyOmron:
+	case config.FamilyLogix, config.FamilyMicro800:
 		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
 			_, err := strconv.Atoi(text)
 			return err == nil || text == ""
@@ -617,6 +643,15 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 			_, err := strconv.Atoi(text)
 			return err == nil || text == ""
 		}, nil)
+	case config.FamilyOmron:
+		form.AddDropDown("Protocol:", omronProtocolOptions, state.protocol, nil)
+		// Slot field only needed for FINS (EIP doesn't use slot)
+		if state.protocol == 0 {
+			form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+				_, err := strconv.Atoi(text)
+				return err == nil || text == ""
+			}, nil)
+		}
 	}
 
 	// Poll rate field (common to all families)
@@ -658,11 +693,16 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		}
 
 		healthCheck := state.healthCheck
+		protocol := ""
+		if family == config.FamilyOmron {
+			protocol = omronProtocolOptions[state.protocol]
+		}
 		updated := config.PLCConfig{
 			Name:               state.name,
 			Address:            state.address,
 			Slot:               byte(slot),
 			Family:             family,
+			Protocol:           protocol,
 			Enabled:            state.autoConnect,
 			HealthCheckEnabled: &healthCheck,
 			PollRate:           pollRate,
@@ -825,7 +865,7 @@ func (t *PLCsTab) showInfoDialog() {
 	if plc == nil {
 		return
 	}
-	identity := plc.GetIdentity()
+	deviceInfo := plc.GetDeviceInfo()
 
 	// Build info text (themed)
 	th := CurrentTheme
@@ -839,15 +879,19 @@ func (t *PLCsTab) showInfoDialog() {
 		info += fmt.Sprintf("%sError:%s %s\n", th.TagAccent, th.TagError, err.Error())
 	}
 
-	if identity != nil {
-		info += fmt.Sprintf("\n%s── Device Identity ──%s\n", th.TagPrimary, th.TagReset)
-		info += th.Label("Product", identity.ProductName) + "\n"
-		info += th.Label("Vendor", identity.VendorName()) + "\n"
-		info += th.Label("Type", identity.DeviceTypeName()) + "\n"
-		info += th.Label("Revision", identity.Revision) + "\n"
-		info += fmt.Sprintf("%sSerial:%s %d\n", th.TagAccent, th.TagReset, identity.Serial)
+	if deviceInfo != nil {
+		info += fmt.Sprintf("\n%s── Device Info ──%s\n", th.TagPrimary, th.TagReset)
+		info += th.Label("Model", deviceInfo.Model) + "\n"
+		info += th.Label("Vendor", deviceInfo.Vendor) + "\n"
+		info += th.Label("Version", deviceInfo.Version) + "\n"
+		if deviceInfo.SerialNumber != "" {
+			info += th.Label("Serial", deviceInfo.SerialNumber) + "\n"
+		}
+		if deviceInfo.Description != "" {
+			info += th.Label("Type", deviceInfo.Description) + "\n"
+		}
 	} else {
-		info += "\n" + th.Dim("Connect to view device identity")
+		info += "\n" + th.Dim("Connect to view device info")
 	}
 
 	// Show tag count if connected

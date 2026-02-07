@@ -11,8 +11,9 @@ import (
 
 	"warlogix/ads"
 	"warlogix/config"
-	"warlogix/fins"
+	"warlogix/driver"
 	"warlogix/logix"
+	"warlogix/omron"
 	"warlogix/s7"
 )
 
@@ -55,22 +56,16 @@ const MaxConnectRetries = 5
 
 // ManagedPLC represents a PLC under management.
 type ManagedPLC struct {
-	Config       *config.PLCConfig
-	Client       *logix.Client    // For Logix/Micro800 PLCs
-	S7Client     *s7.Client       // For Siemens S7 PLCs
-	AdsClient    *ads.Client      // For Beckhoff TwinCAT PLCs
-	FinsClient   *fins.Client     // For Omron FINS PLCs
-	Identity     *logix.DeviceInfo
-	S7Info       *s7.CPUInfo
-	AdsInfo      *ads.DeviceInfo  // Beckhoff device info
-	FinsInfo     *fins.DeviceInfo // Omron device info
-	Programs     []string
-	Tags         []logix.TagInfo  // Discovered tags (for discovery-capable PLCs)
-	ManualTags   []logix.TagInfo  // Tags from config (for non-discovery PLCs)
-	Values       map[string]*TagValue // Unified tag values (S7, Logix, ADS, FINS)
-	Status       ConnectionStatus
-	LastError    error
-	LastPoll     time.Time
+	Config     *config.PLCConfig
+	Driver     driver.Driver        // Unified driver interface
+	DeviceInfo *driver.DeviceInfo   // Unified device info
+	Programs   []string             // Program names (for Logix)
+	Tags       []driver.TagInfo     // Discovered tags (for discovery-capable PLCs)
+	ManualTags []driver.TagInfo     // Tags from config (for non-discovery PLCs)
+	Values     map[string]*TagValue // Tag values from last poll
+	Status     ConnectionStatus
+	LastError  error
+	LastPoll   time.Time
 	ConnRetries  int  // Number of consecutive failed connection attempts
 	RetryLimited bool // True if retry limit reached, stops auto-reconnect
 	mu           sync.RWMutex
@@ -185,7 +180,7 @@ func (m *ManagedPLC) GetValues() map[string]*TagValue {
 // GetTags returns the appropriate tags based on PLC family.
 // For discovery-capable PLCs (logix), returns discovered tags.
 // For non-discovery PLCs (micro800, s7, omron), returns manual tags from config.
-func (m *ManagedPLC) GetTags() []logix.TagInfo {
+func (m *ManagedPLC) GetTags() []driver.TagInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if m.Config.GetFamily().SupportsDiscovery() {
@@ -208,6 +203,7 @@ func (m *ManagedPLC) BuildManualTags() {
 
 	for _, sel := range m.Config.Tags {
 		var typeCode uint16
+		var typeName string
 		var ok bool
 
 		// Use appropriate type lookup based on family
@@ -217,27 +213,32 @@ func (m *ManagedPLC) BuildManualTags() {
 			if !ok {
 				typeCode = s7.TypeDInt
 			}
+			typeName = s7.TypeName(typeCode)
 		case config.FamilyBeckhoff:
 			typeCode, ok = ads.TypeCodeFromName(sel.DataType)
 			if !ok {
 				typeCode = ads.TypeInt32
 			}
+			typeName = ads.TypeName(typeCode)
 		case config.FamilyOmron:
-			typeCode, ok = fins.TypeCodeFromName(sel.DataType)
+			typeCode, ok = omron.TypeCodeFromName(sel.DataType)
 			if !ok {
-				typeCode = fins.TypeWord // Default to WORD for FINS
+				typeCode = omron.TypeWord // Default to WORD
 			}
+			typeName = omron.TypeName(typeCode)
 		default:
 			typeCode, ok = logix.TypeCodeFromName(sel.DataType)
 			if !ok {
 				typeCode = logix.TypeDINT
 			}
+			typeName = logix.TypeName(typeCode)
 		}
 
-		tagInfo := logix.TagInfo{
+		tagInfo := driver.TagInfo{
 			Name:     sel.Name,
 			TypeCode: typeCode,
-			Instance: 0, // Not applicable for manual tags
+			TypeName: typeName,
+			Writable: sel.Writable,
 		}
 		m.ManualTags = append(m.ManualTags, tagInfo)
 	}
@@ -250,36 +251,40 @@ func (m *ManagedPLC) GetPrograms() []string {
 	return m.Programs
 }
 
-// GetIdentity returns the device identity info.
-func (m *ManagedPLC) GetIdentity() *logix.DeviceInfo {
+// GetDeviceInfo returns the device information.
+func (m *ManagedPLC) GetDeviceInfo() *driver.DeviceInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.Identity
+	return m.DeviceInfo
+}
+
+// GetDriver returns the underlying driver.
+func (m *ManagedPLC) GetDriver() driver.Driver {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.Driver
 }
 
 // GetLogixClient returns the underlying Logix client, or nil if not available.
-// Used for accessing client-specific features like GetElementSize.
+// Used for accessing client-specific features like GetElementSize and UDT templates.
 func (m *ManagedPLC) GetLogixClient() *logix.Client {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.Client
+	if m.Driver == nil {
+		return nil
+	}
+	if adapter, ok := m.Driver.(*driver.LogixAdapter); ok {
+		return adapter.Client()
+	}
+	return nil
 }
 
 // GetConnectionMode returns a human-readable string describing the connection mode.
 func (m *ManagedPLC) GetConnectionMode() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.FinsClient != nil {
-		return m.FinsClient.ConnectionMode()
-	}
-	if m.AdsClient != nil {
-		return m.AdsClient.ConnectionMode()
-	}
-	if m.S7Client != nil {
-		return m.S7Client.ConnectionMode()
-	}
-	if m.Client != nil {
-		return m.Client.ConnectionMode()
+	if m.Driver != nil {
+		return m.Driver.ConnectionMode()
 	}
 	return "Not connected"
 }
@@ -371,10 +376,7 @@ func (w *PLCWorker) poll() {
 	plc := w.plc
 
 	plc.mu.RLock()
-	client := plc.Client
-	s7Client := plc.S7Client
-	adsClient := plc.AdsClient
-	finsClient := plc.FinsClient
+	drv := plc.Driver
 	status := plc.Status
 	cfg := plc.Config
 	plcName := cfg.Name
@@ -406,18 +408,8 @@ func (w *PLCWorker) poll() {
 	}
 	plc.mu.RUnlock()
 
-	// Check if we have a valid connection based on family
-	var hasConnection bool
-	switch family {
-	case config.FamilyS7:
-		hasConnection = s7Client != nil && s7Client.IsConnected()
-	case config.FamilyBeckhoff:
-		hasConnection = adsClient != nil && adsClient.IsConnected()
-	case config.FamilyOmron:
-		hasConnection = finsClient != nil && finsClient.IsConnected()
-	default:
-		hasConnection = client != nil
-	}
+	// Check if we have a valid connection via Driver
+	hasConnection := drv != nil && drv.IsConnected()
 
 	if status != StatusConnected || !hasConnection {
 		// Check if auto-connect is enabled and we should attempt reconnection
@@ -427,49 +419,12 @@ func (w *PLCWorker) poll() {
 
 		needsReconnect := autoConnect && (status == StatusDisconnected || status == StatusError)
 
-		// If S7 client exists but is not connected, trigger reconnection
-		if family == config.FamilyS7 && (needsReconnect || (s7Client != nil && !s7Client.IsConnected())) {
+		if needsReconnect || (drv != nil && !drv.IsConnected()) {
 			plc.mu.Lock()
 			plc.Status = StatusDisconnected
-			if plc.S7Client != nil {
-				plc.S7Client.Close()
-				plc.S7Client = nil
-			}
-			plc.mu.Unlock()
-			w.manager.markStatusDirty()
-			go w.manager.scheduleReconnect(plcName)
-		}
-		// If ADS client exists but is not connected, trigger reconnection
-		if family == config.FamilyBeckhoff && (needsReconnect || (adsClient != nil && !adsClient.IsConnected())) {
-			plc.mu.Lock()
-			plc.Status = StatusDisconnected
-			if plc.AdsClient != nil {
-				plc.AdsClient.Close()
-				plc.AdsClient = nil
-			}
-			plc.mu.Unlock()
-			w.manager.markStatusDirty()
-			go w.manager.scheduleReconnect(plcName)
-		}
-		// If FINS client exists but is not connected, trigger reconnection
-		if family == config.FamilyOmron && (needsReconnect || (finsClient != nil && !finsClient.IsConnected())) {
-			plc.mu.Lock()
-			plc.Status = StatusDisconnected
-			if plc.FinsClient != nil {
-				plc.FinsClient.Close()
-				plc.FinsClient = nil
-			}
-			plc.mu.Unlock()
-			w.manager.markStatusDirty()
-			go w.manager.scheduleReconnect(plcName)
-		}
-		// If Logix/Micro800 client is not connected, trigger reconnection
-		if (family == config.FamilyLogix || family == config.FamilyMicro800) && needsReconnect {
-			plc.mu.Lock()
-			plc.Status = StatusDisconnected
-			if plc.Client != nil {
-				plc.Client.Close()
-				plc.Client = nil
+			if plc.Driver != nil {
+				plc.Driver.Close()
+				plc.Driver = nil
 			}
 			plc.mu.Unlock()
 			w.manager.markStatusDirty()
@@ -484,17 +439,10 @@ func (w *PLCWorker) poll() {
 	}
 
 	if len(tagsToRead) == 0 {
-		// No tags to poll, but we need to keep the CIP connection alive
-		// by sending periodic traffic. The CIP ForwardOpen connection
-		// times out after ~30 seconds of inactivity (RPI × 2^multiplier).
-		if family == config.FamilyLogix {
-			if client != nil {
-				// Send CIP NOP to keep ForwardOpen connection alive
-				_ = client.Keepalive()
-			}
+		// No tags to poll, but send keepalive to maintain connection
+		if drv != nil {
+			_ = drv.Keepalive()
 		}
-		// Other families (S7, Beckhoff, Omron) have their own keepalive mechanisms
-
 		w.statsMu.Lock()
 		w.tagsPolled = 0
 		w.changesFound = 0
@@ -503,53 +451,26 @@ func (w *PLCWorker) poll() {
 		return
 	}
 
-	// Read selected tags based on family type
-	var values []*TagValue
-	var err error
+	// Build read requests with type hints
+	requests := make([]driver.TagRequest, len(tagsToRead))
+	for i, name := range tagsToRead {
+		requests[i] = driver.TagRequest{
+			Name:     name,
+			TypeHint: typeMap[name],
+		}
+	}
 
-	switch family {
-	case config.FamilyS7:
-		values, err = w.pollS7(s7Client, tagsToRead, typeMap)
-		// Apply ignore lists for S7 values
-		if err == nil {
-			for _, v := range values {
-				if ignoreList, ok := ignoreMap[v.Name]; ok {
-					v.SetIgnoreList(ignoreList)
-				}
-			}
-		}
-	case config.FamilyBeckhoff:
-		values, err = w.pollAds(adsClient, tagsToRead)
-		// Apply ignore lists for Beckhoff values
-		if err == nil {
-			for _, v := range values {
-				if ignoreList, ok := ignoreMap[v.Name]; ok {
-					v.SetIgnoreList(ignoreList)
-				}
-			}
-		}
-	case config.FamilyOmron:
-		values, err = w.pollFins(finsClient, tagsToRead, typeMap)
-		// Apply ignore lists for Omron values
-		if err == nil {
-			for _, v := range values {
-				if ignoreList, ok := ignoreMap[v.Name]; ok {
-					v.SetIgnoreList(ignoreList)
-				}
-			}
-		}
-	default:
-		var logixValues []*logix.TagValue
-		logixValues, err = client.Read(tagsToRead...)
-		if err == nil {
-			values = make([]*TagValue, len(logixValues))
-			for i, lv := range logixValues {
-				// Use decoded version to get UDT member names in output
-				values[i] = FromLogixTagValueDecoded(lv, client)
-				// Apply ignore list for change detection
-				if ignoreList, ok := ignoreMap[lv.Name]; ok {
-					values[i].SetIgnoreList(ignoreList)
-				}
+	// Read via Driver
+	driverValues, err := drv.Read(requests)
+
+	// Convert driver values to TagValue and apply ignore lists
+	var values []*TagValue
+	if err == nil {
+		values = make([]*TagValue, len(driverValues))
+		for i, dv := range driverValues {
+			values[i] = FromDriverTagValue(dv)
+			if ignoreList, ok := ignoreMap[dv.Name]; ok {
+				values[i].SetIgnoreList(ignoreList)
 			}
 		}
 	}
@@ -559,39 +480,16 @@ func (w *PLCWorker) poll() {
 		plc.LastError = err
 		autoConnect := plc.Config.Enabled
 
-		// Determine if client detected disconnection
-		clientDisconnected := false
+		// Check if driver detected disconnection
+		clientDisconnected := drv != nil && !drv.IsConnected()
 
-		// For S7, check if this is a connection error and mark client as disconnected
-		if family == config.FamilyS7 && s7Client != nil {
-			if !s7Client.IsConnected() {
-				clientDisconnected = true
-				plc.S7Client.Close()
-				plc.S7Client = nil
-			}
-		}
-
-		// For Beckhoff, check if this is a connection error and mark client as disconnected
-		if family == config.FamilyBeckhoff && adsClient != nil {
-			if !adsClient.IsConnected() {
-				clientDisconnected = true
-				plc.AdsClient.Close()
-				plc.AdsClient = nil
-			}
-		}
-
-		// For Omron FINS, check if this is a connection error and mark client as disconnected
-		if family == config.FamilyOmron && finsClient != nil {
-			if !finsClient.IsConnected() {
-				clientDisconnected = true
-				plc.FinsClient.Close()
-				plc.FinsClient = nil
-			}
-		}
-
-		// Set status based on whether client detected disconnection
+		// Set status based on whether driver detected disconnection
 		if clientDisconnected {
 			plc.Status = StatusDisconnected
+			if plc.Driver != nil {
+				plc.Driver.Close()
+				plc.Driver = nil
+			}
 		} else {
 			plc.Status = StatusError
 		}
@@ -607,25 +505,12 @@ func (w *PLCWorker) poll() {
 
 		w.manager.markStatusDirty()
 
-		// Schedule reconnection if auto-connect is enabled and client detected disconnection
-		// OR if there's a repeated error (let scheduleReconnect handle deduplication)
-		shouldReconnect := autoConnect && (clientDisconnected || isLikelyConnectionError(err))
+		// Schedule reconnection if auto-connect is enabled and connection error detected
+		shouldReconnect := autoConnect && (clientDisconnected || drv.IsConnectionError(err))
 
 		if shouldReconnect {
-			switch family {
-			case config.FamilyS7:
-				w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
-				go w.manager.scheduleReconnect(plcNameForLog)
-			case config.FamilyBeckhoff:
-				w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
-				go w.manager.scheduleReconnect(plcNameForLog)
-			case config.FamilyOmron:
-				w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
-				go w.manager.scheduleReconnect(plcNameForLog)
-			case config.FamilyLogix, config.FamilyMicro800:
-				w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
-				go w.manager.scheduleReconnect(plcNameForLog)
-			}
+			w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
+			go w.manager.scheduleReconnect(plcNameForLog)
 		}
 
 		return
@@ -677,184 +562,6 @@ func (w *PLCWorker) poll() {
 	w.manager.markStatusDirty()
 }
 
-// pollS7 reads tags from an S7 PLC and converts them to unified TagValue format.
-// typeMap contains user-configured data types used for address parsing and display.
-// The S7 package handles parsing with native big-endian byte order.
-func (w *PLCWorker) pollS7(client *s7.Client, addresses []string, typeMap map[string]string) ([]*TagValue, error) {
-	// Check for nil or disconnected client
-	if client == nil {
-		return nil, fmt.Errorf("S7 client is nil")
-	}
-	if !client.IsConnected() {
-		return nil, fmt.Errorf("S7 client is not connected")
-	}
-
-	// Build requests with type hints from configuration
-	requests := make([]s7.TagRequest, len(addresses))
-	for i, addr := range addresses {
-		requests[i] = s7.TagRequest{
-			Address:  addr,
-			TypeHint: typeMap[addr], // Pass configured type as hint
-		}
-	}
-
-	s7Values, err := client.ReadWithTypes(requests)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert S7 TagValues to unified TagValues
-	// The s7 package's GoValue() handles big-endian parsing natively
-	results := make([]*TagValue, len(s7Values))
-	for i, sv := range s7Values {
-		// Use configured type if specified, otherwise use detected type
-		dataType := sv.DataType
-		if configuredType, ok := typeMap[sv.Name]; ok {
-			if s7Type, found := s7.TypeCodeFromName(configuredType); found {
-				dataType = s7Type
-			}
-		}
-
-		// Mark as array if Count > 1
-		count := sv.Count
-		if count < 1 {
-			count = 1
-		}
-		if count > 1 {
-			dataType = s7.MakeArrayType(dataType)
-		}
-
-		// Create unified TagValue using S7's native parsing
-		value := sv.GoValue() // Uses big-endian (native S7 format)
-		results[i] = &TagValue{
-			Name:        sv.Name,
-			DataType:    dataType,
-			Family:      "s7",
-			Value:       value,
-			StableValue: value, // Default StableValue equals Value; ignore list applied later
-			Bytes:       sv.Bytes, // Keep original big-endian bytes
-			Count:       count,
-			Error:       sv.Error,
-		}
-	}
-	return results, nil
-}
-
-// Each PLC family package now handles its own type parsing with native byte order.
-// S7: big-endian (native S7 format)
-// Logix: little-endian (native Logix format)
-// ADS: little-endian (native x86 format)
-
-// pollAds reads tags from a Beckhoff TwinCAT PLC and converts them to unified TagValue format.
-// The ADS package handles parsing with native little-endian byte order (x86/TwinCAT).
-func (w *PLCWorker) pollAds(client *ads.Client, symbols []string) ([]*TagValue, error) {
-	// Check for nil or disconnected client
-	if client == nil {
-		return nil, fmt.Errorf("ADS client is nil")
-	}
-	if !client.IsConnected() {
-		return nil, fmt.Errorf("ADS client is not connected")
-	}
-
-	adsValues, err := client.Read(symbols...)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert ADS TagValues to unified TagValues
-	// The ads package's GoValue() handles little-endian parsing natively
-	results := make([]*TagValue, len(adsValues))
-	for i, av := range adsValues {
-		// Use Count from ADS value for proper array handling
-		count := av.Count
-		if count < 1 {
-			count = 1
-		}
-
-		// Mark data type as array if Count > 1
-		dataType := av.DataType
-		if count > 1 {
-			dataType = ads.MakeArrayType(dataType)
-		}
-
-		value := av.GoValue() // Uses little-endian (native x86/TwinCAT format)
-		results[i] = &TagValue{
-			Name:        av.Name,
-			DataType:    dataType,
-			Family:      "beckhoff",
-			Value:       value,
-			StableValue: value, // Default StableValue equals Value; ignore list applied later
-			Bytes:       av.Bytes,
-			Count:       count,
-			Error:       av.Error,
-		}
-	}
-	return results, nil
-}
-
-// pollFins reads tags from an Omron PLC via FINS and converts them to unified TagValue format.
-// The FINS package handles parsing with native big-endian byte order (Omron format).
-func (w *PLCWorker) pollFins(client *fins.Client, addresses []string, typeMap map[string]string) ([]*TagValue, error) {
-	// Check for nil or disconnected client
-	if client == nil {
-		return nil, fmt.Errorf("FINS client is nil")
-	}
-	if !client.IsConnected() {
-		return nil, fmt.Errorf("FINS client is not connected")
-	}
-
-	// Build requests with type hints from configuration
-	requests := make([]fins.TagRequest, len(addresses))
-	for i, addr := range addresses {
-		requests[i] = fins.TagRequest{
-			Address:  addr,
-			TypeHint: typeMap[addr], // Pass configured type as hint
-		}
-	}
-
-	finsValues, err := client.ReadWithTypes(requests)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert FINS TagValues to unified TagValues
-	// The fins package's GoValue() handles big-endian parsing natively
-	results := make([]*TagValue, len(finsValues))
-	for i, fv := range finsValues {
-		// Use configured type if specified, otherwise use detected type
-		dataType := fv.DataType
-		if configuredType, ok := typeMap[fv.Name]; ok {
-			if finsType, found := fins.TypeCodeFromName(configuredType); found {
-				dataType = finsType
-			}
-		}
-
-		// Use Count from FINS value for proper array handling
-		count := fv.Count
-		if count < 1 {
-			count = 1
-		}
-
-		// Mark as array if Count > 1
-		if count > 1 {
-			dataType = fins.MakeArrayType(dataType)
-		}
-
-		// Create unified TagValue using FINS's native parsing
-		value := fv.GoValue() // Uses big-endian (native Omron format)
-		results[i] = &TagValue{
-			Name:        fv.Name,
-			DataType:    dataType,
-			Family:      "omron",
-			Value:       value,
-			StableValue: value, // Default StableValue equals Value; ignore list applied later
-			Bytes:       fv.Bytes,
-			Count:       count,
-			Error:       fv.Error,
-		}
-	}
-	return results, nil
-}
 
 // isLikelyConnectionError checks if an error message suggests a connection problem.
 // This is used to trigger reconnection attempts when the client's internal detection
@@ -1042,63 +749,37 @@ func (m *Manager) RemovePLC(name string) error {
 		worker.Stop()
 	}
 
-	if exists {
-		if plc.Client != nil {
-			plc.Client.Close()
-		}
-		if plc.S7Client != nil {
-			plc.S7Client.Close()
-		}
-		if plc.AdsClient != nil {
-			plc.AdsClient.Close()
-		}
-		if plc.FinsClient != nil {
-			plc.FinsClient.Close()
-		}
+	if exists && plc.Driver != nil {
+		plc.Driver.Close()
 	}
 
 	m.markStatusDirty()
 	return nil
 }
 
-// connectPLC establishes a connection to a PLC (called from worker goroutine).
+// connectPLC establishes a connection to a PLC using the unified driver interface.
 func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	plc.mu.Lock()
 	plc.Status = StatusConnecting
 	plc.LastError = nil
-	family := plc.Config.GetFamily()
-	address := plc.Config.Address
-	slot := plc.Config.Slot
-	amsNetId := plc.Config.AmsNetId
-	amsPort := plc.Config.AmsPort
-	finsPort := plc.Config.FinsPort
-	finsNetwork := plc.Config.FinsNetwork
-	finsNode := plc.Config.FinsNode
-	finsUnit := plc.Config.FinsUnit
+	cfg := plc.Config
+	family := cfg.GetFamily()
 	plc.mu.Unlock()
 	m.markStatusDirty()
 
-	// Handle family-specific connections
-	switch family {
-	case config.FamilyS7:
-		return m.connectS7PLC(plc, address, int(slot))
-	case config.FamilyBeckhoff:
-		return m.connectBeckhoffPLC(plc, address, amsNetId, amsPort)
-	case config.FamilyOmron:
-		return m.connectOmronPLC(plc, address, finsPort, finsNetwork, finsNode, finsUnit)
-	}
-
-	// Logix/Micro800 connection
-	opts := []logix.Option{}
-	if family == config.FamilyMicro800 {
-		// Micro800 PLCs don't use backplane routing and need unconnected messaging
-		opts = append(opts, logix.WithMicro800())
-	} else if slot > 0 {
-		opts = append(opts, logix.WithSlot(slot))
-	}
-
-	client, err := logix.Connect(address, opts...)
+	// Create driver from config
+	drv, err := driver.Create(cfg)
 	if err != nil {
+		plc.mu.Lock()
+		plc.Status = StatusError
+		plc.LastError = err
+		plc.mu.Unlock()
+		m.markStatusDirty()
+		return err
+	}
+
+	// Connect via driver
+	if err := drv.Connect(); err != nil {
 		plc.mu.Lock()
 		plc.ConnRetries++
 		if plc.ConnRetries >= MaxConnectRetries {
@@ -1117,8 +798,8 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 		return err
 	}
 
-	// Get identity
-	identity, _ := client.Identity()
+	// Get device info
+	deviceInfo, _ := drv.GetDeviceInfo()
 
 	// Check if we have cached tags from a previous connection
 	plc.mu.RLock()
@@ -1127,224 +808,53 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	plc.mu.RUnlock()
 
 	var programs []string
-	var tags []logix.TagInfo
+	var tags []driver.TagInfo
 
 	// Only discover programs and tags for discovery-capable PLCs
-	// If we have cached tags (from a previous connection), reuse them for fast reconnect
-	if family.SupportsDiscovery() {
+	if drv.SupportsDiscovery() {
 		if len(cachedTags) > 0 {
 			// Fast reconnect: reuse cached tags
 			programs = cachedPrograms
 			tags = cachedTags
 			m.log("[cyan]PLC %s using cached tags (%d tags)[-]", plc.Config.Name, len(tags))
 		} else {
-			// Full discovery: fetch programs and tags
-			programs, _ = client.Programs()
-			tags, _ = client.AllTags()
+			// Full discovery via driver
+			programs, _ = drv.Programs()
+			tags, _ = drv.AllTags()
 		}
-		// Store tags in client for element count lookup during reads
-		// For Micro800, this also probes array sizes and returns updated tags
-		tags = client.SetTags(tags)
 	}
 
+	// For Logix adapters, store tags in client for element count lookup
+	if family == config.FamilyLogix || family == config.FamilyMicro800 {
+		if adapter, ok := drv.(*driver.LogixAdapter); ok {
+			// Use SetTags to update array dimensions
+			tags = adapter.SetTags(tags)
+		}
+	}
+
+	// Update PLC state
 	plc.mu.Lock()
-	plc.Client = client
-	plc.Identity = identity
+	plc.Driver = drv
+	plc.DeviceInfo = deviceInfo
 	plc.Programs = programs
 	plc.Tags = tags
 	plc.Status = StatusConnected
-	plc.ConnRetries = 0     // Reset on successful connection
-	plc.RetryLimited = false // Clear retry limit on success
+	plc.ConnRetries = 0
+	plc.RetryLimited = false
 	name := plc.Config.Name
 	plc.mu.Unlock()
 
 	// For non-discovery PLCs, build manual tags from config
-	if !family.SupportsDiscovery() {
+	if !drv.SupportsDiscovery() {
 		plc.BuildManualTags()
 	}
 
 	m.markStatusDirty()
-	m.log("[green]PLC %s connected:[-] %s, %d tags", name, client.ConnectionMode(), len(tags))
-
-	// Note: UDT templates are fetched lazily on-demand when structure tags are read.
-	// This keeps initial connection fast, especially over slow networks (VPN, etc.)
-	// Templates are cached after first fetch for fast subsequent reads.
+	m.log("[green]PLC %s connected:[-] %s, %d tags", name, drv.ConnectionMode(), len(tags))
 
 	return nil
 }
 
-// connectS7PLC handles S7 PLC connections.
-func (m *Manager) connectS7PLC(plc *ManagedPLC, address string, slot int) error {
-	// S7-300/400: use rack 0, slot 2 (CPU typically in slot 2) - this is the default
-	// S7-1200/1500: use rack 0, slot 0 (CPU is onboard)
-	// The slot in config directly maps to S7 slot number
-	rack := 0
-	s7Slot := slot // Use slot as-is from config
-
-	s7Client, err := s7.Connect(address, s7.WithRackSlot(rack, s7Slot))
-	if err != nil {
-		plc.mu.Lock()
-		plc.ConnRetries++
-		if plc.ConnRetries >= MaxConnectRetries {
-			plc.RetryLimited = true
-			plc.Status = StatusDisconnected
-			plc.LastError = fmt.Errorf("retry limit reached (%d attempts): %w", MaxConnectRetries, err)
-		} else {
-			plc.Status = StatusError
-			plc.LastError = err
-		}
-		name := plc.Config.Name
-		lastErr := plc.LastError
-		plc.mu.Unlock()
-		m.markStatusDirty()
-		m.log("[red]PLC %s (S7) connection failed:[-] %v", name, lastErr)
-		return err
-	}
-
-	// Get CPU info
-	cpuInfo, _ := s7Client.GetCPUInfo()
-
-	plc.mu.Lock()
-	plc.S7Client = s7Client
-	plc.S7Info = cpuInfo
-	plc.Status = StatusConnected
-	plc.ConnRetries = 0
-	plc.RetryLimited = false
-	name := plc.Config.Name
-	plc.mu.Unlock()
-
-	// Build manual tags from config (S7 doesn't support discovery)
-	plc.BuildManualTags()
-
-	m.markStatusDirty()
-	m.log("[green]PLC %s (S7) connected:[-] %s", name, s7Client.ConnectionMode())
-
-	return nil
-}
-
-// connectBeckhoffPLC handles Beckhoff TwinCAT PLC connections via ADS protocol.
-func (m *Manager) connectBeckhoffPLC(plc *ManagedPLC, address, amsNetId string, amsPort uint16) error {
-	opts := []ads.Option{}
-	if amsNetId != "" {
-		opts = append(opts, ads.WithAmsNetId(amsNetId))
-	}
-	if amsPort > 0 {
-		opts = append(opts, ads.WithAmsPort(amsPort))
-	}
-
-	adsClient, err := ads.Connect(address, opts...)
-	if err != nil {
-		plc.mu.Lock()
-		plc.ConnRetries++
-		if plc.ConnRetries >= MaxConnectRetries {
-			plc.RetryLimited = true
-			plc.Status = StatusDisconnected
-			plc.LastError = fmt.Errorf("retry limit reached (%d attempts): %w", MaxConnectRetries, err)
-		} else {
-			plc.Status = StatusError
-			plc.LastError = err
-		}
-		name := plc.Config.Name
-		lastErr := plc.LastError
-		plc.mu.Unlock()
-		m.markStatusDirty()
-		m.log("[red]PLC %s (Beckhoff) connection failed:[-] %v", name, lastErr)
-		return err
-	}
-
-	// Get device info
-	deviceInfo, _ := adsClient.GetDeviceInfo()
-
-	// Discover all tags (Beckhoff supports symbol discovery)
-	var tags []logix.TagInfo
-	adsTags, err := adsClient.AllTags()
-	if err == nil {
-		// Convert ADS TagInfo to logix TagInfo for compatibility
-		for _, at := range adsTags {
-			tags = append(tags, logix.TagInfo{
-				Name:     at.Name,
-				TypeCode: at.TypeCode,
-				Instance: 0,
-			})
-		}
-	}
-
-	// Get program names (POU prefixes)
-	programs, _ := adsClient.Programs()
-
-	plc.mu.Lock()
-	plc.AdsClient = adsClient
-	plc.AdsInfo = deviceInfo
-	plc.Programs = programs
-	plc.Tags = tags
-	plc.Status = StatusConnected
-	plc.ConnRetries = 0
-	plc.RetryLimited = false
-	name := plc.Config.Name
-	plc.mu.Unlock()
-
-	m.markStatusDirty()
-	m.log("[green]PLC %s (Beckhoff) connected:[-] %s, %d tags", name, adsClient.ConnectionMode(), len(tags))
-
-	return nil
-}
-
-// connectOmronPLC handles Omron PLC connections via FINS protocol.
-func (m *Manager) connectOmronPLC(plc *ManagedPLC, address string, port int, network, node, unit byte) error {
-	opts := []fins.Option{}
-	if port > 0 {
-		opts = append(opts, fins.WithPort(port))
-	}
-	if network > 0 {
-		opts = append(opts, fins.WithNetwork(network))
-	}
-	if node > 0 {
-		opts = append(opts, fins.WithNode(node))
-	}
-	if unit > 0 {
-		opts = append(opts, fins.WithUnit(unit))
-	}
-
-	finsClient, err := fins.Connect(address, opts...)
-	if err != nil {
-		plc.mu.Lock()
-		plc.ConnRetries++
-		if plc.ConnRetries >= MaxConnectRetries {
-			plc.RetryLimited = true
-			plc.Status = StatusDisconnected
-			plc.LastError = fmt.Errorf("retry limit reached (%d attempts): %w", MaxConnectRetries, err)
-		} else {
-			plc.Status = StatusError
-			plc.LastError = err
-		}
-		name := plc.Config.Name
-		lastErr := plc.LastError
-		plc.mu.Unlock()
-		m.markStatusDirty()
-		m.log("[red]PLC %s (Omron) connection failed:[-] %v", name, lastErr)
-		return err
-	}
-
-	// Get device info
-	deviceInfo, _ := finsClient.GetDeviceInfo()
-
-	plc.mu.Lock()
-	plc.FinsClient = finsClient
-	plc.FinsInfo = deviceInfo
-	plc.Status = StatusConnected
-	plc.ConnRetries = 0
-	plc.RetryLimited = false
-	name := plc.Config.Name
-	plc.mu.Unlock()
-
-	// Build manual tags from config (FINS doesn't support discovery)
-	plc.BuildManualTags()
-
-	m.markStatusDirty()
-	m.log("[green]PLC %s (Omron) connected:[-] %s", name, finsClient.ConnectionMode())
-
-	return nil
-}
 
 // Connect establishes a connection to the named PLC.
 // This can be called from UI thread - runs connection in background.
@@ -1379,28 +889,13 @@ func (m *Manager) Disconnect(name string) error {
 	}
 
 	plc.mu.Lock()
-	if plc.Client != nil {
-		plc.Client.Close()
-		plc.Client = nil
-	}
-	if plc.S7Client != nil {
-		plc.S7Client.Close()
-		plc.S7Client = nil
-	}
-	if plc.AdsClient != nil {
-		plc.AdsClient.Close()
-		plc.AdsClient = nil
-	}
-	if plc.FinsClient != nil {
-		plc.FinsClient.Close()
-		plc.FinsClient = nil
+	if plc.Driver != nil {
+		plc.Driver.Close()
+		plc.Driver = nil
 	}
 	plc.Status = StatusDisconnected
 	plc.LastError = nil
-	plc.Identity = nil
-	plc.S7Info = nil
-	plc.AdsInfo = nil
-	plc.FinsInfo = nil
+	plc.DeviceInfo = nil
 	plc.mu.Unlock()
 	m.markStatusDirty()
 
@@ -1736,12 +1231,8 @@ func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 	}
 
 	plc.mu.RLock()
-	client := plc.Client
-	s7Client := plc.S7Client
-	adsClient := plc.AdsClient
-	finsClient := plc.FinsClient
+	drv := plc.Driver
 	status := plc.Status
-	family := plc.Config.GetFamily()
 	// Get configured type for this tag
 	var typeHint string
 	for _, sel := range plc.Config.Tags {
@@ -1753,132 +1244,28 @@ func (m *Manager) ReadTag(plcName, tagName string) (*TagValue, error) {
 	plc.mu.RUnlock()
 
 	// Check connection status first
-	if status != StatusConnected {
+	if status != StatusConnected || drv == nil {
 		return nil, fmt.Errorf("PLC not connected: %s (status: %s)", plcName, status)
 	}
 
-	switch family {
-	case config.FamilyS7:
-		if s7Client == nil {
-			return nil, fmt.Errorf("S7 client not available for %s", plcName)
+	// Read via driver
+	requests := []driver.TagRequest{{Name: tagName, TypeHint: typeHint}}
+	values, err := drv.Read(requests)
+	if err != nil {
+		if drv.IsConnectionError(err) {
+			m.handleConnectionError(plcName, plc, err)
 		}
-		req := []s7.TagRequest{{Address: tagName, TypeHint: typeHint}}
-		s7Values, err := s7Client.ReadWithTypes(req)
-		if err != nil {
-			return nil, err
-		}
-		if len(s7Values) > 0 {
-			sv := s7Values[0]
-			// Use configured type if specified, otherwise use detected type
-			dataType := sv.DataType
-			if typeHint != "" {
-				if s7Type, found := s7.TypeCodeFromName(typeHint); found {
-					dataType = s7Type
-				}
-			}
-			// Mark as array if Count > 1
-			count := sv.Count
-			if count < 1 {
-				count = 1
-			}
-			if count > 1 {
-				dataType = s7.MakeArrayType(dataType)
-			}
-			return &TagValue{
-				Name:     sv.Name,
-				DataType: dataType,
-				Family:   "s7",
-				Value:    sv.GoValue(), // Uses big-endian (native S7 format)
-				Bytes: sv.Bytes,
-				Count:    count,
-				Error:    sv.Error,
-			}, nil
-		}
-		return nil, fmt.Errorf("no data returned for tag: %s", tagName)
-
-	case config.FamilyBeckhoff:
-		if adsClient == nil {
-			return nil, fmt.Errorf("ADS client not available for %s", plcName)
-		}
-		adsValues, err := adsClient.Read(tagName)
-		if err != nil {
-			return nil, err
-		}
-		if len(adsValues) > 0 {
-			av := adsValues[0]
-			return &TagValue{
-				Name:     av.Name,
-				DataType: av.DataType,
-				Family:   "beckhoff",
-				Value:    av.GoValue(),
-				Bytes:    av.Bytes,
-				Count:    1,
-				Error:    av.Error,
-			}, nil
-		}
-		return nil, fmt.Errorf("no data returned for tag: %s", tagName)
-
-	case config.FamilyOmron:
-		if finsClient == nil {
-			return nil, fmt.Errorf("FINS client not available for %s", plcName)
-		}
-		req := []fins.TagRequest{{Address: tagName, TypeHint: typeHint}}
-		finsValues, err := finsClient.ReadWithTypes(req)
-		if err != nil {
-			return nil, err
-		}
-		if len(finsValues) > 0 {
-			fv := finsValues[0]
-			// Use configured type if specified, otherwise use detected type
-			dataType := fv.DataType
-			if typeHint != "" {
-				if finsType, found := fins.TypeCodeFromName(typeHint); found {
-					dataType = finsType
-				}
-			}
-			// Mark as array if Count > 1
-			count := fv.Count
-			if count < 1 {
-				count = 1
-			}
-			if count > 1 {
-				dataType = fins.MakeArrayType(dataType)
-			}
-			return &TagValue{
-				Name:     fv.Name,
-				DataType: dataType,
-				Family:   "omron",
-				Value:    fv.GoValue(), // Uses big-endian (native Omron format)
-				Bytes:    fv.Bytes,
-				Count:    count,
-				Error:    fv.Error,
-			}, nil
-		}
-		return nil, fmt.Errorf("no data returned for tag: %s", tagName)
-
-	default:
-		// Handle Logix/Micro800 PLCs
-		if client == nil {
-			return nil, fmt.Errorf("Logix client not available for %s", plcName)
-		}
-		values, err := client.Read(tagName)
-		if err != nil {
-			// Check if this is a connection error and schedule reconnect
-			if isLikelyConnectionError(err) {
-				m.handleConnectionError(plcName, plc, err)
-			}
-			return nil, err
-		}
-		if len(values) > 0 {
-			// Use decoded version to get UDT member names in output
-			return FromLogixTagValueDecoded(values[0], client), nil
-		}
-		return nil, fmt.Errorf("no data returned for tag: %s", tagName)
+		return nil, err
 	}
+	if len(values) > 0 && values[0] != nil {
+		return FromDriverTagValue(values[0]), nil
+	}
+	return nil, fmt.Errorf("no data returned for tag: %s", tagName)
 }
 
 // ReadTagWithCount reads a single tag with a specified element count from a connected PLC.
 // This is useful for reading arrays where you know the exact element count.
+// Note: Count is only supported for Logix PLCs; others use regular ReadTag.
 func (m *Manager) ReadTagWithCount(plcName, tagName string, count uint16) (*TagValue, error) {
 	m.mu.RLock()
 	plc, exists := m.plcs[plcName]
@@ -1889,36 +1276,35 @@ func (m *Manager) ReadTagWithCount(plcName, tagName string, count uint16) (*TagV
 	}
 
 	plc.mu.RLock()
-	client := plc.Client
+	drv := plc.Driver
 	status := plc.Status
 	family := plc.Config.GetFamily()
 	plc.mu.RUnlock()
 
 	// Check connection status first
-	if status != StatusConnected {
+	if status != StatusConnected || drv == nil {
 		return nil, fmt.Errorf("PLC not connected: %s (status: %s)", plcName, status)
 	}
 
-	// Currently only supported for Logix/Micro800 PLCs
-	switch family {
-	case config.FamilyLogix, config.FamilyMicro800:
-		if client == nil {
-			return nil, fmt.Errorf("Logix client not available for %s", plcName)
-		}
-		value, err := client.ReadWithCount(tagName, count)
-		if err != nil {
-			if isLikelyConnectionError(err) {
-				m.handleConnectionError(plcName, plc, err)
+	// For Logix, we can use the underlying client for count-based reads
+	if family == config.FamilyLogix || family == config.FamilyMicro800 {
+		if adapter, ok := drv.(*driver.LogixAdapter); ok {
+			client := adapter.Client()
+			if client != nil {
+				value, err := client.ReadWithCount(tagName, count)
+				if err != nil {
+					if drv.IsConnectionError(err) {
+						m.handleConnectionError(plcName, plc, err)
+					}
+					return nil, err
+				}
+				return FromLogixTagValueDecoded(value, client), nil
 			}
-			return nil, err
 		}
-		// Use decoded version to get UDT member names in output
-		return FromLogixTagValueDecoded(value, client), nil
-
-	default:
-		// For other families, fall back to regular ReadTag (count not supported)
-		return m.ReadTag(plcName, tagName)
 	}
+
+	// For other families, fall back to regular ReadTag
+	return m.ReadTag(plcName, tagName)
 }
 
 // handleConnectionError marks a PLC as disconnected and schedules reconnection.
@@ -1951,44 +1337,15 @@ func (m *Manager) WriteTag(plcName, tagName string, value interface{}) error {
 	}
 
 	plc.mu.RLock()
-	client := plc.Client
-	s7Client := plc.S7Client
-	adsClient := plc.AdsClient
-	finsClient := plc.FinsClient
+	drv := plc.Driver
 	status := plc.Status
-	family := plc.Config.GetFamily()
 	plc.mu.RUnlock()
 
-	if status != StatusConnected {
+	if status != StatusConnected || drv == nil {
 		return fmt.Errorf("PLC not connected: %s", plcName)
 	}
 
-	switch family {
-	case config.FamilyS7:
-		if s7Client == nil {
-			return fmt.Errorf("S7 PLC not connected: %s", plcName)
-		}
-		return s7Client.Write(tagName, value)
-
-	case config.FamilyBeckhoff:
-		if adsClient == nil {
-			return fmt.Errorf("Beckhoff PLC not connected: %s", plcName)
-		}
-		return adsClient.Write(tagName, value)
-
-	case config.FamilyOmron:
-		if finsClient == nil {
-			return fmt.Errorf("Omron PLC not connected: %s", plcName)
-		}
-		return finsClient.Write(tagName, value)
-
-	default:
-		// Handle Logix/Micro800 PLCs
-		if client == nil {
-			return fmt.Errorf("PLC not connected: %s", plcName)
-		}
-		return client.Write(tagName, value)
-	}
+	return drv.Write(tagName, value)
 }
 
 // LoadFromConfig adds all PLCs from configuration.
@@ -2165,17 +1522,17 @@ func (m *Manager) GetTagType(plcName, tagName string) uint16 {
 		plc.mu.RUnlock()
 		return dataType
 	}
-	client := plc.Client
+	drv := plc.Driver
 	status := plc.Status
 	plc.mu.RUnlock()
 
 	// If not cached, try to read the tag to get its type
-	if client == nil || status != StatusConnected {
+	if drv == nil || status != StatusConnected {
 		return 0
 	}
 
-	values, err := client.Read(tagName)
-	if err != nil || len(values) == 0 {
+	values, err := drv.Read([]driver.TagRequest{{Name: tagName}})
+	if err != nil || len(values) == 0 || values[0] == nil {
 		return 0
 	}
 
@@ -2210,12 +1567,8 @@ func (m *Manager) ReadTagValues(plcName string, tagNames []string) (map[string]i
 	}
 
 	plc.mu.RLock()
-	client := plc.Client
-	s7Client := plc.S7Client
-	adsClient := plc.AdsClient
-	finsClient := plc.FinsClient
+	drv := plc.Driver
 	status := plc.Status
-	family := plc.Config.GetFamily()
 	// Build type hints map from config
 	typeMap := make(map[string]string)
 	for _, sel := range plc.Config.Tags {
@@ -2225,92 +1578,30 @@ func (m *Manager) ReadTagValues(plcName string, tagNames []string) (map[string]i
 	}
 	plc.mu.RUnlock()
 
-	if status != StatusConnected {
+	if status != StatusConnected || drv == nil {
 		return nil, fmt.Errorf("PLC not connected: %s", plcName)
 	}
 
-	result := make(map[string]interface{})
-
-	switch family {
-	case config.FamilyS7:
-		if s7Client == nil {
-			return nil, fmt.Errorf("S7 client not available")
-		}
-		// Build requests with type hints
-		requests := make([]s7.TagRequest, len(tagNames))
-		for i, name := range tagNames {
-			requests[i] = s7.TagRequest{Address: name, TypeHint: typeMap[name]}
-		}
-		s7Values, err := s7Client.ReadWithTypes(requests)
-		if err != nil {
-			return nil, err
-		}
-		for _, v := range s7Values {
-			if v.Error == nil {
-				result[v.Name] = v.GoValue()
-			} else {
-				result[v.Name] = nil
-			}
-		}
-		return result, nil
-
-	case config.FamilyBeckhoff:
-		if adsClient == nil {
-			return nil, fmt.Errorf("ADS client not available")
-		}
-		adsValues, err := adsClient.Read(tagNames...)
-		if err != nil {
-			return nil, err
-		}
-		for _, v := range adsValues {
-			if v.Error == nil {
-				result[v.Name] = v.GoValue()
-			} else {
-				result[v.Name] = nil
-			}
-		}
-		return result, nil
-
-	case config.FamilyOmron:
-		if finsClient == nil {
-			return nil, fmt.Errorf("FINS client not available")
-		}
-		// Build requests with type hints
-		requests := make([]fins.TagRequest, len(tagNames))
-		for i, name := range tagNames {
-			requests[i] = fins.TagRequest{Address: name, TypeHint: typeMap[name]}
-		}
-		finsValues, err := finsClient.ReadWithTypes(requests)
-		if err != nil {
-			return nil, err
-		}
-		for _, v := range finsValues {
-			if v.Error == nil {
-				result[v.Name] = v.GoValue()
-			} else {
-				result[v.Name] = nil
-			}
-		}
-		return result, nil
-
-	default:
-		// Handle Logix/Micro800 PLCs
-		if client == nil {
-			return nil, fmt.Errorf("client not available")
-		}
-		values, err := client.Read(tagNames...)
-		if err != nil {
-			return nil, err
-		}
-		for _, v := range values {
-			if v.Error == nil {
-				result[v.Name] = v.GoValue()
-			} else {
-				result[v.Name] = nil
-			}
-		}
-		return result, nil
+	// Build read requests with type hints
+	requests := make([]driver.TagRequest, len(tagNames))
+	for i, name := range tagNames {
+		requests[i] = driver.TagRequest{Name: name, TypeHint: typeMap[name]}
 	}
+
+	values, err := drv.Read(requests)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]interface{})
+	for _, v := range values {
+		if v != nil && v.Error == nil {
+			result[v.Name] = v.Value
+		} else if v != nil {
+			result[v.Name] = nil
+		}
+	}
+	return result, nil
 }
 
 // TriggerTagReader wraps the Manager to implement the trigger.TagReader interface.

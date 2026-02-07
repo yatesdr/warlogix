@@ -16,12 +16,16 @@ const (
 	FamilyLogix    PLCFamily = "logix"    // Allen-Bradley ControlLogix/CompactLogix
 	FamilyMicro800 PLCFamily = "micro800" // Allen-Bradley Micro800 series
 	FamilyS7       PLCFamily = "s7"       // Siemens S7
-	FamilyOmron    PLCFamily = "omron"    // Omron FINS protocol
+	FamilyOmron    PLCFamily = "omron"    // Omron PLCs (FINS or EIP based on Protocol field)
 	FamilyBeckhoff PLCFamily = "beckhoff" // Beckhoff TwinCAT (ADS protocol)
 )
 
 // SupportsDiscovery returns true if the PLC family supports tag discovery.
+// Note: For Omron PLCs, discovery depends on the protocol (EIP supports it, FINS doesn't).
+// Use PLCConfig.SupportsDiscovery() for protocol-aware check.
 func (f PLCFamily) SupportsDiscovery() bool {
+	// Omron discovery depends on protocol, so we return false here.
+	// PLCConfig.SupportsDiscovery() handles the protocol-aware check.
 	return f == FamilyLogix || f == "" || f == FamilyMicro800 || f == FamilyBeckhoff
 }
 
@@ -34,7 +38,8 @@ func (f PLCFamily) String() string {
 }
 
 // Driver returns the driver/protocol name used by this PLC family.
-// Returns: "logix", "s7", "ads", or "fins".
+// Returns: "logix", "s7", "ads", or "omron".
+// Note: For Omron, the actual protocol (FINS vs EIP) is determined by PLCConfig.Protocol.
 func (f PLCFamily) Driver() string {
 	switch f {
 	case FamilyS7:
@@ -42,7 +47,7 @@ func (f PLCFamily) Driver() string {
 	case FamilyBeckhoff:
 		return "ads"
 	case FamilyOmron:
-		return "fins"
+		return "omron"
 	default:
 		return "logix" // Logix, Micro800, and empty default to logix
 	}
@@ -80,11 +85,12 @@ type PLCConfig struct {
 	AmsNetId string `yaml:"ams_net_id,omitempty"` // AMS Net ID (e.g., "192.168.1.100.1.1")
 	AmsPort  uint16 `yaml:"ams_port,omitempty"`   // AMS Port (default: 851 for TwinCAT 3)
 
-	// Omron FINS-specific settings
-	FinsPort    int  `yaml:"fins_port,omitempty"`    // FINS UDP port (default: 9600)
-	FinsNetwork byte `yaml:"fins_network,omitempty"` // FINS network number (default: 0)
-	FinsNode    byte `yaml:"fins_node,omitempty"`    // FINS node number (default: 0)
-	FinsUnit    byte `yaml:"fins_unit,omitempty"`    // FINS unit number (default: 0)
+	// Omron-specific settings
+	Protocol    string `yaml:"protocol,omitempty"`     // Protocol: "fins" (default) or "eip"
+	FinsPort    int    `yaml:"fins_port,omitempty"`    // FINS port (default: 9600)
+	FinsNetwork byte   `yaml:"fins_network,omitempty"` // FINS network number (default: 0)
+	FinsNode    byte   `yaml:"fins_node,omitempty"`    // FINS node number (default: 0)
+	FinsUnit    byte   `yaml:"fins_unit,omitempty"`    // FINS unit number (default: 0)
 }
 
 // GetFamily returns the PLC family, defaulting to logix if not set.
@@ -93,6 +99,38 @@ func (p *PLCConfig) GetFamily() PLCFamily {
 		return FamilyLogix
 	}
 	return p.Family
+}
+
+// GetProtocol returns the protocol for Omron PLCs ("fins" or "eip").
+// Returns "fins" as default for Omron PLCs, empty for non-Omron.
+func (p *PLCConfig) GetProtocol() string {
+	if p.GetFamily() != FamilyOmron {
+		return ""
+	}
+	if p.Protocol == "" || p.Protocol == "fins" {
+		return "fins"
+	}
+	return p.Protocol
+}
+
+// IsOmronEIP returns true if this is an Omron PLC using EtherNet/IP protocol.
+func (p *PLCConfig) IsOmronEIP() bool {
+	return p.GetFamily() == FamilyOmron && p.GetProtocol() == "eip"
+}
+
+// IsOmronFINS returns true if this is an Omron PLC using FINS protocol.
+func (p *PLCConfig) IsOmronFINS() bool {
+	return p.GetFamily() == FamilyOmron && p.GetProtocol() == "fins"
+}
+
+// SupportsDiscovery returns true if this PLC configuration supports tag discovery.
+// This is protocol-aware for Omron PLCs (EIP supports discovery, FINS doesn't).
+func (p *PLCConfig) SupportsDiscovery() bool {
+	family := p.GetFamily()
+	if family == FamilyOmron {
+		return p.IsOmronEIP() // Only EIP supports discovery
+	}
+	return family.SupportsDiscovery()
 }
 
 // IsHealthCheckEnabled returns whether health check publishing is enabled (defaults to true).
