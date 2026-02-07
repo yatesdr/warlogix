@@ -306,6 +306,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 }
 
 // PublishBatch stores multiple tag values in Valkey using a pipeline for efficiency.
+// All SET and PUBLISH commands are combined into a single pipeline to minimize round-trips.
 func (p *Publisher) PublishBatch(items []TagPublishItem) error {
 	if len(items) == 0 {
 		return nil
@@ -323,16 +324,9 @@ func (p *Publisher) PublishBatch(items []TagPublishItem) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Use a pipeline for batching
+	// Use a single pipeline for all commands (SETs + PUBLISHes)
 	pipe := client.Pipeline()
 	now := time.Now().UTC()
-
-	// Collect pubsub data for after pipeline
-	type pubsubItem struct {
-		channel string
-		data    []byte
-	}
-	var pubsubItems []pubsubItem
 
 	for _, item := range items {
 		key := joinKey(cfg.Factory, item.PLCName, "tags", item.TagName)
@@ -358,34 +352,26 @@ func (p *Publisher) PublishBatch(items []TagPublishItem) error {
 			continue
 		}
 
+		// Add SET command
 		if cfg.KeyTTL > 0 {
 			pipe.Set(ctx, key, data, cfg.KeyTTL)
 		} else {
 			pipe.Set(ctx, key, data, 0)
 		}
 
-		// Collect pubsub for after pipeline exec
+		// Add PUBLISH commands to same pipeline (fire-and-forget)
 		if cfg.PublishChanges {
 			channel := joinKey(cfg.Factory, item.PLCName, "changes")
-			pubsubItems = append(pubsubItems, pubsubItem{channel, data})
+			pipe.Publish(ctx, channel, data)
 			allChannel := joinKey(cfg.Factory, "_all", "changes")
-			pubsubItems = append(pubsubItems, pubsubItem{allChannel, data})
+			pipe.Publish(ctx, allChannel, data)
 		}
 	}
 
-	// Execute pipeline
+	// Execute single pipeline with all commands
 	_, err := pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("pipeline exec failed: %w", err)
-	}
-
-	// Publish to pubsub (fire-and-forget, use separate pipeline)
-	if len(pubsubItems) > 0 {
-		pubPipe := client.Pipeline()
-		for _, ps := range pubsubItems {
-			pubPipe.Publish(ctx, ps.channel, ps.data)
-		}
-		pubPipe.Exec(ctx) // Ignore errors for pubsub
 	}
 
 	debugLog("PublishBatch: sent %d items via pipeline", len(items))
