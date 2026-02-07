@@ -130,7 +130,7 @@ All enabled brokers receive the same tag updates.
 Use the built-in stress test to benchmark your MQTT broker:
 
 ```bash
-warlogix --test-brokers
+warlogix --stress-test-republishing
 ```
 
 This publishes simulated PLC tag data to a test topic (`warlogix-test-stress/+/tags/+`) for 10 seconds.
@@ -147,7 +147,7 @@ This publishes simulated PLC tag data to a test topic (`warlogix-test-stress/+/t
 ### Example
 
 ```bash
-warlogix --test-brokers --test-duration 30s --test-tags 200 -y
+warlogix --stress-test-republishing --test-duration 30s --test-tags 200 -y
 ```
 
 The test measures throughput (messages per second) and reports any publish failures. MQTT publishes are asynchronous with QoS 1, so the throughput represents the queue rate to the broker.

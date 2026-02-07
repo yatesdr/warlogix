@@ -185,7 +185,7 @@ redis-cli RPUSH factory:writes '{"factory":"factory","plc":"MainPLC","tag":"Coun
 Use the built-in stress test to benchmark your Valkey/Redis server:
 
 ```bash
-warlogix --test-brokers
+warlogix --stress-test-republishing
 ```
 
 This runs a 10-second stress test against all enabled Valkey servers, writing simulated PLC tag data to test keys (`warlogix-test-stress:*`).

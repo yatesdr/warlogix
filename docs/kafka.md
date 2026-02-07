@@ -263,7 +263,7 @@ kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic plc-tags
 Use the built-in stress test to benchmark your Kafka broker and detect publishing regressions:
 
 ```bash
-warlogix --test-brokers
+warlogix --stress-test-republishing
 ```
 
 This runs a 10-second stress test against all enabled Kafka clusters in your configuration, publishing simulated PLC tag data to a test topic (`warlogix-test-stress`).
