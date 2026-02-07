@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- **ADS Performance Optimization**: Implemented SumUp Read (IndexGroup 0xF080) for
+  batching multiple tag reads into a single TCP request
+  - ~98% reduction in read cycle time for multi-tag configurations
+  - Example: 33 tags reduced from ~300ms to ~6ms per poll cycle
+  - Uses direct addressing (IndexGroup 0x4040) for optimal compatibility
+
+### Added
+- **Debug Logging**: New `logging/debug.go` package for protocol-level troubleshooting
+  - Hex dump capability for TX/RX packet inspection
+  - Connection lifecycle logging
+  - Works across all protocol drivers (ADS, S7, etc.)
+
 ## [0.1.8] - 2026-02-04
 
 ### Added
