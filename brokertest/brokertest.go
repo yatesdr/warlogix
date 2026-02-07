@@ -640,4 +640,12 @@ func (r *Runner) printReport() {
 		fmt.Println("  Save these values to detect regressions in future tests.")
 	}
 	fmt.Println()
+
+	// Important note about what this test measures
+	fmt.Println("─────────────────────────────────────────────────────────────────────")
+	fmt.Println("  NOTE: This tests republishing throughput only, not PLC read performance.")
+	fmt.Println("  PLC reads may be substantially slower depending on network conditions,")
+	fmt.Println("  PLC load, and protocol overhead. Use this test to identify networking")
+	fmt.Println("  or broker bottlenecks, not to estimate end-to-end data rates.")
+	fmt.Println()
 }
