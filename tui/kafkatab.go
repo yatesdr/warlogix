@@ -151,6 +151,14 @@ func (t *KafkaTab) updateInfo(name string) {
 		info += th.Label("Topic", cfg.Topic) + "\n"
 	}
 
+	// Auto-create topics (default true if nil)
+	autoCreate := cfg.AutoCreateTopics == nil || *cfg.AutoCreateTopics
+	if autoCreate {
+		info += fmt.Sprintf("%sAuto-create Topics:%s %s\n", th.TagAccent, th.TagSuccess, "Yes")
+	} else {
+		info += fmt.Sprintf("%sAuto-create Topics:%s %s\n", th.TagAccent, th.TagWarning, "No")
+	}
+
 	if producer != nil {
 		status := producer.GetStatus()
 		info += fmt.Sprintf("\n%sStatus:%s %s\n", th.TagAccent, th.TagReset, status.String())
@@ -275,6 +283,7 @@ func (t *KafkaTab) showAddDialog() {
 	form.AddPasswordField("Password:", "", 30, '*', nil)
 	form.AddCheckbox("Publish Changes:", false, nil)
 	form.AddInputField("Topic:", "", 30, nil, nil)
+	form.AddCheckbox("Auto-create Topics:", true, nil)
 	form.AddCheckbox("Auto-connect:", false, nil)
 
 	form.AddButton("Add", func() {
@@ -286,6 +295,7 @@ func (t *KafkaTab) showAddDialog() {
 		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
 		publishChanges := form.GetFormItemByLabel("Publish Changes:").(*tview.Checkbox).IsChecked()
 		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
+		autoCreateTopics := form.GetFormItemByLabel("Auto-create Topics:").(*tview.Checkbox).IsChecked()
 		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
 
 		if name == "" || brokers == "" {
@@ -294,18 +304,20 @@ func (t *KafkaTab) showAddDialog() {
 		}
 
 		saslMechs := []string{"", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}
+		autoCreatePtr := autoCreateTopics
 		cfg := config.KafkaConfig{
-			Name:           name,
-			Enabled:        autoConnect,
-			Brokers:        strings.Split(brokers, ","),
-			UseTLS:         useTLS,
-			SASLMechanism:  saslMechs[saslIdx],
-			Username:       username,
-			Password:       password,
-			RequiredAcks:   -1,
-			MaxRetries:     3,
-			PublishChanges: publishChanges,
-			Topic:          topic,
+			Name:             name,
+			Enabled:          autoConnect,
+			Brokers:          strings.Split(brokers, ","),
+			UseTLS:           useTLS,
+			SASLMechanism:    saslMechs[saslIdx],
+			Username:         username,
+			Password:         password,
+			RequiredAcks:     -1,
+			MaxRetries:       3,
+			PublishChanges:   publishChanges,
+			Topic:            topic,
+			AutoCreateTopics: &autoCreatePtr,
 		}
 
 		// Trim whitespace from brokers
@@ -318,17 +330,18 @@ func (t *KafkaTab) showAddDialog() {
 
 		// Add to manager
 		t.app.kafkaMgr.AddCluster(&kafka.Config{
-			Name:           cfg.Name,
-			Enabled:        cfg.Enabled,
-			Brokers:        cfg.Brokers,
-			UseTLS:         cfg.UseTLS,
-			SASLMechanism:  kafka.SASLMechanism(cfg.SASLMechanism),
-			Username:       cfg.Username,
-			Password:       cfg.Password,
-			RequiredAcks:   cfg.RequiredAcks,
-			MaxRetries:     cfg.MaxRetries,
-			PublishChanges: cfg.PublishChanges,
-			Topic:          cfg.Topic,
+			Name:             cfg.Name,
+			Enabled:          cfg.Enabled,
+			Brokers:          cfg.Brokers,
+			UseTLS:           cfg.UseTLS,
+			SASLMechanism:    kafka.SASLMechanism(cfg.SASLMechanism),
+			Username:         cfg.Username,
+			Password:         cfg.Password,
+			RequiredAcks:     cfg.RequiredAcks,
+			MaxRetries:       cfg.MaxRetries,
+			PublishChanges:   cfg.PublishChanges,
+			Topic:            cfg.Topic,
+			AutoCreateTopics: autoCreateTopics,
 		})
 
 		if autoConnect {
@@ -344,7 +357,7 @@ func (t *KafkaTab) showAddDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 60, 24, func() {
+	t.app.showFormModal(pageName, form, 60, 26, func() {
 		t.app.closeModal(pageName)
 	})
 }
@@ -376,6 +389,9 @@ func (t *KafkaTab) showEditDialog() {
 		saslIdx = 3
 	}
 
+	// Default to true if not set
+	currentAutoCreate := cfg.AutoCreateTopics == nil || *cfg.AutoCreateTopics
+
 	form.AddInputField("Name:", cfg.Name, 30, nil, nil)
 	form.AddInputField("Brokers:", strings.Join(cfg.Brokers, ", "), 40, nil, nil)
 	form.AddCheckbox("Use TLS:", cfg.UseTLS, nil)
@@ -384,6 +400,7 @@ func (t *KafkaTab) showEditDialog() {
 	form.AddPasswordField("Password:", cfg.Password, 30, '*', nil)
 	form.AddCheckbox("Publish Changes:", cfg.PublishChanges, nil)
 	form.AddInputField("Topic:", cfg.Topic, 30, nil, nil)
+	form.AddCheckbox("Auto-create Topics:", currentAutoCreate, nil)
 	form.AddCheckbox("Auto-connect:", cfg.Enabled, nil)
 
 	originalName := cfg.Name
@@ -397,6 +414,7 @@ func (t *KafkaTab) showEditDialog() {
 		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
 		publishChanges := form.GetFormItemByLabel("Publish Changes:").(*tview.Checkbox).IsChecked()
 		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
+		autoCreateTopics := form.GetFormItemByLabel("Auto-create Topics:").(*tview.Checkbox).IsChecked()
 		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
 
 		if newName == "" || brokers == "" {
@@ -405,18 +423,20 @@ func (t *KafkaTab) showEditDialog() {
 		}
 
 		saslMechs := []string{"", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}
+		autoCreatePtr := autoCreateTopics
 		updated := config.KafkaConfig{
-			Name:           newName,
-			Enabled:        autoConnect,
-			Brokers:        strings.Split(brokers, ","),
-			UseTLS:         useTLS,
-			SASLMechanism:  saslMechs[newSaslIdx],
-			Username:       username,
-			Password:       password,
-			RequiredAcks:   cfg.RequiredAcks,
-			MaxRetries:     cfg.MaxRetries,
-			PublishChanges: publishChanges,
-			Topic:          topic,
+			Name:             newName,
+			Enabled:          autoConnect,
+			Brokers:          strings.Split(brokers, ","),
+			UseTLS:           useTLS,
+			SASLMechanism:    saslMechs[newSaslIdx],
+			Username:         username,
+			Password:         password,
+			RequiredAcks:     cfg.RequiredAcks,
+			MaxRetries:       cfg.MaxRetries,
+			PublishChanges:   publishChanges,
+			Topic:            topic,
+			AutoCreateTopics: &autoCreatePtr,
 		}
 
 		// Trim whitespace from brokers
@@ -430,17 +450,18 @@ func (t *KafkaTab) showEditDialog() {
 		// Update manager
 		t.app.kafkaMgr.RemoveCluster(originalName)
 		t.app.kafkaMgr.AddCluster(&kafka.Config{
-			Name:           updated.Name,
-			Enabled:        updated.Enabled,
-			Brokers:        updated.Brokers,
-			UseTLS:         updated.UseTLS,
-			SASLMechanism:  kafka.SASLMechanism(updated.SASLMechanism),
-			Username:       updated.Username,
-			Password:       updated.Password,
-			RequiredAcks:   updated.RequiredAcks,
-			MaxRetries:     updated.MaxRetries,
-			PublishChanges: updated.PublishChanges,
-			Topic:          updated.Topic,
+			Name:             updated.Name,
+			Enabled:          updated.Enabled,
+			Brokers:          updated.Brokers,
+			UseTLS:           updated.UseTLS,
+			SASLMechanism:    kafka.SASLMechanism(updated.SASLMechanism),
+			Username:         updated.Username,
+			Password:         updated.Password,
+			RequiredAcks:     updated.RequiredAcks,
+			MaxRetries:       updated.MaxRetries,
+			PublishChanges:   updated.PublishChanges,
+			Topic:            updated.Topic,
+			AutoCreateTopics: autoCreateTopics,
 		})
 
 		if autoConnect {
@@ -456,7 +477,7 @@ func (t *KafkaTab) showEditDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 60, 24, func() {
+	t.app.showFormModal(pageName, form, 60, 26, func() {
 		t.app.closeModal(pageName)
 	})
 }

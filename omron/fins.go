@@ -3,6 +3,8 @@ package omron
 import (
 	"encoding/binary"
 	"fmt"
+
+	"warlogix/logging"
 )
 
 // FINS command codes.
@@ -84,20 +86,29 @@ type FINSResponse struct {
 // ParseFINSResponse parses a FINS response.
 func ParseFINSResponse(data []byte) (*FINSResponse, error) {
 	if len(data) < 14 {
+		logging.DebugLog("FINS", "Response too short: %d bytes (need 14 minimum)", len(data))
 		return nil, fmt.Errorf("FINS response too short: %d bytes", len(data))
 	}
 
 	header, err := ParseFINSHeader(data[0:10])
 	if err != nil {
+		logging.DebugLog("FINS", "Header parse error: %v", err)
 		return nil, err
 	}
 
-	return &FINSResponse{
+	resp := &FINSResponse{
 		Header:  *header,
 		Command: binary.BigEndian.Uint16(data[10:12]),
 		EndCode: binary.BigEndian.Uint16(data[12:14]),
 		Data:    data[14:],
-	}, nil
+	}
+
+	// Log response details
+	logging.DebugLog("FINS", "Response: cmd=0x%04X endCode=0x%04X dataLen=%d SID=%d (DNA=%d DA1=%d DA2=%d)",
+		resp.Command, resp.EndCode, len(resp.Data), header.SID,
+		header.DNA, header.DA1, header.DA2)
+
+	return resp, nil
 }
 
 // BuildMemoryReadRequest builds a FINS memory read request.
@@ -108,6 +119,8 @@ func BuildMemoryReadRequest(area byte, address uint16, bitOffset byte, count uin
 	data[2] = byte(address)
 	data[3] = bitOffset
 	binary.BigEndian.PutUint16(data[4:6], count)
+	logging.DebugLog("FINS", "MemoryRead request: area=0x%02X(%s) address=%d.%d count=%d",
+		area, AreaName(area), address, bitOffset, count)
 	return data
 }
 
@@ -141,6 +154,7 @@ func FINSEndCodeError(endCode uint16) error {
 
 	mainCode := endCode >> 8
 	subCode := endCode & 0xFF
+	logging.DebugLog("FINS", "EndCode error: 0x%04X (main=0x%02X sub=0x%02X)", endCode, mainCode, subCode)
 
 	var msg string
 	switch mainCode {

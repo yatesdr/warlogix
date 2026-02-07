@@ -7,6 +7,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"warlogix/logging"
 )
 
 const (
@@ -70,34 +72,47 @@ func (t *transport) connect(address string, rack, slot int) error {
 	t.rack = rack
 	t.slot = slot
 
+	logging.DebugConnect("S7", address)
+	logging.DebugLog("S7", "Connection params: rack=%d, slot=%d", rack, slot)
+
 	// TCP connect
 	conn, err := net.DialTimeout("tcp", address, t.timeout)
 	if err != nil {
+		logging.DebugConnectError("S7", address, err)
 		return fmt.Errorf("TCP connect failed: %w", err)
 	}
 	t.conn = conn
 
+	logging.DebugLog("S7", "TCP connection established to %s", address)
+
 	// Set read/write deadlines
 	if err := t.conn.SetDeadline(time.Now().Add(t.timeout)); err != nil {
 		t.conn.Close()
+		logging.DebugError("S7", "set deadline", err)
 		return fmt.Errorf("failed to set deadline: %w", err)
 	}
 
 	// COTP connection
 	if err := t.cotpConnect(); err != nil {
 		t.conn.Close()
+		logging.DebugError("S7", "COTP connect", err)
 		return fmt.Errorf("COTP connect failed: %w", err)
 	}
+
+	logging.DebugLog("S7", "COTP connection established")
 
 	// S7 setup communication
 	pduSize, err := t.s7SetupComm()
 	if err != nil {
 		t.conn.Close()
+		logging.DebugError("S7", "S7 setup communication", err)
 		return fmt.Errorf("S7 setup failed: %w", err)
 	}
 	t.pduSize = pduSize
 
 	t.connected = true
+
+	logging.DebugConnectSuccess("S7", address, fmt.Sprintf("rack=%d, slot=%d, PDU=%d", rack, slot, pduSize))
 
 	// Clear deadline for ongoing operations
 	t.conn.SetDeadline(time.Time{})
@@ -109,6 +124,8 @@ func (t *transport) connect(address string, rack, slot int) error {
 func (t *transport) close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	logging.DebugDisconnect("S7", t.address, "close requested")
 
 	t.connected = false
 	if t.conn != nil {
@@ -126,18 +143,27 @@ func (t *transport) isConnected() bool {
 	return t.connected
 }
 
+// getPDUSize returns the negotiated PDU size.
+func (t *transport) getPDUSize() uint16 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.pduSize
+}
+
 // sendReceive sends an S7 request and receives the response.
 func (t *transport) sendReceive(s7Request []byte) ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if !t.connected || t.conn == nil {
+		logging.DebugLog("S7", "sendReceive called but not connected")
 		return nil, fmt.Errorf("not connected")
 	}
 
 	// Set deadline for this operation
 	if err := t.conn.SetDeadline(time.Now().Add(t.timeout)); err != nil {
 		t.connected = false
+		logging.DebugError("S7", "sendReceive set deadline", err)
 		return nil, fmt.Errorf("failed to set deadline: %w", err)
 	}
 
@@ -148,6 +174,7 @@ func (t *transport) sendReceive(s7Request []byte) ([]byte, error) {
 	// Send with TPKT framing
 	if err := t.sendTPKT(payload); err != nil {
 		t.connected = false
+		logging.DebugDisconnect("S7", t.address, fmt.Sprintf("send failed: %v", err))
 		return nil, err
 	}
 
@@ -155,14 +182,17 @@ func (t *transport) sendReceive(s7Request []byte) ([]byte, error) {
 	response, err := t.recvTPKT()
 	if err != nil {
 		t.connected = false
+		logging.DebugDisconnect("S7", t.address, fmt.Sprintf("recv failed: %v", err))
 		return nil, err
 	}
 
 	// Skip COTP DT header (3 bytes)
 	if len(response) < 3 {
+		logging.DebugLog("S7", "Response too short: %d bytes", len(response))
 		return nil, fmt.Errorf("response too short")
 	}
 	if response[1] != cotpDT {
+		logging.DebugLog("S7", "Expected COTP DT (0x%02X), got 0x%02X", cotpDT, response[1])
 		return nil, fmt.Errorf("expected COTP DT, got 0x%02X", response[1])
 	}
 
@@ -180,7 +210,11 @@ func (t *transport) sendTPKT(data []byte) error {
 	}
 
 	packet := append(header, data...)
+	logging.DebugTX("S7", packet)
 	_, err := t.conn.Write(packet)
+	if err != nil {
+		logging.DebugError("S7", "sendTPKT write", err)
+	}
 	return err
 }
 
@@ -189,23 +223,31 @@ func (t *transport) recvTPKT() ([]byte, error) {
 	// Read TPKT header
 	header := make([]byte, tpktHeaderSize)
 	if _, err := io.ReadFull(t.conn, header); err != nil {
+		logging.DebugError("S7", "recvTPKT read header", err)
 		return nil, fmt.Errorf("failed to read TPKT header: %w", err)
 	}
 
 	if header[0] != tpktVersion {
+		logging.DebugLog("S7", "RX invalid TPKT version: %d", header[0])
 		return nil, fmt.Errorf("invalid TPKT version: %d", header[0])
 	}
 
 	length := int(binary.BigEndian.Uint16(header[2:4]))
 	if length < tpktHeaderSize {
+		logging.DebugLog("S7", "RX invalid TPKT length: %d", length)
 		return nil, fmt.Errorf("invalid TPKT length: %d", length)
 	}
 
 	// Read payload
 	payload := make([]byte, length-tpktHeaderSize)
 	if _, err := io.ReadFull(t.conn, payload); err != nil {
+		logging.DebugError("S7", "recvTPKT read payload", err)
 		return nil, fmt.Errorf("failed to read TPKT payload: %w", err)
 	}
+
+	// Log complete received packet
+	fullPacket := append(header, payload...)
+	logging.DebugRX("S7", fullPacket)
 
 	return payload, nil
 }

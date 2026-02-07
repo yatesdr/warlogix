@@ -227,8 +227,9 @@ type KafkaConfig struct {
 	RetryBackoff  time.Duration `yaml:"retry_backoff,omitempty"`
 
 	// Tag publishing settings
-	PublishChanges bool   `yaml:"publish_changes,omitempty"` // Publish tag changes to Kafka
-	Topic          string `yaml:"topic,omitempty"`           // Topic for tag change publishing
+	PublishChanges   bool   `yaml:"publish_changes,omitempty"`    // Publish tag changes to Kafka
+	Topic            string `yaml:"topic,omitempty"`              // Topic for tag change publishing
+	AutoCreateTopics *bool  `yaml:"auto_create_topics,omitempty"` // Auto-create topics if they don't exist (default true)
 }
 
 // TriggerCondition defines when a trigger fires.

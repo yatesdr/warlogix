@@ -33,19 +33,21 @@ type Config struct {
 	RetryBackoff time.Duration `yaml:"retry_backoff,omitempty"`
 
 	// Tag publishing settings
-	PublishChanges bool   `yaml:"publish_changes,omitempty"` // Publish tag changes to Kafka
-	Topic          string `yaml:"topic,omitempty"`           // Topic for tag change publishing
+	PublishChanges   bool   `yaml:"publish_changes,omitempty"`    // Publish tag changes to Kafka
+	Topic            string `yaml:"topic,omitempty"`              // Topic for tag change publishing
+	AutoCreateTopics bool   `yaml:"auto_create_topics,omitempty"` // Auto-create topics if they don't exist (default true)
 }
 
 // DefaultConfig returns a Kafka configuration with sensible defaults.
 func DefaultConfig(name string) Config {
 	return Config{
-		Name:         name,
-		Enabled:      false,
-		Brokers:      []string{"localhost:9092"},
-		RequiredAcks: -1, // All replicas must acknowledge
-		MaxRetries:   3,
-		RetryBackoff: 100 * time.Millisecond,
+		Name:             name,
+		Enabled:          false,
+		Brokers:          []string{"localhost:9092"},
+		RequiredAcks:     -1, // All replicas must acknowledge
+		MaxRetries:       3,
+		RetryBackoff:     100 * time.Millisecond,
+		AutoCreateTopics: true,
 	}
 }
 

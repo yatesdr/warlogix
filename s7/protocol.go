@@ -3,6 +3,8 @@ package s7
 import (
 	"encoding/binary"
 	"fmt"
+
+	"warlogix/logging"
 )
 
 const (
@@ -145,6 +147,7 @@ func parseReadResponse(data []byte, count int) ([][]byte, []error) {
 
 	// Minimum header size check
 	if len(data) < 12 {
+		logging.DebugLog("S7", "parseReadResponse: response too short (%d bytes, need 12)", len(data))
 		for i := range errors {
 			errors[i] = fmt.Errorf("response too short")
 		}
@@ -153,6 +156,7 @@ func parseReadResponse(data []byte, count int) ([][]byte, []error) {
 
 	// Check protocol ID
 	if data[0] != s7ProtocolID {
+		logging.DebugLog("S7", "parseReadResponse: invalid protocol ID 0x%02X", data[0])
 		for i := range errors {
 			errors[i] = fmt.Errorf("invalid protocol ID: 0x%02X", data[0])
 		}
@@ -161,6 +165,20 @@ func parseReadResponse(data []byte, count int) ([][]byte, []error) {
 
 	// Check message type
 	if data[1] != s7MsgAckData {
+		// Message type 0x02 is ACK (no data) - usually indicates an error
+		// ACK format: [protocolID, msgType, reserved(2), pduRef(2), paramLen(2), dataLen(2), errClass, errCode]
+		if data[1] == 0x02 && len(data) >= 12 {
+			// Error class/code are at positions 10-11 (same as AckData)
+			errClass := data[10]
+			errCode := data[11]
+			err := S7Error{Class: errClass, Code: errCode}
+			logging.DebugLog("S7", "parseReadResponse: ACK error class=0x%02X code=0x%02X: %v", errClass, errCode, err)
+			for i := range errors {
+				errors[i] = err
+			}
+			return results, errors
+		}
+		logging.DebugLog("S7", "parseReadResponse: unexpected message type 0x%02X", data[1])
 		for i := range errors {
 			errors[i] = fmt.Errorf("unexpected message type: 0x%02X", data[1])
 		}
@@ -170,6 +188,7 @@ func parseReadResponse(data []byte, count int) ([][]byte, []error) {
 	// Check error class/code
 	if data[10] != 0 || data[11] != 0 {
 		err := S7Error{Class: data[10], Code: data[11]}
+		logging.DebugLog("S7", "parseReadResponse: S7 error class=0x%02X code=0x%02X: %v", data[10], data[11], err)
 		for i := range errors {
 			errors[i] = err
 		}
@@ -180,9 +199,12 @@ func parseReadResponse(data []byte, count int) ([][]byte, []error) {
 	paramLen := binary.BigEndian.Uint16(data[6:8])
 	dataLen := binary.BigEndian.Uint16(data[8:10])
 
+	logging.DebugLog("S7", "parseReadResponse: paramLen=%d dataLen=%d totalLen=%d", paramLen, dataLen, len(data))
+
 	// Skip header (12 bytes) and parameters
 	dataStart := 12 + int(paramLen)
 	if dataStart > len(data) || int(dataLen) > len(data)-dataStart {
+		logging.DebugLog("S7", "parseReadResponse: invalid lengths - dataStart=%d dataLen=%d totalLen=%d", dataStart, dataLen, len(data))
 		for i := range errors {
 			errors[i] = fmt.Errorf("invalid response lengths")
 		}
@@ -193,44 +215,71 @@ func parseReadResponse(data []byte, count int) ([][]byte, []error) {
 	pos := dataStart
 	for i := 0; i < count; i++ {
 		if pos >= len(data) {
-			errors[i] = fmt.Errorf("unexpected end of data")
-			continue
+			// No more data - mark remaining items as failed
+			logging.DebugLog("S7", "parseReadResponse item %d: unexpected end of data at pos=%d, failing remaining %d items",
+				i, pos, count-i)
+			for j := i; j < count; j++ {
+				errors[j] = fmt.Errorf("unexpected end of data (item %d of %d)", j+1, count)
+			}
+			break
 		}
 
 		// Data item header: return code, transport size, length
 		returnCode := data[pos]
 		if returnCode != dataItemSuccess {
-			errors[i] = fmt.Errorf("%s", dataItemError(returnCode))
-			// Skip past this item - look for next item
-			// For error items, typically 1 byte (just the return code)
+			errMsg := dataItemError(returnCode)
+			logging.DebugLog("S7", "parseReadResponse item %d: error returnCode=0x%02X (%s)", i, returnCode, errMsg)
+			errors[i] = fmt.Errorf("%s", errMsg)
+			// Skip past this item - S7 error items are 1 byte (just the return code)
 			pos++
 			continue
 		}
 
 		// Success - parse data
 		if pos+4 > len(data) {
-			errors[i] = fmt.Errorf("data item header too short")
-			continue
+			// Header incomplete - mark remaining items as failed
+			logging.DebugLog("S7", "parseReadResponse item %d: header too short at pos=%d, need 4 bytes, have %d, failing remaining items",
+				i, pos, len(data)-pos)
+			for j := i; j < count; j++ {
+				errors[j] = fmt.Errorf("data item header too short")
+			}
+			break
 		}
 
 		transportSize := data[pos+1]
-		bitLen := binary.BigEndian.Uint16(data[pos+2 : pos+4])
+		dataLen := binary.BigEndian.Uint16(data[pos+2 : pos+4])
 
-		// Calculate byte length
+		// Calculate byte length from response
+		// S7 response transport sizes differ from request codes:
+		//   0x03 = BIT access (length in bits)
+		//   0x04 = BYTE/WORD/INT access (length in bits)
+		//   0x05 = INTEGER (length in bits)
+		//   0x06 = DINT (length in bits)
+		//   0x07 = REAL (length in bits)
+		//   0x09 = OCTET STRING (length in bytes)
+		// Only 0x09 (octet string) has length in bytes; all others are in bits
 		var byteLen int
-		if transportSize == tsBIT || transportSize == tsINT || transportSize == tsDINT {
-			// For bit and some types, length is in bits
-			byteLen = int((bitLen + 7) / 8)
+		if transportSize == 0x09 {
+			// Octet string: length is in bytes
+			byteLen = int(dataLen)
 		} else {
-			// For byte-oriented types, length is in bytes
-			byteLen = int(bitLen)
+			// All other types: length is in bits
+			byteLen = int((dataLen + 7) / 8)
 		}
+
+		logging.DebugLog("S7", "parseReadResponse item %d: transportSize=0x%02X dataLen=%d (bits) byteLen=%d pos=%d remaining=%d",
+			i, transportSize, dataLen, byteLen, pos, len(data)-pos)
 
 		pos += 4 // Skip header
 
 		if pos+byteLen > len(data) {
-			errors[i] = fmt.Errorf("data truncated")
-			continue
+			// Data truncated - mark remaining items as failed
+			logging.DebugLog("S7", "parseReadResponse item %d: data truncated - need %d bytes at pos=%d, have %d remaining, failing remaining items",
+				i, byteLen, pos, len(data)-pos)
+			for j := i; j < count; j++ {
+				errors[j] = fmt.Errorf("data truncated: need %d bytes, have %d", byteLen, len(data)-pos)
+			}
+			break
 		}
 
 		results[i] = make([]byte, byteLen)
@@ -357,17 +406,22 @@ func addressToS7Any(addr *Address) []byte {
 		areaCode = s7AreaDB
 	}
 
-	// Determine transport size and count
+	// Determine transport size
 	transportSize := getTransportSize(addr.DataType, addr.BitNum >= 0)
-	count := addr.Size
+
+	// Determine count - the number of transport-sized elements to read
+	var count int
 	if addr.BitNum >= 0 {
 		count = 1 // Single bit
-	}
-
-	// For byte-based reads, S7 expects element count, not byte count
-	// We specify transport size and let count be the number of bytes
-	if transportSize == tsBYTE {
-		// count is already in bytes, which is what we want
+	} else if transportSize == tsBYTE || transportSize == tsCHAR {
+		// For byte transport, count is in bytes
+		count = addr.Size
+	} else {
+		// For larger transport sizes (WORD, DWORD, etc.), count is number of elements
+		count = addr.Count
+		if count < 1 {
+			count = 1
+		}
 	}
 
 	// Encode address: (byte_offset << 3) | bit_number
@@ -381,6 +435,9 @@ func addressToS7Any(addr *Address) []byte {
 	if addr.Area != AreaDB {
 		dbNumber = 0
 	}
+
+	logging.DebugLog("S7", "addressToS7Any: area=%s db=%d offset=%d bitAddr=%d transportSize=0x%02X count=%d",
+		addr.Area, dbNumber, addr.Offset, bitAddr, transportSize, count)
 
 	return []byte{
 		s7AnySpecType, // Specification type

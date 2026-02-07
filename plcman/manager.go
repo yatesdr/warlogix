@@ -12,6 +12,7 @@ import (
 	"warlogix/ads"
 	"warlogix/config"
 	"warlogix/driver"
+	"warlogix/logging"
 	"warlogix/logix"
 	"warlogix/omron"
 	"warlogix/s7"
@@ -387,17 +388,27 @@ func (w *PLCWorker) poll() {
 	aliasMap := make(map[string]string)      // Tag name -> alias
 	typeMap := make(map[string]string)       // Tag name -> configured data type
 	ignoreMap := make(map[string][]string)   // Tag name -> list of members to ignore for change detection
+
+	// For S7 family, normalize keys to uppercase since S7 addresses are case-insensitive
+	normalizeKey := func(s string) string {
+		if family == config.FamilyS7 {
+			return strings.ToUpper(s)
+		}
+		return s
+	}
+
 	for _, sel := range cfg.Tags {
 		if sel.Enabled {
 			tagsToRead = append(tagsToRead, sel.Name)
 		}
-		writableMap[sel.Name] = sel.Writable
-		aliasMap[sel.Name] = sel.Alias
+		key := normalizeKey(sel.Name)
+		writableMap[key] = sel.Writable
+		aliasMap[key] = sel.Alias
 		if sel.DataType != "" {
-			typeMap[sel.Name] = sel.DataType
+			typeMap[sel.Name] = sel.DataType // typeMap uses original name for driver
 		}
 		if len(sel.IgnoreChanges) > 0 {
-			ignoreMap[sel.Name] = sel.IgnoreChanges
+			ignoreMap[key] = sel.IgnoreChanges
 		}
 	}
 	oldStableValues := make(map[string]interface{})
@@ -469,7 +480,7 @@ func (w *PLCWorker) poll() {
 		values = make([]*TagValue, len(driverValues))
 		for i, dv := range driverValues {
 			values[i] = FromDriverTagValue(dv)
-			if ignoreList, ok := ignoreMap[dv.Name]; ok {
+			if ignoreList, ok := ignoreMap[normalizeKey(dv.Name)]; ok {
 				values[i].SetIgnoreList(ignoreList)
 			}
 		}
@@ -490,8 +501,10 @@ func (w *PLCWorker) poll() {
 				plc.Driver.Close()
 				plc.Driver = nil
 			}
+			logging.DebugLog("plcman", "POLL %s: read error, driver disconnected: %v", plcName, err)
 		} else {
 			plc.Status = StatusError
+			logging.DebugLog("plcman", "POLL %s: read error (driver still connected): %v", plcName, err)
 		}
 
 		plcNameForLog := plc.Config.Name
@@ -509,6 +522,7 @@ func (w *PLCWorker) poll() {
 		shouldReconnect := autoConnect && (clientDisconnected || drv.IsConnectionError(err))
 
 		if shouldReconnect {
+			logging.DebugLog("plcman", "POLL %s: scheduling reconnect after error", plcNameForLog)
 			w.manager.log("[yellow]PLC %s connection lost, scheduling reconnect[-]", plcNameForLog)
 			go w.manager.scheduleReconnect(plcNameForLog)
 		}
@@ -528,13 +542,15 @@ func (w *PLCWorker) poll() {
 			oldStableVal, existed := oldStableValues[v.Name]
 			// Check if stable value changed (or is new)
 			if !existed || fmt.Sprintf("%v", oldStableVal) != fmt.Sprintf("%v", newStableVal) {
+				// Use normalized key for map lookups (S7 addresses are case-insensitive)
+				lookupKey := normalizeKey(v.Name)
 				vc := ValueChange{
 					PLCName:  plcName,
 					TagName:  v.Name,
-					Alias:    aliasMap[v.Name],
+					Alias:    aliasMap[lookupKey],
 					TypeName: v.TypeName(),
 					Value:    newVal,
-					Writable: writableMap[v.Name],
+					Writable: writableMap[lookupKey],
 					Family:   string(family),
 				}
 				// For S7, set Address to uppercase version of TagName
@@ -764,12 +780,17 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	plc.LastError = nil
 	cfg := plc.Config
 	family := cfg.GetFamily()
+	plcName := cfg.Name
 	plc.mu.Unlock()
 	m.markStatusDirty()
+
+	logging.DebugLog("plcman", "CONNECT %s: starting connection (family=%s address=%s)",
+		plcName, family, cfg.Address)
 
 	// Create driver from config
 	drv, err := driver.Create(cfg)
 	if err != nil {
+		logging.DebugLog("plcman", "CONNECT %s: driver creation failed: %v", plcName, err)
 		plc.mu.Lock()
 		plc.Status = StatusError
 		plc.LastError = err
@@ -778,17 +799,24 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 		return err
 	}
 
+	logging.DebugLog("plcman", "CONNECT %s: driver created, attempting connection", plcName)
+
 	// Connect via driver
 	if err := drv.Connect(); err != nil {
 		plc.mu.Lock()
 		plc.ConnRetries++
+		retryCount := plc.ConnRetries
 		if plc.ConnRetries >= MaxConnectRetries {
 			plc.RetryLimited = true
 			plc.Status = StatusDisconnected
 			plc.LastError = fmt.Errorf("retry limit reached (%d attempts): %w", MaxConnectRetries, err)
+			logging.DebugLog("plcman", "CONNECT %s: FAILED - retry limit reached (%d/%d): %v",
+				plcName, retryCount, MaxConnectRetries, err)
 		} else {
 			plc.Status = StatusError
 			plc.LastError = err
+			logging.DebugLog("plcman", "CONNECT %s: FAILED attempt %d/%d: %v",
+				plcName, retryCount, MaxConnectRetries, err)
 		}
 		name := plc.Config.Name
 		lastErr := plc.LastError
@@ -798,8 +826,14 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 		return err
 	}
 
+	logging.DebugLog("plcman", "CONNECT %s: connection established, mode=%s", plcName, drv.ConnectionMode())
+
 	// Get device info
 	deviceInfo, _ := drv.GetDeviceInfo()
+	if deviceInfo != nil {
+		logging.DebugLog("plcman", "CONNECT %s: device info - vendor=%s model=%s version=%s serial=%s",
+			plcName, deviceInfo.Vendor, deviceInfo.Model, deviceInfo.Version, deviceInfo.SerialNumber)
+	}
 
 	// Check if we have cached tags from a previous connection
 	plc.mu.RLock()
@@ -816,11 +850,16 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 			// Fast reconnect: reuse cached tags
 			programs = cachedPrograms
 			tags = cachedTags
+			logging.DebugLog("plcman", "CONNECT %s: using cached tags (%d tags, %d programs)",
+				plcName, len(tags), len(programs))
 			m.log("[cyan]PLC %s using cached tags (%d tags)[-]", plc.Config.Name, len(tags))
 		} else {
 			// Full discovery via driver
+			logging.DebugLog("plcman", "CONNECT %s: starting tag discovery", plcName)
 			programs, _ = drv.Programs()
 			tags, _ = drv.AllTags()
+			logging.DebugLog("plcman", "CONNECT %s: discovered %d programs, %d tags",
+				plcName, len(programs), len(tags))
 		}
 	}
 
@@ -885,8 +924,11 @@ func (m *Manager) Disconnect(name string) error {
 	m.mu.RUnlock()
 
 	if !exists {
+		logging.DebugLog("plcman", "DISCONNECT %s: PLC not found", name)
 		return nil
 	}
+
+	logging.DebugLog("plcman", "DISCONNECT %s: closing connection", name)
 
 	plc.mu.Lock()
 	if plc.Driver != nil {
@@ -899,6 +941,7 @@ func (m *Manager) Disconnect(name string) error {
 	plc.mu.Unlock()
 	m.markStatusDirty()
 
+	logging.DebugLog("plcman", "DISCONNECT %s: connection closed", name)
 	return nil
 }
 
@@ -926,9 +969,12 @@ func (m *Manager) Start() {
 	m.mu.Lock()
 	if m.ctx != nil {
 		m.mu.Unlock()
+		logging.DebugLog("plcman", "START: already running, ignoring")
 		return // Already running
 	}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
+
+	logging.DebugLog("plcman", "START: initializing manager with %d PLCs", len(m.plcs))
 
 	// Start workers for all existing PLCs
 	for name, plc := range m.plcs {
@@ -936,6 +982,7 @@ func (m *Manager) Start() {
 		worker := newPLCWorker(plc, m, pollRate)
 		m.workers[name] = worker
 		worker.Start()
+		logging.DebugLog("plcman", "START: started worker for %s (poll_rate=%v)", name, pollRate)
 	}
 	m.mu.Unlock()
 
@@ -950,10 +997,14 @@ func (m *Manager) Start() {
 	// Start the reconnection watchdog
 	m.wg.Add(1)
 	go m.watchdogLoop()
+
+	logging.DebugLog("plcman", "START: manager started successfully")
 }
 
 // Stop halts all background polling.
 func (m *Manager) Stop() {
+	logging.DebugLog("plcman", "STOP: shutting down manager")
+
 	m.mu.Lock()
 	if m.cancel != nil {
 		m.cancel()
@@ -967,6 +1018,8 @@ func (m *Manager) Stop() {
 	m.workers = make(map[string]*PLCWorker)
 	m.mu.Unlock()
 
+	logging.DebugLog("plcman", "STOP: stopping %d workers", len(workers))
+
 	// Stop workers outside of lock with timeout
 	// Workers may be blocked on PLC reads, so don't wait forever
 	workersDone := make(chan struct{})
@@ -978,8 +1031,9 @@ func (m *Manager) Stop() {
 	}()
 	select {
 	case <-workersDone:
+		logging.DebugLog("plcman", "STOP: all workers stopped")
 	case <-time.After(500 * time.Millisecond):
-		// Timeout - proceed anyway
+		logging.DebugLog("plcman", "STOP: worker shutdown timeout, proceeding")
 	}
 
 	// Wait for manager goroutines with timeout
@@ -990,14 +1044,17 @@ func (m *Manager) Stop() {
 	}()
 	select {
 	case <-done:
+		logging.DebugLog("plcman", "STOP: manager goroutines completed")
 	case <-time.After(500 * time.Millisecond):
-		// Timeout - proceed anyway
+		logging.DebugLog("plcman", "STOP: manager goroutine timeout, proceeding")
 	}
 
 	m.mu.Lock()
 	m.ctx = nil
 	m.cancel = nil
 	m.mu.Unlock()
+
+	logging.DebugLog("plcman", "STOP: manager stopped")
 }
 
 // batchedUpdateLoop aggregates changes and triggers UI updates at a controlled rate.
@@ -1127,6 +1184,8 @@ func (m *Manager) checkReconnections() {
 	}
 	m.mu.RUnlock()
 
+	logging.DebugLog("plcman", "WATCHDOG: checking %d PLCs for reconnection", len(plcs))
+
 	for _, plc := range plcs {
 		plc.mu.RLock()
 		status := plc.Status
@@ -1148,10 +1207,13 @@ func (m *Manager) checkReconnections() {
 		m.reconnectingMu.Lock()
 		if m.reconnecting[name] {
 			m.reconnectingMu.Unlock()
+			logging.DebugLog("plcman", "WATCHDOG %s: skipped - reconnection already in progress", name)
 			continue // Skip - reconnection already in progress
 		}
 		m.reconnecting[name] = true
 		m.reconnectingMu.Unlock()
+
+		logging.DebugLog("plcman", "WATCHDOG %s: scheduling reconnection (status=%s)", name, status)
 
 		// Attempt reconnection in a separate goroutine to not block the watchdog
 		go func(p *ManagedPLC, n string) {
@@ -1175,6 +1237,7 @@ func (m *Manager) checkReconnections() {
 // scheduleReconnect schedules a reconnection attempt for a PLC after a short delay.
 // This is called when a connection error is detected during polling.
 func (m *Manager) scheduleReconnect(name string) {
+	logging.DebugLog("plcman", "RECONNECT %s: scheduled, waiting 2s before attempt", name)
 	// Wait a short time before attempting reconnection to avoid rapid retries
 	time.Sleep(2 * time.Second)
 
@@ -1183,6 +1246,7 @@ func (m *Manager) scheduleReconnect(name string) {
 	m.mu.RUnlock()
 
 	if !exists {
+		logging.DebugLog("plcman", "RECONNECT %s: cancelled - PLC no longer exists", name)
 		return
 	}
 
@@ -1193,6 +1257,7 @@ func (m *Manager) scheduleReconnect(name string) {
 
 	// Only reconnect if still disconnected/error and enabled
 	if !enabled || status == StatusConnected || status == StatusConnecting {
+		logging.DebugLog("plcman", "RECONNECT %s: skipped - enabled=%v status=%s", name, enabled, status)
 		return
 	}
 
@@ -1200,6 +1265,7 @@ func (m *Manager) scheduleReconnect(name string) {
 	m.reconnectingMu.Lock()
 	if m.reconnecting[name] {
 		m.reconnectingMu.Unlock()
+		logging.DebugLog("plcman", "RECONNECT %s: skipped - already in progress", name)
 		return
 	}
 	m.reconnecting[name] = true
@@ -1217,6 +1283,7 @@ func (m *Manager) scheduleReconnect(name string) {
 	plc.RetryLimited = false
 	plc.mu.Unlock()
 
+	logging.DebugLog("plcman", "RECONNECT %s: attempting reconnection", name)
 	m.connectPLC(plc)
 }
 
@@ -1315,12 +1382,16 @@ func (m *Manager) handleConnectionError(plcName string, plc *ManagedPLC, err err
 	autoConnect := plc.Config.Enabled
 	plc.mu.Unlock()
 
+	logging.DebugLog("plcman", "ERROR %s: connection error (wasConnected=%v autoConnect=%v): %v",
+		plcName, wasConnected, autoConnect, err)
+
 	if wasConnected {
 		m.log("[yellow]PLC %s connection error: %v[-]", plcName, err)
 		m.markStatusDirty()
 
 		// Schedule reconnection if auto-connect is enabled
 		if autoConnect {
+			logging.DebugLog("plcman", "ERROR %s: scheduling reconnection", plcName)
 			go m.scheduleReconnect(plcName)
 		}
 	}
@@ -1456,22 +1527,33 @@ func (m *Manager) GetAllCurrentValues() []ValueChange {
 		plc.mu.RLock()
 		plcName := plc.Config.Name
 		family := plc.Config.GetFamily()
+
+		// For S7 family, normalize keys to uppercase since S7 addresses are case-insensitive
+		normalizeKey := func(s string) string {
+			if family == config.FamilyS7 {
+				return strings.ToUpper(s)
+			}
+			return s
+		}
+
 		// Build lookup maps from config
 		writableMap := make(map[string]bool)
 		aliasMap := make(map[string]string)
 		for _, tag := range plc.Config.Tags {
-			writableMap[tag.Name] = tag.Writable
-			aliasMap[tag.Name] = tag.Alias
+			key := normalizeKey(tag.Name)
+			writableMap[key] = tag.Writable
+			aliasMap[key] = tag.Alias
 		}
 		for tagName, val := range plc.Values {
 			if val != nil && val.Error == nil {
+				lookupKey := normalizeKey(tagName)
 				vc := ValueChange{
 					PLCName:  plcName,
 					TagName:  tagName,
-					Alias:    aliasMap[tagName],
+					Alias:    aliasMap[lookupKey],
 					TypeName: val.TypeName(),
 					Value:    val.GoValue(),
-					Writable: writableMap[tagName],
+					Writable: writableMap[lookupKey],
 					Family:   string(family),
 				}
 				// For S7, set Address to uppercase version of TagName

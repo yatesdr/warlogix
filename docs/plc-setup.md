@@ -331,3 +331,34 @@ tags:
 ```
 
 The alias appears in all published messages instead of the raw address.
+
+---
+
+## Debugging Connection Issues
+
+For troubleshooting PLC communication problems, use the `--log-debug` flag:
+
+```bash
+./warlogix --log-debug
+```
+
+This creates a `debug.log` file with detailed protocol information:
+
+- Connection/disconnection events with parameters
+- Raw protocol bytes (hex dumps) for TX/RX packets
+- Parsed request/response details
+- Error codes and descriptions
+
+**Example debug output for S7:**
+```
+[S7] Connecting to 192.168.1.102 (rack=0, slot=0)
+[S7] TX: 03 00 00 16 11 e0 00 00 00 01 00 c0 01 0a c1 02 01 00 c2 02 01 00
+[S7] RX: 03 00 00 16 11 d0 00 01 00 01 00 c0 01 0a c1 02 01 00 c2 02 01 00
+[S7] Read "DB1.0": area=DB db=1 offset=0 type=DINT elemSize=4 count=1
+```
+
+This is invaluable for diagnosing:
+- Incorrect slot/rack configuration
+- Network timeout issues
+- Protocol errors from the PLC
+- Data type mismatches

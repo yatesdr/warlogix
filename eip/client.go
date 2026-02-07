@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"warlogix/logging"
 )
 
 const (
@@ -108,12 +110,17 @@ func (e *EipClient) Connect() error {
 	timeout := e.timeout
 	e.mu.Unlock()
 
+	logging.DebugConnect("EIP", connString)
+
 	// Dial with timeout.
 	d := net.Dialer{Timeout: timeout}
 	conn, err := d.Dial("tcp", connString)
 	if err != nil {
+		logging.DebugConnectError("EIP", connString, err)
 		return fmt.Errorf("Failed in Connect: %w", err)
 	}
+
+	logging.DebugLog("EIP", "TCP connection established to %s", connString)
 
 	// Set up a keep-alive.
 	if tc, ok := conn.(*net.TCPConn); ok {
@@ -136,11 +143,14 @@ func (e *EipClient) Connect() error {
 		e.session = oldSession
 		e.mu.Unlock()
 		_ = conn.Close()
+		logging.DebugError("EIP", "RegisterSession", err)
 		return fmt.Errorf("Connect: failed to register session. %w", err)
 	}
 
 	e.session = session
 	e.mu.Unlock()
+
+	logging.DebugConnectSuccess("EIP", connString, fmt.Sprintf("session=0x%08X", session))
 
 	if oldConn != nil {
 		_ = oldConn.Close()
@@ -164,6 +174,8 @@ func (e *EipClient) Disconnect() error {
 		e.session = 0
 		return nil
 	}
+
+	logging.DebugDisconnect("EIP", e.ipAddr, "client disconnect requested")
 
 	// Best-effort to unregister existing session.
 	if e.session != 0 {
@@ -288,7 +300,12 @@ func (e *EipClient) sendEncap(msg EipEncap) error {
 	if e == nil || e.conn == nil {
 		return fmt.Errorf("sendEncap: not connected")
 	}
-	_, err := e.conn.Write(msg.Bytes())
+	data := msg.Bytes()
+	logging.DebugTX("EIP", data)
+	_, err := e.conn.Write(data)
+	if err != nil {
+		logging.DebugError("EIP", "sendEncap write", err)
+	}
 	return err
 }
 
@@ -301,6 +318,7 @@ func (e *EipClient) recvEncap() (*EipEncap, error) {
 	header := make([]byte, 24)
 	_, err := io.ReadFull(e.conn, header)
 	if err != nil {
+		logging.DebugError("EIP", "recvEncap read header", err)
 		return nil, fmt.Errorf("SendRecv: Error reading Encap header. %w", err)
 	}
 
@@ -310,12 +328,14 @@ func (e *EipClient) recvEncap() (*EipEncap, error) {
 
 	// Sanity checks before proceeding.
 	if payload_length > 65511 {
+		logging.DebugLog("EIP", "RX excessive payload length: %d", payload_length)
 		return nil, fmt.Errorf("SendRecv: Payload excessive.  Payload Length: %d", payload_length)
 	}
 	// Session handle validation:
 	// - Session 0 in response is always valid (used by ListIdentity, etc.)
 	// - Otherwise, response session must match our session
 	if sessionHandle != 0 && e.session != 0 && sessionHandle != e.session {
+		logging.DebugLog("EIP", "RX session mismatch: expected 0x%08X, got 0x%08X", e.session, sessionHandle)
 		return nil, fmt.Errorf("SendRecv: Session mismatch in response.  Need %d, Got %d", e.session, sessionHandle)
 	}
 
@@ -323,8 +343,13 @@ func (e *EipClient) recvEncap() (*EipEncap, error) {
 	payload := make([]byte, payload_length)
 	_, err = io.ReadFull(e.conn, payload)
 	if err != nil {
+		logging.DebugError("EIP", "recvEncap read payload", err)
 		return nil, fmt.Errorf("SendRecv: Failed to read payload. %w", err)
 	}
+
+	// Log the complete received packet
+	fullPacket := append(header, payload...)
+	logging.DebugRX("EIP", fullPacket)
 
 	// Copy the context bytes to load into Encap.
 	var ctx [8]byte

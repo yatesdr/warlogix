@@ -36,12 +36,6 @@ func (m *EipEncap) Bytes() []byte {
 	return buf
 }
 
-// Print for debug
-func (m *EipEncap) Print() {
-	fmt.Println("Command: ", m.command)
-	fmt.Println("Length: ", m.length)
-}
-
 // Generate a LittleEndian encoded byte slice for RrData.
 func (r *EipCommandData) Bytes() []byte {
 	raw := binary.LittleEndian.AppendUint32(nil, r.interfaceHandle)

@@ -1196,6 +1196,9 @@ func (t *BrowserTab) clearTree() {
 }
 
 func (t *BrowserTab) loadTags() {
+	// Set current node to root before clearing to prevent tview from
+	// having a dangling reference to a destroyed node (which causes cursor jump)
+	t.tree.SetCurrentNode(t.treeRoot)
 	t.treeRoot.ClearChildren()
 	t.tagNodes = make(map[string]*tview.TreeNode)
 	t.enabledTags = make(map[string]bool)

@@ -11,6 +11,7 @@ import (
 
 	"warlogix/cip"
 	"warlogix/eip"
+	"warlogix/logging"
 )
 
 // CIP service codes for Read/Write Tag operations.
@@ -131,9 +132,13 @@ func Connect(address string, opts ...Option) (*Client, error) {
 		opt(c)
 	}
 
+	logging.DebugLog("Omron", "Connect to %s transport=%s port=%d network=%d node=%d unit=%d srcNode=%d timeout=%v",
+		address, c.transport, c.port, c.network, c.node, c.unit, c.srcNode, c.timeout)
+
 	switch c.transport {
 	case TransportFINS:
 		// Try TCP first (more reliable), fall back to UDP if TCP fails
+		logging.DebugLog("Omron", "Auto transport mode: will try TCP first, then UDP")
 		return c.connectFINSWithFallback()
 	case TransportFINSUDP:
 		return c.connectFINSUDP()
@@ -142,6 +147,7 @@ func Connect(address string, opts ...Option) (*Client, error) {
 	case TransportEIP:
 		return c.connectEIP()
 	default:
+		logging.DebugLog("Omron", "Unsupported transport: %s", c.transport)
 		return nil, fmt.Errorf("unsupported transport: %s", c.transport)
 	}
 }
@@ -149,20 +155,27 @@ func Connect(address string, opts ...Option) (*Client, error) {
 // connectFINSWithFallback tries TCP first, then falls back to UDP if TCP fails.
 func (c *Client) connectFINSWithFallback() (*Client, error) {
 	// Try TCP first
+	logging.DebugLog("Omron", "Attempting FINS/TCP connection to %s:%d", c.address, c.port)
 	tcpErr := c.tryConnectFINSTCP()
 	if tcpErr == nil {
 		c.transport = TransportFINSTCP
+		logging.DebugLog("Omron", "FINS/TCP connection successful")
 		return c, nil
 	}
+	logging.DebugLog("Omron", "FINS/TCP failed: %v - falling back to UDP", tcpErr)
 
 	// TCP failed, try UDP
+	logging.DebugLog("Omron", "Attempting FINS/UDP connection to %s:%d", c.address, c.port)
 	udpErr := c.tryConnectFINSUDP()
 	if udpErr == nil {
 		c.transport = TransportFINSUDP
+		logging.DebugLog("Omron", "FINS/UDP connection successful")
 		return c, nil
 	}
+	logging.DebugLog("Omron", "FINS/UDP also failed: %v", udpErr)
 
 	// Both failed, return the TCP error (usually more informative)
+	logging.DebugLog("Omron", "All FINS connection attempts failed")
 	return nil, fmt.Errorf("FINS connection failed (TCP: %v, UDP: %v)", tcpErr, udpErr)
 }
 
@@ -237,16 +250,21 @@ func (c *Client) connectEIP() (*Client, error) {
 		port = 44818 // Standard EIP port
 	}
 
+	logging.DebugLog("Omron", "Attempting EIP/CIP connection to %s:%d", c.address, port)
+
 	c.eipClient = eip.NewEipClientWithPort(c.address, uint16(port))
 	if err := c.eipClient.SetTimeout(c.timeout); err != nil {
+		logging.DebugLog("Omron", "EIP set timeout failed: %v", err)
 		return nil, fmt.Errorf("failed to set timeout: %w", err)
 	}
 
 	if err := c.eipClient.Connect(); err != nil {
+		logging.DebugLog("Omron", "EIP connect failed: %v", err)
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
 
 	c.connected = true
+	logging.DebugLog("Omron", "EIP/CIP connection established to %s:%d", c.address, port)
 	return c, nil
 }
 
@@ -255,17 +273,25 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	logging.DebugLog("Omron", "Closing connection to %s (transport=%s)", c.address, c.transport)
+
 	c.connected = false
 
 	if c.fins != nil {
 		err := c.fins.close()
 		c.fins = nil
+		if err != nil {
+			logging.DebugLog("Omron", "FINS close error: %v", err)
+		}
 		return err
 	}
 
 	if c.eipClient != nil {
 		err := c.eipClient.Disconnect()
 		c.eipClient = nil
+		if err != nil {
+			logging.DebugLog("Omron", "EIP disconnect error: %v", err)
+		}
 		return err
 	}
 
@@ -301,6 +327,8 @@ func (c *Client) Reconnect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	logging.DebugLog("Omron", "Reconnecting to %s (transport=%s)", c.address, c.transport)
+
 	// Close existing
 	if c.fins != nil {
 		c.fins.close()
@@ -316,34 +344,43 @@ func (c *Client) Reconnect() error {
 	switch c.transport {
 	case TransportFINS:
 		// Try TCP first, then UDP
+		logging.DebugLog("Omron", "Reconnect: trying FINS/TCP first")
 		if err := c.tryConnectFINSTCP(); err == nil {
 			c.transport = TransportFINSTCP
+			logging.DebugLog("Omron", "Reconnect: FINS/TCP successful")
 			return nil
 		}
+		logging.DebugLog("Omron", "Reconnect: FINS/TCP failed, trying UDP")
 		if err := c.tryConnectFINSUDP(); err != nil {
+			logging.DebugLog("Omron", "Reconnect: FINS/UDP also failed: %v", err)
 			return err
 		}
 		c.transport = TransportFINSUDP
+		logging.DebugLog("Omron", "Reconnect: FINS/UDP successful")
 
 	case TransportFINSUDP:
 		t := newUDPTransport()
 		t.timeout = c.timeout
 		t.debug = c.debug
 		if err := t.connect(c.address, c.port, c.network, c.node, c.unit, c.srcNode); err != nil {
+			logging.DebugLog("Omron", "Reconnect FINS/UDP failed: %v", err)
 			return err
 		}
 		c.fins = t
 		c.connected = true
+		logging.DebugLog("Omron", "Reconnect FINS/UDP successful")
 
 	case TransportFINSTCP:
 		t := newTCPTransport()
 		t.timeout = c.timeout
 		t.debug = c.debug
 		if err := t.connect(c.address, c.port, c.network, c.node, c.unit, c.srcNode); err != nil {
+			logging.DebugLog("Omron", "Reconnect FINS/TCP failed: %v", err)
 			return err
 		}
 		c.fins = t
 		c.connected = true
+		logging.DebugLog("Omron", "Reconnect FINS/TCP successful")
 
 	case TransportEIP:
 		port := c.port
@@ -353,9 +390,11 @@ func (c *Client) Reconnect() error {
 		c.eipClient = eip.NewEipClientWithPort(c.address, uint16(port))
 		c.eipClient.SetTimeout(c.timeout)
 		if err := c.eipClient.Connect(); err != nil {
+			logging.DebugLog("Omron", "Reconnect EIP failed: %v", err)
 			return err
 		}
 		c.connected = true
+		logging.DebugLog("Omron", "Reconnect EIP successful")
 	}
 
 	return nil
@@ -490,6 +529,7 @@ func (c *Client) Read(addresses ...string) ([]*TagValue, error) {
 // readFINS reads FINS addresses.
 func (c *Client) readFINS(addresses []string) ([]*TagValue, error) {
 	results := make([]*TagValue, len(addresses))
+	logging.DebugLog("Omron", "Read %d FINS addresses", len(addresses))
 
 	for i, addr := range addresses {
 		tv := &TagValue{
@@ -500,6 +540,7 @@ func (c *Client) readFINS(addresses []string) ([]*TagValue, error) {
 
 		parsed, err := ParseAddress(addr)
 		if err != nil {
+			logging.DebugLog("Omron", "Address parse error for %q: %v", addr, err)
 			tv.Error = err
 			results[i] = tv
 			continue
@@ -508,9 +549,18 @@ func (c *Client) readFINS(addresses []string) ([]*TagValue, error) {
 		tv.DataType = parsed.TypeCode
 		tv.Count = parsed.Count
 
+		areaName := AreaName(parsed.MemoryArea)
+		logging.DebugLog("Omron", "Read %q: area=%s(0x%02X) addr=%d bit=%d type=%s count=%d",
+			addr, areaName, parsed.MemoryArea, parsed.Address, parsed.BitOffset,
+			TypeName(parsed.TypeCode), parsed.Count)
+
 		if parsed.TypeCode == TypeBool {
-			bits, err := c.fins.readBits(BitAreaFromWordArea(parsed.MemoryArea), parsed.Address, parsed.BitOffset, uint16(parsed.Count))
+			bitArea := BitAreaFromWordArea(parsed.MemoryArea)
+			logging.DebugLog("Omron", "Reading %d bits from area 0x%02X address %d.%d",
+				parsed.Count, bitArea, parsed.Address, parsed.BitOffset)
+			bits, err := c.fins.readBits(bitArea, parsed.Address, parsed.BitOffset, uint16(parsed.Count))
 			if err != nil {
+				logging.DebugLog("Omron", "Bit read error for %q: %v", addr, err)
 				tv.Error = err
 				results[i] = tv
 				continue
@@ -522,13 +572,17 @@ func (c *Client) readFINS(addresses []string) ([]*TagValue, error) {
 				}
 			}
 			tv.Bytes = data
+			logging.DebugLog("Omron", "Read %q: got %d bits", addr, len(bits))
 		} else {
 			wordCount := (TypeSize(parsed.TypeCode) * parsed.Count) / 2
 			if wordCount < 1 {
 				wordCount = 1
 			}
+			logging.DebugLog("Omron", "Reading %d words from area 0x%02X address %d",
+				wordCount, parsed.MemoryArea, parsed.Address)
 			words, err := c.fins.readWords(parsed.MemoryArea, parsed.Address, uint16(wordCount))
 			if err != nil {
+				logging.DebugLog("Omron", "Word read error for %q: %v", addr, err)
 				tv.Error = err
 				results[i] = tv
 				continue
@@ -538,6 +592,7 @@ func (c *Client) readFINS(addresses []string) ([]*TagValue, error) {
 				binary.BigEndian.PutUint16(data[j*2:j*2+2], w)
 			}
 			tv.Bytes = data
+			logging.DebugLog("Omron", "Read %q: got %d words (%d bytes)", addr, len(words), len(data))
 		}
 
 		if parsed.Count > 1 {
@@ -552,6 +607,7 @@ func (c *Client) readFINS(addresses []string) ([]*TagValue, error) {
 // readEIP reads symbolic tags via CIP.
 func (c *Client) readEIP(tagNames []string) ([]*TagValue, error) {
 	results := make([]*TagValue, len(tagNames))
+	logging.DebugLog("Omron", "Read %d EIP/CIP tags", len(tagNames))
 
 	for i, tagName := range tagNames {
 		tv := &TagValue{
@@ -562,10 +618,13 @@ func (c *Client) readEIP(tagNames []string) ([]*TagValue, error) {
 
 		path, err := cip.EPath().Symbol(tagName).Build()
 		if err != nil {
+			logging.DebugLog("Omron", "EIP tag path error for %q: %v", tagName, err)
 			tv.Error = fmt.Errorf("invalid tag path: %w", err)
 			results[i] = tv
 			continue
 		}
+
+		logging.DebugLog("Omron", "Reading EIP tag %q", tagName)
 
 		reqData := binary.LittleEndian.AppendUint16(nil, 1) // Element count
 		req := cip.Request{
@@ -576,6 +635,7 @@ func (c *Client) readEIP(tagNames []string) ([]*TagValue, error) {
 
 		respData, err := c.sendCIPRequest(req)
 		if err != nil {
+			logging.DebugLog("Omron", "EIP read error for %q: %v", tagName, err)
 			tv.Error = err
 			results[i] = tv
 			continue
@@ -583,6 +643,7 @@ func (c *Client) readEIP(tagNames []string) ([]*TagValue, error) {
 
 		// Parse response - first 2 bytes are data type
 		if len(respData) < 2 {
+			logging.DebugLog("Omron", "EIP response too short for %q: %d bytes", tagName, len(respData))
 			tv.Error = fmt.Errorf("response too short")
 			results[i] = tv
 			continue
@@ -592,6 +653,8 @@ func (c *Client) readEIP(tagNames []string) ([]*TagValue, error) {
 		if len(respData) > 2 {
 			tv.Bytes = respData[2:]
 		}
+		logging.DebugLog("Omron", "EIP read %q: type=0x%04X (%s) %d bytes",
+			tagName, tv.DataType, TypeName(tv.DataType), len(tv.Bytes))
 		results[i] = tv
 	}
 
@@ -643,11 +706,17 @@ func (c *Client) Write(address string, value interface{}) error {
 func (c *Client) writeFINS(address string, value interface{}) error {
 	parsed, err := ParseAddress(address)
 	if err != nil {
+		logging.DebugLog("Omron", "Write address parse error for %q: %v", address, err)
 		return err
 	}
 
+	areaName := AreaName(parsed.MemoryArea)
+	logging.DebugLog("Omron", "Write %q: area=%s(0x%02X) addr=%d type=%s value=%v",
+		address, areaName, parsed.MemoryArea, parsed.Address, TypeName(parsed.TypeCode), value)
+
 	data, err := EncodeValue(value, parsed.TypeCode, true)
 	if err != nil {
+		logging.DebugLog("Omron", "Write encode error for %q: %v", address, err)
 		return err
 	}
 
@@ -663,9 +732,17 @@ func (c *Client) writeFINS(address string, value interface{}) error {
 		case int64:
 			bitVal = v != 0
 		default:
+			logging.DebugLog("Omron", "Write type conversion error: cannot convert %T to BOOL", value)
 			return fmt.Errorf("cannot convert %T to BOOL", value)
 		}
-		return c.fins.writeBits(BitAreaFromWordArea(parsed.MemoryArea), parsed.Address, parsed.BitOffset, []bool{bitVal})
+		bitArea := BitAreaFromWordArea(parsed.MemoryArea)
+		logging.DebugLog("Omron", "Writing bit to area 0x%02X address %d.%d value=%v",
+			bitArea, parsed.Address, parsed.BitOffset, bitVal)
+		err := c.fins.writeBits(bitArea, parsed.Address, parsed.BitOffset, []bool{bitVal})
+		if err != nil {
+			logging.DebugLog("Omron", "Write bit error for %q: %v", address, err)
+		}
+		return err
 	}
 
 	words := make([]uint16, (len(data)+1)/2)
@@ -677,7 +754,13 @@ func (c *Client) writeFINS(address string, value interface{}) error {
 			words[i] = uint16(data[idx]) << 8
 		}
 	}
-	return c.fins.writeWords(parsed.MemoryArea, parsed.Address, words)
+	logging.DebugLog("Omron", "Writing %d words to area 0x%02X address %d",
+		len(words), parsed.MemoryArea, parsed.Address)
+	err = c.fins.writeWords(parsed.MemoryArea, parsed.Address, words)
+	if err != nil {
+		logging.DebugLog("Omron", "Write words error for %q: %v", address, err)
+	}
+	return err
 }
 
 // writeEIP writes to a CIP symbolic tag.

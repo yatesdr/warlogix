@@ -26,13 +26,7 @@ func NewS7Adapter(cfg *config.PLCConfig) (*S7Adapter, error) {
 
 // Connect establishes connection to the S7 PLC.
 func (a *S7Adapter) Connect() error {
-	rack := 0
-	slot := int(a.config.Slot)
-	if slot == 0 {
-		slot = 2 // Default for S7-300/400
-	}
-
-	client, err := s7.Connect(a.config.Address, s7.WithRackSlot(rack, slot))
+	client, err := s7.Connect(a.config.Address, s7.WithRackSlot(0, int(a.config.Slot)))
 	if err != nil {
 		return fmt.Errorf("s7 connect: %w", err)
 	}

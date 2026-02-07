@@ -13,14 +13,30 @@ import (
 // protocol-level issues such as connection errors, dropped connections, and
 // communication failures.
 type DebugLogger struct {
-	file   *os.File
-	mu     sync.Mutex
-	closed bool
+	file    *os.File
+	mu      sync.Mutex
+	closed  bool
+	filters map[string]bool // Protocol filters (empty = log all)
 }
 
 // Global debug logger instance
 var globalDebugLogger *DebugLogger
 var globalDebugMu sync.RWMutex
+
+// Known protocol names for filtering
+var knownProtocols = []string{
+	"omron", "fins", "fins/tcp", "fins/udp",
+	"ads",
+	"logix",
+	"s7",
+	"mqtt",
+	"kafka",
+	"valkey",
+	"tui",
+	"eip",
+	"plcman",
+	"debug",
+}
 
 // NewDebugLogger creates a new debug logger that writes to the specified path.
 // The file is created fresh (truncated if it exists) for each session.
@@ -30,13 +46,126 @@ func NewDebugLogger(path string) (*DebugLogger, error) {
 		return nil, fmt.Errorf("failed to open debug log file: %w", err)
 	}
 
-	logger := &DebugLogger{file: file}
+	logger := &DebugLogger{
+		file:    file,
+		filters: make(map[string]bool),
+	}
 
 	// Write header
 	logger.Log("DEBUG", "Debug logging started - %s", time.Now().Format(time.RFC3339))
 	logger.Log("DEBUG", "========================================")
 
 	return logger, nil
+}
+
+// NewDebugLoggerWithFilter creates a debug logger with protocol filtering.
+// The filter string can be a single protocol (e.g., "omron") or comma-separated
+// list (e.g., "omron,ads,s7"). Empty string means log all protocols.
+func NewDebugLoggerWithFilter(path, filter string) (*DebugLogger, error) {
+	logger, err := NewDebugLogger(path)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.SetFilter(filter)
+	return logger, nil
+}
+
+// SetFilter sets the protocol filter for logging.
+// The filter can be a single protocol or comma-separated list.
+// Empty string means log all protocols.
+// Protocols are matched case-insensitively.
+func (l *DebugLogger) SetFilter(filter string) {
+	if l == nil {
+		return
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.filters = make(map[string]bool)
+
+	if filter == "" {
+		return // Empty filter = log all
+	}
+
+	// Parse comma-separated protocols
+	protocols := strings.Split(filter, ",")
+	for _, p := range protocols {
+		p = strings.TrimSpace(strings.ToLower(p))
+		if p != "" {
+			l.filters[p] = true
+			// Also add related protocols
+			switch p {
+			case "omron":
+				l.filters["fins"] = true
+				l.filters["fins/tcp"] = true
+				l.filters["fins/udp"] = true
+			case "fins":
+				l.filters["fins/tcp"] = true
+				l.filters["fins/udp"] = true
+				l.filters["omron"] = true
+			}
+		}
+	}
+
+	// Log the filter configuration
+	if len(l.filters) > 0 {
+		filterList := make([]string, 0, len(l.filters))
+		for p := range l.filters {
+			filterList = append(filterList, p)
+		}
+		timestamp := time.Now().Format("2006-01-02 15:04:05.000")
+		fmt.Fprintf(l.file, "%s [DEBUG] Filtering enabled for protocols: %s\n",
+			timestamp, strings.Join(filterList, ", "))
+	}
+}
+
+// GetFilter returns the current filter as a comma-separated string.
+func (l *DebugLogger) GetFilter() string {
+	if l == nil {
+		return ""
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if len(l.filters) == 0 {
+		return ""
+	}
+
+	filterList := make([]string, 0, len(l.filters))
+	for p := range l.filters {
+		filterList = append(filterList, p)
+	}
+	return strings.Join(filterList, ",")
+}
+
+// shouldLog returns true if the protocol should be logged based on current filter.
+// Must be called with l.mu held.
+func (l *DebugLogger) shouldLog(protocol string) bool {
+	// Empty filter = log everything
+	if len(l.filters) == 0 {
+		return true
+	}
+
+	// Check if protocol matches filter (case-insensitive)
+	protocolLower := strings.ToLower(protocol)
+	if l.filters[protocolLower] {
+		return true
+	}
+
+	// Always allow DEBUG messages (for header/footer)
+	if protocolLower == "debug" {
+		return true
+	}
+
+	return false
+}
+
+// KnownProtocols returns the list of known protocol names for filtering.
+func KnownProtocols() []string {
+	return knownProtocols
 }
 
 // SetGlobalDebugLogger sets the global debug logger instance.
@@ -73,6 +202,10 @@ func (l *DebugLogger) Log(protocol, format string, args ...interface{}) {
 		return
 	}
 
+	if !l.shouldLog(protocol) {
+		return
+	}
+
 	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
 	msg := fmt.Sprintf(format, args...)
 	fmt.Fprintf(l.file, "%s [%s] %s\n", timestamp, protocol, msg)
@@ -100,6 +233,10 @@ func (l *DebugLogger) logPacket(protocol, direction string, data []byte) {
 	defer l.mu.Unlock()
 
 	if l.closed {
+		return
+	}
+
+	if !l.shouldLog(protocol) {
 		return
 	}
 

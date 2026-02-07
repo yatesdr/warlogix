@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"warlogix/logging"
 )
 
 // FINS/TCP frame constants.
@@ -59,19 +61,27 @@ func (t *tcpTransport) connect(address string, port int, network, node, unit, sr
 
 	// Connect TCP
 	addr := fmt.Sprintf("%s:%d", address, port)
+	logging.DebugConnect("FINS/TCP", addr)
+	logging.DebugLog("FINS/TCP", "Connection params: network=%d, node=%d, unit=%d, srcNode=%d", network, node, unit, srcNode)
+
 	conn, err := net.DialTimeout("tcp", addr, t.timeout)
 	if err != nil {
+		logging.DebugConnectError("FINS/TCP", addr, err)
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 	t.conn = conn
 
+	logging.DebugLog("FINS/TCP", "TCP connection established to %s", addr)
+
 	// Perform node address negotiation
 	if err := t.negotiateNodeAddress(); err != nil {
 		conn.Close()
+		logging.DebugError("FINS/TCP", "node address negotiation", err)
 		return fmt.Errorf("node address negotiation failed: %w", err)
 	}
 
 	t.connected = true
+	logging.DebugConnectSuccess("FINS/TCP", addr, fmt.Sprintf("localNode=%d, serverNode=%d, plcNode=%d", t.localNode, t.serverNode, t.plcNode))
 	return nil
 }
 
@@ -145,6 +155,8 @@ func (t *tcpTransport) close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	logging.DebugDisconnect("FINS/TCP", t.address, "close requested")
+
 	if t.conn != nil {
 		err := t.conn.Close()
 		t.conn = nil
@@ -179,6 +191,7 @@ func (t *tcpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 	defer t.mu.Unlock()
 
 	if !t.connected || t.conn == nil {
+		logging.DebugLog("FINS/TCP", "sendCommand called but not connected")
 		return nil, fmt.Errorf("not connected")
 	}
 
@@ -211,6 +224,8 @@ func (t *tcpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 	binary.BigEndian.PutUint32(tcpFrame[12:16], 0)
 	copy(tcpFrame[tcpHeaderSize:], finsBytes)
 
+	logging.DebugTX("FINS/TCP", tcpFrame)
+
 	// Set deadline
 	if t.timeout > 0 {
 		t.conn.SetDeadline(time.Now().Add(t.timeout))
@@ -219,6 +234,7 @@ func (t *tcpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 	// Send
 	if _, err := t.conn.Write(tcpFrame); err != nil {
 		t.connected = false
+		logging.DebugDisconnect("FINS/TCP", t.address, fmt.Sprintf("send failed: %v", err))
 		return nil, fmt.Errorf("failed to send: %w", err)
 	}
 
@@ -226,17 +242,20 @@ func (t *tcpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 	respHeader := make([]byte, tcpHeaderSize)
 	if _, err := io.ReadFull(t.conn, respHeader); err != nil {
 		t.connected = false
+		logging.DebugDisconnect("FINS/TCP", t.address, fmt.Sprintf("recv header failed: %v", err))
 		return nil, fmt.Errorf("failed to read response header: %w", err)
 	}
 
 	// Verify magic
 	if string(respHeader[0:4]) != finsTCPMagic {
+		logging.DebugLog("FINS/TCP", "Invalid FINS response magic: %s", string(respHeader[0:4]))
 		return nil, fmt.Errorf("invalid FINS response magic")
 	}
 
 	// Get length
 	respLen := binary.BigEndian.Uint32(respHeader[4:8])
 	if respLen < 8 {
+		logging.DebugLog("FINS/TCP", "Invalid response length: %d", respLen)
 		return nil, fmt.Errorf("invalid response length: %d", respLen)
 	}
 
@@ -244,32 +263,42 @@ func (t *tcpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 	cmd := binary.BigEndian.Uint32(respHeader[8:12])
 	if cmd == cmdFINSFrameSendError {
 		errCode := binary.BigEndian.Uint32(respHeader[12:16])
+		logging.DebugLog("FINS/TCP", "FINS frame error: 0x%08X", errCode)
 		return nil, fmt.Errorf("FINS frame error: 0x%08X", errCode)
 	}
 	if cmd != cmdFINSFrameSend {
+		logging.DebugLog("FINS/TCP", "Unexpected response command: 0x%08X", cmd)
 		return nil, fmt.Errorf("unexpected response command: 0x%08X", cmd)
 	}
 
 	// Read FINS frame
 	finsLen := int(respLen) - 8
 	if finsLen <= 0 {
+		logging.DebugLog("FINS/TCP", "Empty FINS response")
 		return nil, fmt.Errorf("empty FINS response")
 	}
 
 	respFrame := make([]byte, finsLen)
 	if _, err := io.ReadFull(t.conn, respFrame); err != nil {
 		t.connected = false
+		logging.DebugDisconnect("FINS/TCP", t.address, fmt.Sprintf("recv frame failed: %v", err))
 		return nil, fmt.Errorf("failed to read FINS response: %w", err)
 	}
+
+	// Log complete received packet
+	fullResp := append(respHeader, respFrame...)
+	logging.DebugRX("FINS/TCP", fullResp)
 
 	// Parse FINS response
 	resp, err := ParseFINSResponse(respFrame)
 	if err != nil {
+		logging.DebugError("FINS/TCP", "parse response", err)
 		return nil, err
 	}
 
 	// Check end code
 	if resp.EndCode != FINSEndOK {
+		logging.DebugLog("FINS/TCP", "FINS end code error: 0x%04X", resp.EndCode)
 		return nil, FINSEndCodeError(resp.EndCode)
 	}
 

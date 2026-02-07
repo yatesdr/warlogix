@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"warlogix/logging"
 )
 
 const (
@@ -41,27 +43,35 @@ func (t *udpTransport) connect(address string, port int, network, node, unit, sr
 		port = defaultFINSPort
 	}
 
+	addr := fmt.Sprintf("%s:%d", address, port)
+	logging.DebugConnect("FINS/UDP", addr)
+	logging.DebugLog("FINS/UDP", "Connection params: network=%d, node=%d, unit=%d, srcNode=%d", network, node, unit, srcNode)
+
 	// Resolve PLC address
-	plcAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", address, port))
+	plcAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
+		logging.DebugConnectError("FINS/UDP", addr, err)
 		return fmt.Errorf("failed to resolve address: %w", err)
 	}
 
 	// Create local address (bind to any available port)
 	localAddr, err := net.ResolveUDPAddr("udp", ":0")
 	if err != nil {
+		logging.DebugError("FINS/UDP", "resolve local address", err)
 		return fmt.Errorf("failed to resolve local address: %w", err)
 	}
 
 	// Create UDP connection
 	conn, err := net.ListenUDP("udp", localAddr)
 	if err != nil {
+		logging.DebugError("FINS/UDP", "create UDP socket", err)
 		return fmt.Errorf("failed to create UDP socket: %w", err)
 	}
 
 	// Auto-detect source node from local IP if not specified
 	if srcNode == 0 {
 		srcNode = t.detectLocalNode(address)
+		logging.DebugLog("FINS/UDP", "Auto-detected source node: %d", srcNode)
 	}
 
 	t.conn = conn
@@ -72,6 +82,7 @@ func (t *udpTransport) connect(address string, port int, network, node, unit, sr
 	t.localNode = srcNode
 	t.connected = true
 
+	logging.DebugConnectSuccess("FINS/UDP", addr, fmt.Sprintf("localNode=%d, plcNode=%d", srcNode, node))
 	return nil
 }
 
@@ -95,6 +106,10 @@ func (t *udpTransport) detectLocalNode(plcAddress string) byte {
 func (t *udpTransport) close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	if t.plcAddr != nil {
+		logging.DebugDisconnect("FINS/UDP", t.plcAddr.String(), "close requested")
+	}
 
 	if t.conn != nil {
 		err := t.conn.Close()
@@ -130,6 +145,7 @@ func (t *udpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 	defer t.mu.Unlock()
 
 	if !t.connected || t.conn == nil {
+		logging.DebugLog("FINS/UDP", "sendCommand called but not connected")
 		return nil, fmt.Errorf("not connected")
 	}
 
@@ -153,14 +169,18 @@ func (t *udpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 		Data:    data,
 	}
 
+	frameBytes := frame.Bytes()
+	logging.DebugTX("FINS/UDP", frameBytes)
+
 	// Set deadline
 	if t.timeout > 0 {
 		t.conn.SetDeadline(time.Now().Add(t.timeout))
 	}
 
 	// Send
-	if _, err := t.conn.WriteToUDP(frame.Bytes(), t.plcAddr); err != nil {
+	if _, err := t.conn.WriteToUDP(frameBytes, t.plcAddr); err != nil {
 		t.connected = false
+		logging.DebugDisconnect("FINS/UDP", t.plcAddr.String(), fmt.Sprintf("send failed: %v", err))
 		return nil, fmt.Errorf("failed to send: %w", err)
 	}
 
@@ -169,17 +189,22 @@ func (t *udpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 	n, _, err := t.conn.ReadFromUDP(buf)
 	if err != nil {
 		t.connected = false
+		logging.DebugDisconnect("FINS/UDP", t.plcAddr.String(), fmt.Sprintf("recv failed: %v", err))
 		return nil, fmt.Errorf("failed to receive: %w", err)
 	}
+
+	logging.DebugRX("FINS/UDP", buf[:n])
 
 	// Parse response
 	resp, err := ParseFINSResponse(buf[:n])
 	if err != nil {
+		logging.DebugError("FINS/UDP", "parse response", err)
 		return nil, err
 	}
 
 	// Check end code
 	if resp.EndCode != FINSEndOK {
+		logging.DebugLog("FINS/UDP", "FINS end code error: 0x%04X", resp.EndCode)
 		return nil, FINSEndCodeError(resp.EndCode)
 	}
 

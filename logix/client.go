@@ -3,7 +3,6 @@ package logix
 import (
 	"encoding/binary"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 )
@@ -93,7 +92,7 @@ func Connect(address string, opts ...Option) (*Client, error) {
 	if !cfg.skipForwardOpen {
 		err = plc.OpenConnection()
 		if err != nil {
-			log.Printf("Warning: Forward Open failed, using unconnected messaging: %v", err)
+			debugLog("Warning: Forward Open failed, using unconnected messaging: %v", err)
 		}
 	}
 

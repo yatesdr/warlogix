@@ -6,6 +6,8 @@ import (
 	"math"
 	"sync"
 	"time"
+
+	"warlogix/logging"
 )
 
 // Client is a high-level wrapper for S7 PLC communication.
@@ -48,11 +50,11 @@ func WithTimeout(d time.Duration) Option {
 // Connect establishes a connection to an S7 PLC at the given address.
 func Connect(address string, opts ...Option) (*Client, error) {
 	// Apply options
-	// Default to slot 2 for S7-300/400 (CPU typically in slot 2)
-	// S7-1200/1500 users should explicitly set slot 0
+	// Default to slot 0 for S7-1200/1500 (integrated CPU, most common)
+	// S7-300/400 users should explicitly set slot 2 (or their CPU slot)
 	cfg := &options{
 		rack:    0,
-		slot:    2,
+		slot:    0,
 		timeout: 10 * time.Second,
 	}
 	for _, opt := range opts {
@@ -192,8 +194,18 @@ func (c *Client) Read(addresses ...string) ([]*TagValue, error) {
 	return c.ReadWithTypes(requests)
 }
 
+// parsedRequest holds a parsed tag request for batching
+type parsedRequest struct {
+	index    int      // Original index in requests slice
+	request  TagRequest
+	addr     *Address
+	readAddr *Address // Address with totalSize calculated
+	err      error    // Parse error if any
+}
+
 // ReadWithTypes reads addresses with optional type hints.
 // Type hints are used for simple addresses (DB1.0) that don't specify the data type.
+// This implementation batches multiple small reads into single requests for efficiency.
 func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
 	if c == nil || c.transport == nil {
 		return nil, fmt.Errorf("Read: nil client")
@@ -205,15 +217,16 @@ func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	results := make([]*TagValue, 0, len(requests))
+	// Parse all requests first
+	parsed := make([]parsedRequest, len(requests))
+	for i, req := range requests {
+		parsed[i].index = i
+		parsed[i].request = req
 
-	for _, req := range requests {
 		addr, err := ParseAddress(req.Address)
 		if err != nil {
-			results = append(results, &TagValue{
-				Name:  req.Address,
-				Error: err,
-			})
+			logging.DebugLog("S7", "ParseAddress failed for %q: %v", req.Address, err)
+			parsed[i].err = err
 			continue
 		}
 
@@ -227,10 +240,8 @@ func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
 				if addr.Size == 0 {
 					switch BaseType(typeCode) {
 					case TypeString:
-						// S7 STRING: 1 byte max len + 1 byte actual len + up to 254 chars = 256 bytes max
 						addr.Size = 256
 					case TypeWString:
-						// S7 WSTRING: 2 bytes max len + 2 bytes actual len + up to 508 bytes (254 UTF-16 chars)
 						addr.Size = 512
 					}
 				}
@@ -248,9 +259,11 @@ func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
 			addr.Count = 1
 		}
 
+		parsed[i].addr = addr
+
 		// For arrays, read Count * element size bytes
 		totalSize := addr.Size * addr.Count
-		readAddr := &Address{
+		parsed[i].readAddr = &Address{
 			Area:     addr.Area,
 			DBNumber: addr.DBNumber,
 			Offset:   addr.Offset,
@@ -259,31 +272,326 @@ func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
 			Size:     totalSize,
 			Count:    addr.Count,
 		}
+	}
 
-		data, err := c.readAddress(readAddr)
-		if err != nil {
-			results = append(results, &TagValue{
-				Name:  req.Address,
-				Error: err,
-			})
+	// Calculate PDU limits for batching
+	pduSize := int(c.transport.getPDUSize())
+	if pduSize < 50 {
+		pduSize = 240 // Fallback to minimum S7 PDU if not set
+	}
+
+	// Request constraints:
+	//   Header: 10 bytes
+	//   Params: 2 bytes (function + count) + 12 bytes per item
+	//   Max request size = pduSize
+	// Response constraints:
+	//   Header: 12 bytes
+	//   Params: 2 bytes
+	//   Data: 4 bytes header per item + actual data
+	//   Max response size = pduSize
+	//
+	// For request: maxItems = (pduSize - 12) / 12
+	// For response: need to track cumulative data size
+	maxRequestItems := (pduSize - 12) / 12
+	if maxRequestItems > 19 {
+		maxRequestItems = 19 // S7 protocol limit is often 20, use 19 to be safe
+	}
+	if maxRequestItems < 1 {
+		maxRequestItems = 1
+	}
+	maxResponsePayload := pduSize - 18 // Leave room for response headers
+
+	// Prepare results slice (indexed by original position)
+	results := make([]*TagValue, len(requests))
+
+	// Group requests into batches
+	var currentBatch []parsedRequest
+	var currentResponseSize int
+
+	flushBatch := func() {
+		if len(currentBatch) == 0 {
+			return
+		}
+
+		if len(currentBatch) == 1 {
+			// Single item - use existing single-read path
+			p := currentBatch[0]
+			logging.DebugLog("S7", "Read %q: area=%s db=%d offset=%d type=%s size=%d",
+				p.request.Address, p.addr.Area, p.addr.DBNumber, p.addr.Offset,
+				TypeName(p.addr.DataType), p.readAddr.Size)
+
+			data, err := c.readAddress(p.readAddr)
+			if err != nil {
+				logging.DebugLog("S7", "Read %q failed: %v", p.request.Address, err)
+				results[p.index] = &TagValue{
+					Name:  p.request.Address,
+					Error: err,
+				}
+			} else {
+				logging.DebugLog("S7", "Read %q success: got %d bytes", p.request.Address, len(data))
+				results[p.index] = &TagValue{
+					Name:     p.request.Address,
+					DataType: p.addr.DataType,
+					Bytes:    data,
+					BitNum:   p.addr.BitNum,
+					Count:    p.addr.Count,
+					Error:    nil,
+				}
+			}
+		} else {
+			// Multi-item batch read
+			c.readBatch(currentBatch, results)
+		}
+
+		currentBatch = nil
+		currentResponseSize = 0
+	}
+
+	for i := range parsed {
+		p := &parsed[i]
+
+		// Handle parse errors
+		if p.err != nil {
+			results[p.index] = &TagValue{
+				Name:  p.request.Address,
+				Error: p.err,
+			}
 			continue
 		}
 
-		results = append(results, &TagValue{
-			Name:     req.Address,
-			DataType: addr.DataType,
-			Bytes:    data,
-			BitNum:   addr.BitNum,
-			Count:    addr.Count,
-			Error:    nil,
-		})
+		// Validate parsed address
+		if p.readAddr == nil || p.addr == nil {
+			results[p.index] = &TagValue{
+				Name:  p.request.Address,
+				Error: fmt.Errorf("internal error: nil address after parsing"),
+			}
+			continue
+		}
+
+		// Validate size is positive
+		if p.readAddr.Size <= 0 {
+			results[p.index] = &TagValue{
+				Name:  p.request.Address,
+				Error: fmt.Errorf("invalid read size: %d", p.readAddr.Size),
+			}
+			continue
+		}
+
+		// Check if this item needs chunked reading (too large for single response)
+		itemResponseSize := 4 + p.readAddr.Size // 4 byte header + data
+		if itemResponseSize > maxResponsePayload {
+			// Flush current batch first
+			flushBatch()
+
+			// Read this large item individually with chunking
+			logging.DebugLog("S7", "Large read %q: %d bytes (chunked)",
+				p.request.Address, p.readAddr.Size)
+
+			data, err := c.readAddress(p.readAddr)
+			if err != nil {
+				logging.DebugLog("S7", "Read %q failed: %v", p.request.Address, err)
+				results[p.index] = &TagValue{
+					Name:  p.request.Address,
+					Error: err,
+				}
+			} else {
+				logging.DebugLog("S7", "Read %q success: got %d bytes", p.request.Address, len(data))
+				results[p.index] = &TagValue{
+					Name:     p.request.Address,
+					DataType: p.addr.DataType,
+					Bytes:    data,
+					BitNum:   p.addr.BitNum,
+					Count:    p.addr.Count,
+					Error:    nil,
+				}
+			}
+			continue
+		}
+
+		// Check if adding this item would exceed batch limits
+		// Must check both request item count AND response payload size
+		newResponseSize := currentResponseSize + itemResponseSize
+		if newResponseSize > maxResponsePayload || len(currentBatch) >= maxRequestItems {
+			flushBatch()
+		}
+
+		// Add to current batch
+		currentBatch = append(currentBatch, *p)
+		currentResponseSize += itemResponseSize
 	}
+
+	// Flush remaining batch
+	flushBatch()
 
 	return results, nil
 }
 
+// readBatch reads multiple addresses in a single S7 request.
+func (c *Client) readBatch(batch []parsedRequest, results []*TagValue) {
+	if len(batch) == 0 {
+		return
+	}
+
+	// Build list of addresses for the batch
+	addrs := make([]*Address, len(batch))
+	for i, p := range batch {
+		if p.readAddr == nil {
+			// Shouldn't happen, but protect against it
+			logging.DebugLog("S7", "Batch item %d has nil address", i)
+			continue
+		}
+		addrs[i] = p.readAddr
+	}
+
+	// Log the batch
+	names := make([]string, len(batch))
+	for i, p := range batch {
+		names[i] = p.request.Address
+	}
+	logging.DebugLog("S7", "Batch read %d items: %v", len(batch), names)
+
+	// Build and send request
+	request := buildReadRequest(addrs, c.nextPDURef())
+	response, err := c.transport.sendReceive(request)
+	if err != nil {
+		// All items in batch fail with same error
+		logging.DebugLog("S7", "Batch read failed: %v", err)
+		for _, p := range batch {
+			if p.index >= 0 && p.index < len(results) {
+				results[p.index] = &TagValue{
+					Name:  p.request.Address,
+					Error: err,
+				}
+			}
+		}
+		return
+	}
+
+	// Parse response
+	data, errors := parseReadResponse(response, len(batch))
+
+	// Map results back to original positions
+	for i, p := range batch {
+		// Bounds check for safety
+		if p.index < 0 || p.index >= len(results) {
+			logging.DebugLog("S7", "Batch item %d has invalid index %d (results len=%d)", i, p.index, len(results))
+			continue
+		}
+
+		if i >= len(errors) || i >= len(data) {
+			logging.DebugLog("S7", "Batch item %d: response arrays too short (errors=%d, data=%d)", i, len(errors), len(data))
+			results[p.index] = &TagValue{
+				Name:  p.request.Address,
+				Error: fmt.Errorf("internal error: response parsing mismatch"),
+			}
+			continue
+		}
+
+		if errors[i] != nil {
+			logging.DebugLog("S7", "Batch item %q failed: %v", p.request.Address, errors[i])
+			results[p.index] = &TagValue{
+				Name:  p.request.Address,
+				Error: errors[i],
+			}
+		} else {
+			dataBytes := data[i]
+			if dataBytes == nil {
+				dataBytes = []byte{} // Ensure non-nil for successful reads with no data
+			}
+			logging.DebugLog("S7", "Batch item %q success: got %d bytes", p.request.Address, len(dataBytes))
+			results[p.index] = &TagValue{
+				Name:     p.request.Address,
+				DataType: p.addr.DataType,
+				Bytes:    dataBytes,
+				BitNum:   p.addr.BitNum,
+				Count:    p.addr.Count,
+				Error:    nil,
+			}
+		}
+	}
+
+	logging.DebugLog("S7", "Batch read complete: %d items", len(batch))
+}
+
 // readAddress reads data from a specific S7 address.
+// For large reads that exceed PDU size, the read is split into multiple chunks.
 func (c *Client) readAddress(addr *Address) ([]byte, error) {
+	// Calculate max payload per read based on PDU size
+	// PDU overhead: ~18-20 bytes (header + params + data item header)
+	pduSize := int(c.transport.getPDUSize())
+	maxPayload := pduSize - 20
+	if maxPayload < 20 {
+		maxPayload = 200 // Fallback minimum
+	}
+
+	totalSize := addr.Size
+	if totalSize <= maxPayload {
+		// Single read is sufficient
+		return c.readAddressSingle(addr)
+	}
+
+	// Need to split into multiple reads
+	logging.DebugLog("S7", "Large read %d bytes exceeds PDU payload %d, splitting into chunks",
+		totalSize, maxPayload)
+
+	result := make([]byte, 0, totalSize)
+	offset := addr.Offset
+	remaining := totalSize
+
+	// Safety limit to prevent infinite loops
+	maxChunks := (totalSize / maxPayload) + 10
+	chunkCount := 0
+
+	for remaining > 0 {
+		chunkCount++
+		if chunkCount > maxChunks {
+			return nil, fmt.Errorf("chunk read exceeded maximum iterations (%d)", maxChunks)
+		}
+
+		chunkSize := remaining
+		if chunkSize > maxPayload {
+			chunkSize = maxPayload
+		}
+
+		chunkAddr := &Address{
+			Area:     addr.Area,
+			DBNumber: addr.DBNumber,
+			Offset:   offset,
+			BitNum:   -1, // Byte-level access for chunks
+			DataType: TypeByte,
+			Size:     chunkSize,
+			Count:    chunkSize, // For BYTE transport, count = bytes
+		}
+
+		logging.DebugLog("S7", "Reading chunk %d: offset=%d size=%d remaining=%d",
+			chunkCount, offset, chunkSize, remaining)
+
+		chunk, err := c.readAddressSingle(chunkAddr)
+		if err != nil {
+			return nil, fmt.Errorf("chunk read at offset %d failed: %w", offset, err)
+		}
+
+		// Validate chunk size
+		if len(chunk) != chunkSize {
+			logging.DebugLog("S7", "Chunk size mismatch: expected %d, got %d", chunkSize, len(chunk))
+			// Accept what we got, but adjust remaining accordingly
+			if len(chunk) == 0 {
+				return nil, fmt.Errorf("chunk read at offset %d returned empty data", offset)
+			}
+		}
+
+		result = append(result, chunk...)
+		bytesRead := len(chunk)
+		offset += bytesRead
+		remaining -= bytesRead
+	}
+
+	logging.DebugLog("S7", "Large read complete: got %d bytes total", len(result))
+	return result, nil
+}
+
+// readAddressSingle reads data from a specific S7 address in a single request.
+func (c *Client) readAddressSingle(addr *Address) ([]byte, error) {
 	// Build read request
 	request := buildReadRequest([]*Address{addr}, c.nextPDURef())
 

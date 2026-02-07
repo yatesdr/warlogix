@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -171,7 +172,11 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parts := strings.Split(path, "/")
-	plcName := parts[0]
+	plcName, err := url.PathUnescape(parts[0])
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid URL encoding in PLC name")
+		return
+	}
 	plc := s.manager.GetPLC(plcName)
 	if plc == nil {
 		s.writeError(w, http.StatusNotFound, "PLC not found")
@@ -196,7 +201,12 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 2 {
 			s.handlePrograms(w, plc)
 		} else if len(parts) >= 4 && parts[3] == "tags" {
-			s.handleProgramTags(w, plc, parts[2])
+			programName, err := url.PathUnescape(parts[2])
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid URL encoding in program name")
+				return
+			}
+			s.handleProgramTags(w, plc, programName)
 		} else {
 			s.writeError(w, http.StatusNotFound, "not found")
 		}
@@ -209,6 +219,11 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			s.handleAllTags(w, plc)
 		} else {
 			tagName := strings.Join(parts[2:], "/")
+			tagName, err = url.PathUnescape(tagName)
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid URL encoding in tag name")
+				return
+			}
 			s.handleSingleTag(w, plc, tagName)
 		}
 	case "write":

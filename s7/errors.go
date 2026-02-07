@@ -9,6 +9,7 @@ const (
 	errClassObjDef      = 0x82
 	errClassResource    = 0x83
 	errClassService     = 0x84
+	errClassNoResource  = 0x85 // No resource available (often PDU size exceeded)
 	errClassAccess      = 0x87
 )
 
@@ -46,6 +47,8 @@ func s7ErrorMessage(class, code byte) string {
 		return fmt.Sprintf("resource error (code %d)", code)
 	case errClassService:
 		return fmt.Sprintf("service error (code %d)", code)
+	case errClassNoResource:
+		return fmt.Sprintf("no resource available - request may exceed PDU size (code %d)", code)
 	case errClassAccess:
 		return fmt.Sprintf("access error (code %d)", code)
 	default:

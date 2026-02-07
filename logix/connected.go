@@ -6,37 +6,25 @@ import (
 
 	"warlogix/cip"
 	"warlogix/eip"
+	"warlogix/logging"
 )
 
-// DebugLogger is an interface for debug logging.
-type DebugLogger interface {
-	LogLogix(format string, args ...interface{})
-}
-
-var debugLogger DebugLogger
 var verboseLogging bool // Controls detailed template/parsing logs
-
-// SetDebugLogger sets the debug logger for Logix.
-func SetDebugLogger(logger DebugLogger) {
-	debugLogger = logger
-}
 
 // SetVerboseLogging enables or disables detailed template/parsing logs.
 func SetVerboseLogging(verbose bool) {
 	verboseLogging = verbose
 }
 
-// debugLog logs a message if a debug logger is configured.
+// debugLog logs a message if debug logging is enabled.
 func debugLog(format string, args ...interface{}) {
-	if debugLogger != nil {
-		debugLogger.LogLogix(format, args...)
-	}
+	logging.DebugLog("Logix", format, args...)
 }
 
 // debugLogVerbose logs detailed messages only when verbose logging is enabled.
 func debugLogVerbose(format string, args ...interface{}) {
-	if debugLogger != nil && verboseLogging {
-		debugLogger.LogLogix(format, args...)
+	if verboseLogging {
+		logging.DebugLog("Logix", format, args...)
 	}
 }
 
@@ -198,9 +186,19 @@ func (p *PLC) CloseConnection() error {
 	return nil
 }
 
-// IsConnected returns true if a CIP connection is established.
+// IsConnected returns true if the PLC connection is active.
+// For connected messaging, this checks the CIP connection.
+// For unconnected messaging, this checks the underlying EIP/TCP connection.
 func (p *PLC) IsConnected() bool {
-	return p != nil && p.cipConn != nil
+	if p == nil {
+		return false
+	}
+	// For connected messaging, check CIP connection
+	if p.cipConn != nil {
+		return true
+	}
+	// For unconnected messaging, check TCP connection
+	return p.Connection != nil && p.Connection.IsConnected()
 }
 
 // ReadTagConnected reads a tag using connected messaging.
