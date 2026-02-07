@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"sync/atomic"
+
+	"warlogix/logging"
 )
 
 // ADS TCP Header (6 bytes)
@@ -53,21 +55,26 @@ const (
 
 // ADS Index Groups for symbol access
 const (
-	IndexGroupSymbolTable      uint32 = 0xF000 // Symbol table
-	IndexGroupSymbolName       uint32 = 0xF001 // Symbol name
-	IndexGroupSymbolValue      uint32 = 0xF002 // Symbol value
-	IndexGroupSymbolHandleByName uint32 = 0xF003 // Get handle by symbol name
-	IndexGroupSymbolValueByName  uint32 = 0xF005 // Read value by symbol name
+	IndexGroupSymbolTable         uint32 = 0xF000 // Symbol table
+	IndexGroupSymbolName          uint32 = 0xF001 // Symbol name
+	IndexGroupSymbolValue         uint32 = 0xF002 // Symbol value
+	IndexGroupSymbolHandleByName  uint32 = 0xF003 // Get handle by symbol name
+	IndexGroupSymbolValueByName   uint32 = 0xF005 // Read value by symbol name
 	IndexGroupSymbolValueByHandle uint32 = 0xF005 // Read/write value by handle
 	IndexGroupSymbolReleaseHandle uint32 = 0xF006 // Release handle
-	IndexGroupSymbolInfoByName   uint32 = 0xF007 // Get symbol info by name
-	IndexGroupSymbolVersion      uint32 = 0xF008 // Symbol version
-	IndexGroupSymbolInfoByNameEx uint32 = 0xF009 // Extended symbol info by name
+	IndexGroupSymbolInfoByName    uint32 = 0xF007 // Get symbol info by name
+	IndexGroupSymbolVersion       uint32 = 0xF008 // Symbol version
+	IndexGroupSymbolInfoByNameEx  uint32 = 0xF009 // Extended symbol info by name
 	IndexGroupDataTypeInfoByNameEx uint32 = 0xF00A // Data type info by name
-	IndexGroupSymbolUpload       uint32 = 0xF00B // Upload symbol table
-	IndexGroupSymbolUploadInfo   uint32 = 0xF00C // Upload symbol info (count, size)
-	IndexGroupDataTypeUpload     uint32 = 0xF00E // Upload data types
-	IndexGroupSymbolUploadInfo2  uint32 = 0xF00F // Upload symbol info v2
+	IndexGroupSymbolUpload        uint32 = 0xF00B // Upload symbol table
+	IndexGroupSymbolUploadInfo    uint32 = 0xF00C // Upload symbol info (count, size)
+	IndexGroupDataTypeUpload      uint32 = 0xF00E // Upload data types
+	IndexGroupSymbolUploadInfo2   uint32 = 0xF00F // Upload symbol info v2
+
+	// SumUp commands for batched read/write operations
+	IndexGroupSumUpRead      uint32 = 0xF080 // Read multiple values in one request
+	IndexGroupSumUpWrite     uint32 = 0xF081 // Write multiple values in one request
+	IndexGroupSumUpReadWrite uint32 = 0xF082 // Read/write multiple in one request
 )
 
 // ADS Ports
@@ -153,8 +160,11 @@ func (c *adsConnection) sendRequest(targetNetId AmsNetId, targetPort uint16, cmd
 		copy(buf[38:], data)
 	}
 
+	logging.DebugTX("ADS", buf)
+
 	_, err := c.conn.Write(buf)
 	if err != nil {
+		logging.DebugError("ADS", "sendRequest write", err)
 		return nil, fmt.Errorf("write request: %w", err)
 	}
 
@@ -167,19 +177,26 @@ func (c *adsConnection) readResponse(expectedInvokeId uint32) ([]byte, error) {
 	// Read TCP header (6 bytes)
 	tcpBuf := make([]byte, 6)
 	if _, err := io.ReadFull(c.conn, tcpBuf); err != nil {
+		logging.DebugError("ADS", "readResponse read TCP header", err)
 		return nil, fmt.Errorf("read TCP header: %w", err)
 	}
 
 	length := binary.LittleEndian.Uint32(tcpBuf[2:6])
 	if length < 32 {
+		logging.DebugLog("ADS", "Invalid AMS length: %d", length)
 		return nil, fmt.Errorf("invalid AMS length: %d", length)
 	}
 
 	// Read AMS header + data
 	amsBuf := make([]byte, length)
 	if _, err := io.ReadFull(c.conn, amsBuf); err != nil {
+		logging.DebugError("ADS", "readResponse read AMS data", err)
 		return nil, fmt.Errorf("read AMS data: %w", err)
 	}
+
+	// Log complete received packet (TCP header + AMS data)
+	fullPacket := append(tcpBuf, amsBuf...)
+	logging.DebugRX("ADS", fullPacket)
 
 	// Parse AMS header
 	var respHdr amsHeader
