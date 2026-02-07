@@ -101,6 +101,20 @@ Press `d` to discover PLCs on your network, or `a` to add manually.
 | Triggers | `a/e/r/t/x` | Add/Edit/Remove/Add tag/Remove tag |
 | Triggers | `s/S/T` | Start/Stop/Test |
 
+## Command Line Options
+
+```
+--config <path>              Path to config file (default: ~/.warlogix/config.yaml)
+--log <path>                 Write debug messages to a file
+--log-debug                  Enable verbose protocol debugging to debug.log
+-d                           Daemon mode (serve TUI over SSH)
+-p <port>                    SSH port for daemon mode (default: 2222)
+--ssh-password <pw>          SSH password authentication
+--ssh-keys <path>            Path to authorized_keys file
+--stress-test-republishing   Stress test Kafka, MQTT, and Valkey throughput
+--version                    Show version
+```
+
 ## Daemon Mode
 
 Run as a background service with SSH access:
