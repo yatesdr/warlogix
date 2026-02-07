@@ -699,9 +699,16 @@ func (r *Runner) printReport() {
 
 	// Important note about what this test measures
 	fmt.Println("─────────────────────────────────────────────────────────────────────")
+	fmt.Printf("  TEST CONDITIONS: %d PLCs × %d tags = %d total tags\n",
+		r.testCfg.NumPLCs, r.testCfg.NumTags, r.testCfg.NumPLCs*r.testCfg.NumTags)
+	fmt.Println()
+	fmt.Println("  WHAT THIS MEANS:")
+	fmt.Println("  - Throughput shows confirmed message delivery rate per broker")
+	fmt.Println("  - With change filtering, real-world rates depend on how often values change")
+	fmt.Println("  - Example: 50 PLCs polled at 10Hz with 10% value change rate = 5,000 msg/s")
+	fmt.Println()
 	fmt.Println("  NOTE: This tests republishing throughput only, not PLC read performance.")
-	fmt.Println("  PLC reads may be substantially slower depending on network conditions,")
-	fmt.Println("  PLC load, and protocol overhead. Use this test to identify networking")
-	fmt.Println("  or broker bottlenecks, not to estimate end-to-end data rates.")
+	fmt.Println("  PLC reads may be substantially slower depending on network latency, PLC")
+	fmt.Println("  load, and protocol overhead. Use this test to identify broker bottlenecks.")
 	fmt.Println()
 }
