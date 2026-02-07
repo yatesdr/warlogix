@@ -12,6 +12,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"warlogix/config"
+	"warlogix/logging"
 )
 
 // joinKey joins key segments with colons, trimming leading/trailing colons
@@ -226,6 +227,17 @@ func (p *Publisher) Address() string {
 	return fmt.Sprintf("%s://%s", scheme, p.config.Address)
 }
 
+// TagPublishItem represents a single tag to publish (used for batching).
+type TagPublishItem struct {
+	PLCName  string
+	TagName  string
+	Alias    string
+	Address  string
+	TypeName string
+	Value    interface{}
+	Writable bool
+}
+
 // Publish stores a tag value in Valkey.
 // For S7 PLCs, alias is the user-friendly name and address is the S7 address in uppercase.
 func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, value interface{}, writable bool) error {
@@ -290,6 +302,93 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 		client.Publish(ctx, allChannel, data)
 	}
 
+	return nil
+}
+
+// PublishBatch stores multiple tag values in Valkey using a pipeline for efficiency.
+func (p *Publisher) PublishBatch(items []TagPublishItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	p.mu.RLock()
+	if !p.running || p.client == nil {
+		p.mu.RUnlock()
+		return nil
+	}
+	client := p.client
+	cfg := p.config
+	p.mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Use a pipeline for batching
+	pipe := client.Pipeline()
+	now := time.Now().UTC()
+
+	// Collect pubsub data for after pipeline
+	type pubsubItem struct {
+		channel string
+		data    []byte
+	}
+	var pubsubItems []pubsubItem
+
+	for _, item := range items {
+		key := joinKey(cfg.Factory, item.PLCName, "tags", item.TagName)
+
+		displayTag := item.TagName
+		if item.Alias != "" {
+			displayTag = item.Alias
+		}
+
+		msg := TagMessage{
+			Factory:   cfg.Factory,
+			PLC:       item.PLCName,
+			Tag:       displayTag,
+			Address:   item.Address,
+			Value:     item.Value,
+			Type:      item.TypeName,
+			Writable:  item.Writable,
+			Timestamp: now,
+		}
+
+		data, err := json.Marshal(msg)
+		if err != nil {
+			continue
+		}
+
+		if cfg.KeyTTL > 0 {
+			pipe.Set(ctx, key, data, cfg.KeyTTL)
+		} else {
+			pipe.Set(ctx, key, data, 0)
+		}
+
+		// Collect pubsub for after pipeline exec
+		if cfg.PublishChanges {
+			channel := joinKey(cfg.Factory, item.PLCName, "changes")
+			pubsubItems = append(pubsubItems, pubsubItem{channel, data})
+			allChannel := joinKey(cfg.Factory, "_all", "changes")
+			pubsubItems = append(pubsubItems, pubsubItem{allChannel, data})
+		}
+	}
+
+	// Execute pipeline
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("pipeline exec failed: %w", err)
+	}
+
+	// Publish to pubsub (fire-and-forget, use separate pipeline)
+	if len(pubsubItems) > 0 {
+		pubPipe := client.Pipeline()
+		for _, ps := range pubsubItems {
+			pubPipe.Publish(ctx, ps.channel, ps.data)
+		}
+		pubPipe.Exec(ctx) // Ignore errors for pubsub
+	}
+
+	debugLog("PublishBatch: sent %d items via pipeline", len(items))
 	return nil
 }
 
@@ -464,21 +563,6 @@ func (p *Publisher) processWriteRequest(client *redis.Client, req WriteRequest, 
 	debugLog("Valkey write %s:%s = %v -> success=%v", req.PLC, req.Tag, req.Value, response.Success)
 }
 
-// Debug logging
-var debugLogger DebugLogger
-
-// DebugLogger interface for debug logging.
-type DebugLogger interface {
-	LogValkey(format string, args ...interface{})
-}
-
-// SetDebugLogger sets the debug logger.
-func SetDebugLogger(logger DebugLogger) {
-	debugLogger = logger
-}
-
 func debugLog(format string, args ...interface{}) {
-	if debugLogger != nil {
-		debugLogger.LogValkey(format, args...)
-	}
+	logging.DebugLog("Valkey", format, args...)
 }

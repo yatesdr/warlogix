@@ -23,6 +23,15 @@ kafka:
 
 ## Topics
 
+WarLogix publishes to two topics based on your configured `topic` setting:
+
+| Topic | Content |
+|-------|---------|
+| `{topic}` | Tag value changes |
+| `{topic}.health` | PLC health status |
+
+For example, if `topic: plc-tags`, messages are published to `plc-tags` and `plc-tags.health`.
+
 ### Tag Changes
 
 When `publish_changes: true`, tag changes are published to `{topic}`:
@@ -31,21 +40,59 @@ When `publish_changes: true`, tag changes are published to `{topic}`:
 {
   "plc": "MainPLC",
   "tag": "Counter",
+  "address": "DB1.DBD100",
   "value": 42,
   "type": "DINT",
+  "writable": false,
   "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
 
-Message key: `{plc}/{tag}` (enables partitioning by tag)
+**Tag naming by PLC type:**
+
+| PLC Family | `tag` field | `address` field | Message key |
+|------------|-------------|-----------------|-------------|
+| **Tag-based** (Logix, Micro800, Omron, Beckhoff) | Tag name | (empty) | `{plc}.{tag}` |
+| **Memory-based** (S7) | Alias (if configured) or address | Memory address (uppercase) | `{plc}.{alias}` or `{plc}.{address}` |
+
+For S7 PLCs, if you configure an alias for a tag, both the `tag` field and the message key will use the alias. This makes it easier to work with meaningful names rather than raw memory addresses.
+
+**Example S7 with alias:**
+```json
+{
+  "plc": "S7-1500",
+  "tag": "ProductCount",
+  "address": "DB1.DBD100",
+  "value": 42,
+  "type": "DINT",
+  "writable": true,
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+Message key: `S7-1500.ProductCount`
+
+**Example S7 without alias:**
+```json
+{
+  "plc": "S7-1500",
+  "tag": "DB1.DBD100",
+  "address": "DB1.DBD100",
+  "value": 42,
+  "type": "DINT",
+  "writable": true,
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+Message key: `S7-1500.DB1.DBD100`
 
 ### Health Status
 
-Health messages are published every 10 seconds to `{topic}.health`:
+Health messages are published to `{topic}.health`:
 
 ```json
 {
   "plc": "MainPLC",
+  "driver": "logix",
   "online": true,
   "status": "connected",
   "error": "",
@@ -138,6 +185,42 @@ kafka:
 | `-1` | All replicas must acknowledge (strongest durability) |
 | `0` | No acknowledgment (fire and forget) |
 | `1` | Leader must acknowledge |
+
+## Performance
+
+WarLogix uses batched publishing for high-throughput Kafka delivery. Messages are collected per topic and flushed together, reducing round-trips and improving throughput.
+
+### Batching Behavior
+
+| Setting | Value | Description |
+|---------|-------|-------------|
+| Batch size | 100 messages | Maximum messages per batch |
+| Batch timeout | 20ms | Flush interval for partial batches |
+| Writer batch size | 100 messages | kafka-go writer internal batching |
+| Writer batch timeout | 10ms | Writer flush interval |
+
+Messages are batched at two levels:
+1. **Manager level** - Collects messages per topic, flushes every 20ms or at 100 messages
+2. **Writer level** - kafka-go's internal batching provides additional buffering
+
+### Topic Auto-Creation
+
+When `auto_create_topics` is enabled (default), topics are created automatically on first publish using the Kafka broker's auto-create feature. This avoids the overhead of explicit topic creation calls.
+
+### Throughput
+
+Typical throughput depends on broker latency and message size:
+
+| Scenario | Expected Throughput |
+|----------|---------------------|
+| Local broker | 1,000 - 5,000 msg/s |
+| Network broker | 500 - 2,000 msg/s |
+| Many PLCs, many tags | Scales with batching |
+
+For maximum throughput:
+- Use `required_acks: 1` instead of `-1`
+- Ensure broker is on a low-latency network
+- Monitor with debug logging: `-debug -debug-filter kafka`
 
 ## Multiple Clusters
 

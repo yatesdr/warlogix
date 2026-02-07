@@ -13,6 +13,7 @@ import (
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 
 	"warlogix/config"
+	"warlogix/logging"
 )
 
 // joinTopic joins topic segments, trimming leading/trailing slashes from each
@@ -28,22 +29,8 @@ func joinTopic(segments ...string) string {
 	return strings.Join(parts, "/")
 }
 
-// DebugLogger is an interface for debug logging.
-type DebugLogger interface {
-	LogMQTT(format string, args ...interface{})
-}
-
-var debugLog DebugLogger
-
-// SetDebugLogger sets the debug logger for MQTT.
-func SetDebugLogger(logger DebugLogger) {
-	debugLog = logger
-}
-
 func logMQTT(format string, args ...interface{}) {
-	if debugLog != nil {
-		debugLog.LogMQTT(format, args...)
-	}
+	logging.DebugLog("MQTT", format, args...)
 }
 
 // writeJob represents a pending write operation.
@@ -288,8 +275,12 @@ func (p *Publisher) Stop() {
 	p.mu.Lock()
 	if !p.running || p.client == nil {
 		p.mu.Unlock()
+		logMQTT("Stop called but publisher not running")
 		return
 	}
+
+	name := p.config.Name
+	logMQTT("DISCONNECT %s: stopping publisher", name)
 
 	p.running = false
 	client := p.client
@@ -312,13 +303,15 @@ func (p *Publisher) Stop() {
 	}()
 	select {
 	case <-done:
+		logMQTT("DISCONNECT %s: write workers stopped", name)
 	case <-time.After(2 * time.Second):
-		logMQTT("Timeout waiting for write workers to stop")
+		logMQTT("DISCONNECT %s: timeout waiting for write workers", name)
 	}
 
 	// Disconnect OUTSIDE the lock to prevent blocking
 	if client != nil {
 		client.Disconnect(500)
+		logMQTT("DISCONNECT %s: client disconnected", name)
 	}
 }
 
@@ -374,19 +367,24 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 
 	// Use alias for topic if available, otherwise use tagName (address)
 	topic := p.BuildTopic(plcName, displayTag)
+
+	// Async publish - don't block waiting for ack
+	// QoS 1 ensures the broker will retry, paho handles retries internally
 	token := client.Publish(topic, 1, true, payload)
 
-	// Use timeout to prevent blocking
-	if !token.WaitTimeout(2 * time.Second) {
-		return false
-	}
-	if token.Error() != nil {
-		return false
-	}
-
+	// Update cache immediately (optimistic)
 	p.lastMu.Lock()
 	p.lastValues[cacheKey] = value
 	p.lastMu.Unlock()
+
+	// Check for immediate errors only (don't block for ack)
+	go func() {
+		if !token.WaitTimeout(5 * time.Second) {
+			logMQTT("Publish timeout for %s/%s", plcName, displayTag)
+		} else if token.Error() != nil {
+			logMQTT("Publish error for %s/%s: %v", plcName, displayTag, token.Error())
+		}
+	}()
 
 	return true
 }
@@ -419,14 +417,16 @@ func (p *Publisher) PublishHealth(plcName, driver string, online bool, status, e
 		return false
 	}
 
+	// Async publish for health updates
 	token := client.Publish(topic, 1, true, payload)
 
-	if !token.WaitTimeout(2 * time.Second) {
-		return false
-	}
-	if token.Error() != nil {
-		return false
-	}
+	go func() {
+		if !token.WaitTimeout(5 * time.Second) {
+			logMQTT("Health publish timeout for %s", plcName)
+		} else if token.Error() != nil {
+			logMQTT("Health publish error for %s: %v", plcName, token.Error())
+		}
+	}()
 
 	return true
 }

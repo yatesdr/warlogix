@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"
 	"github.com/segmentio/kafka-go/sasl/scram"
+
+	"warlogix/logging"
 )
 
 // ConnectionStatus represents the state of a Kafka connection.
@@ -86,7 +89,11 @@ func (p *Producer) Connect() error {
 	p.mu.Lock()
 	p.status = StatusConnecting
 	p.lastErr = nil
+	name := p.config.Name
+	brokers := p.config.Brokers
 	p.mu.Unlock()
+
+	logging.DebugLog("Kafka", "CONNECT %s: connecting to brokers %v", name, brokers)
 
 	// Test connectivity by fetching metadata
 	dialer := p.createDialer()
@@ -100,6 +107,7 @@ func (p *Producer) Connect() error {
 		p.status = StatusError
 		p.lastErr = fmt.Errorf("failed to connect: %w", err)
 		p.mu.Unlock()
+		logging.DebugLog("Kafka", "CONNECT %s: FAILED - %v", name, err)
 		return p.lastErr
 	}
 	conn.Close()
@@ -108,6 +116,7 @@ func (p *Producer) Connect() error {
 	p.status = StatusConnected
 	p.mu.Unlock()
 
+	logging.DebugLog("Kafka", "CONNECT %s: connected successfully", name)
 	return nil
 }
 
@@ -116,6 +125,9 @@ func (p *Producer) Disconnect() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	name := p.config.Name
+	logging.DebugLog("Kafka", "DISCONNECT %s: closing %d topic writers", name, len(p.writers))
+
 	for topic, writer := range p.writers {
 		writer.Close()
 		delete(p.writers, topic)
@@ -123,12 +135,20 @@ func (p *Producer) Disconnect() {
 
 	p.status = StatusDisconnected
 	p.lastErr = nil
+	logging.DebugLog("Kafka", "DISCONNECT %s: disconnected", name)
 }
 
 // Produce sends a message to the specified topic with exactly-once semantics.
 // This is a synchronous call that blocks until the message is acknowledged.
 func (p *Producer) Produce(ctx context.Context, topic string, key, value []byte) error {
+	produceStart := time.Now()
+
+	writerStart := time.Now()
 	writer, err := p.getWriter(topic)
+	writerDuration := time.Since(writerStart)
+	if writerDuration > 100*time.Millisecond {
+		logging.DebugLog("Kafka", "PRODUCE %s: getWriter('%s') took %v", p.config.Name, topic, writerDuration)
+	}
 	if err != nil {
 		return err
 	}
@@ -140,17 +160,83 @@ func (p *Producer) Produce(ctx context.Context, topic string, key, value []byte)
 	}
 
 	// Synchronous write with retries handled by the writer
+	writeStart := time.Now()
 	err = writer.WriteMessages(ctx, msg)
+	writeDuration := time.Since(writeStart)
+	if writeDuration > 100*time.Millisecond {
+		logging.DebugLog("Kafka", "PRODUCE %s: WriteMessages('%s') took %v", p.config.Name, topic, writeDuration)
+	}
+
 	if err != nil {
 		p.mu.Lock()
 		p.messagesError++
 		p.lastErr = err
 		p.mu.Unlock()
+		// Log specific error for topic not found
+		if strings.Contains(err.Error(), "Unknown Topic") {
+			logging.DebugLog("Kafka", "TOPIC %s: topic '%s' not found on broker", p.config.Name, topic)
+		}
+		logging.DebugLog("Kafka", "PRODUCE %s: FAILED topic '%s' after %v: %v", p.config.Name, topic, time.Since(produceStart), err)
 		return fmt.Errorf("kafka produce failed: %w", err)
+	}
+
+	totalDuration := time.Since(produceStart)
+	if totalDuration > 100*time.Millisecond {
+		logging.DebugLog("Kafka", "PRODUCE %s: topic '%s' completed in %v (writer: %v, write: %v)",
+			p.config.Name, topic, totalDuration, writerDuration, writeDuration)
 	}
 
 	p.mu.Lock()
 	p.messagesSent++
+	p.lastSendTime = time.Now()
+	p.lastErr = nil
+	p.mu.Unlock()
+
+	return nil
+}
+
+// ProduceBatch sends multiple messages to the specified topic in a single call.
+// This is more efficient than calling Produce multiple times.
+func (p *Producer) ProduceBatch(ctx context.Context, topic string, messages []kafka.Message) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	produceStart := time.Now()
+
+	writerStart := time.Now()
+	writer, err := p.getWriter(topic)
+	writerDuration := time.Since(writerStart)
+	if writerDuration > 100*time.Millisecond {
+		logging.DebugLog("Kafka", "PRODUCE_BATCH %s: getWriter('%s') took %v", p.config.Name, topic, writerDuration)
+	}
+	if err != nil {
+		return err
+	}
+
+	// Write all messages in a single call
+	writeStart := time.Now()
+	err = writer.WriteMessages(ctx, messages...)
+	writeDuration := time.Since(writeStart)
+
+	if err != nil {
+		p.mu.Lock()
+		p.messagesError += int64(len(messages))
+		p.lastErr = err
+		p.mu.Unlock()
+		logging.DebugLog("Kafka", "PRODUCE_BATCH %s: FAILED topic '%s' (%d msgs) after %v: %v",
+			p.config.Name, topic, len(messages), time.Since(produceStart), err)
+		return fmt.Errorf("kafka batch produce failed: %w", err)
+	}
+
+	totalDuration := time.Since(produceStart)
+	if totalDuration > 50*time.Millisecond || len(messages) >= 10 {
+		logging.DebugLog("Kafka", "PRODUCE_BATCH %s: topic '%s' sent %d msgs in %v (write: %v, %.1f msg/s)",
+			p.config.Name, topic, len(messages), totalDuration, writeDuration, float64(len(messages))/totalDuration.Seconds())
+	}
+
+	p.mu.Lock()
+	p.messagesSent += int64(len(messages))
 	p.lastSendTime = time.Now()
 	p.lastErr = nil
 	p.mu.Unlock()
@@ -195,7 +281,13 @@ func (p *Producer) getWriter(topic string) (*kafka.Writer, error) {
 		return writer, nil
 	}
 
-	// Create new writer for this topic
+	getWriterStart := time.Now()
+
+	// NOTE: We rely on AllowAutoTopicCreation on the Writer instead of
+	// calling ensureTopicExists(), which creates 2 TCP connections per topic.
+	// The broker will auto-create topics on first produce if configured.
+
+	// Create new writer for this topic with batching enabled
 	transport := p.createTransport()
 
 	writer := &kafka.Writer{
@@ -204,17 +296,82 @@ func (p *Producer) getWriter(topic string) (*kafka.Writer, error) {
 		Balancer:  &kafka.LeastBytes{},
 		Transport: transport,
 
-		// Exactly-once settings
+		// Delivery guarantees
 		RequiredAcks: kafka.RequiredAcks(p.config.RequiredAcks),
-		Async:        false, // Synchronous for exactly-once guarantee
+		Async:        false, // Synchronous for delivery guarantee
 		MaxAttempts:  p.config.MaxRetries,
 
-		// Don't auto-create topics - they should exist
-		AllowAutoTopicCreation: false,
+		// Batching settings for performance
+		BatchSize:    100,                    // Batch up to 100 messages
+		BatchBytes:   1048576,                // Or 1MB, whichever comes first
+		BatchTimeout: 10 * time.Millisecond,  // Flush after 10ms if batch not full
+
+		// Auto-create topics on first produce
+		AllowAutoTopicCreation: p.config.AutoCreateTopics,
 	}
 
 	p.writers[topic] = writer
+	totalDuration := time.Since(getWriterStart)
+	logging.DebugLog("Kafka", "TOPIC %s: created writer for topic '%s' in %v (auto-create=%v, batch=100/10ms)",
+		p.config.Name, topic, totalDuration, p.config.AutoCreateTopics)
 	return writer, nil
+}
+
+// ensureTopicExists creates the topic if it doesn't exist.
+// Must be called with p.mu held.
+func (p *Producer) ensureTopicExists(topic string) error {
+	totalStart := time.Now()
+	dialer := p.createDialer()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dialStart := time.Now()
+	conn, err := dialer.DialContext(ctx, "tcp", p.config.Brokers[0])
+	if err != nil {
+		return fmt.Errorf("failed to connect after %v: %w", time.Since(dialStart), err)
+	}
+	defer conn.Close()
+	logging.DebugLog("Kafka", "TOPIC %s: dial to broker took %v", p.config.Name, time.Since(dialStart))
+
+	// Get the controller to create topics
+	controllerStart := time.Now()
+	controller, err := conn.Controller()
+	if err != nil {
+		return fmt.Errorf("failed to get controller after %v: %w", time.Since(controllerStart), err)
+	}
+	logging.DebugLog("Kafka", "TOPIC %s: get controller took %v", p.config.Name, time.Since(controllerStart))
+
+	controllerDialStart := time.Now()
+	controllerConn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", controller.Host, controller.Port))
+	if err != nil {
+		return fmt.Errorf("failed to connect to controller after %v: %w", time.Since(controllerDialStart), err)
+	}
+	defer controllerConn.Close()
+	logging.DebugLog("Kafka", "TOPIC %s: dial to controller took %v", p.config.Name, time.Since(controllerDialStart))
+
+	// Create the topic with default settings
+	createStart := time.Now()
+	err = controllerConn.CreateTopics(kafka.TopicConfig{
+		Topic:             topic,
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+	})
+
+	if err != nil {
+		// Ignore "topic already exists" error
+		if strings.Contains(err.Error(), "Topic with this name already exists") ||
+			strings.Contains(err.Error(), "already exists") {
+			logging.DebugLog("Kafka", "TOPIC %s: topic '%s' already exists (checked in %v, total %v)",
+				p.config.Name, topic, time.Since(createStart), time.Since(totalStart))
+			return nil
+		}
+		return fmt.Errorf("failed to create topic after %v: %w", time.Since(createStart), err)
+	}
+
+	logging.DebugLog("Kafka", "TOPIC %s: created topic '%s' in %v (total %v)",
+		p.config.Name, topic, time.Since(createStart), time.Since(totalStart))
+	return nil
 }
 
 // createDialer creates a Kafka dialer with auth and TLS.

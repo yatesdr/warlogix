@@ -7,6 +7,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/segmentio/kafka-go"
+	"warlogix/logging"
 )
 
 // sanitizeTopic trims leading/trailing dots from a topic name to avoid
@@ -47,12 +50,21 @@ type HealthMessage struct {
 
 // publishJob represents a pending Kafka publish operation.
 type publishJob struct {
+	producer  *Producer
+	topic     string
+	key       []byte
+	payload   []byte
+	cacheKey  string
+	value     interface{}
+	queueTime time.Time // When the job was queued
+}
+
+// topicBatch collects messages for a single topic.
+type topicBatch struct {
 	producer *Producer
 	topic    string
-	key      []byte
-	payload  []byte
-	cacheKey string
-	value    interface{}
+	messages []kafka.Message
+	cacheUpdates map[string]interface{} // cacheKey -> value
 }
 
 // Manager manages multiple Kafka producer connections.
@@ -62,33 +74,37 @@ type Manager struct {
 	lastValues map[string]interface{} // Track last published values per cluster/plc/tag
 	lastMu     sync.RWMutex
 
-	// Worker pool for bounded publish goroutines
-	publishQueue chan publishJob
+	// Batched publishing
+	batchChan    chan publishJob       // Incoming jobs for batching
 	wg           sync.WaitGroup
 	stopChan     chan struct{}
 	started      bool
 }
 
-// MaxPublishWorkers is the maximum number of concurrent publish goroutines.
-const MaxPublishWorkers = 10
-
-// MaxPublishQueueSize is the maximum number of pending publish jobs.
-const MaxPublishQueueSize = 1000
+// Batching configuration
+const (
+	// MaxBatchSize is the maximum number of messages per batch per topic.
+	MaxBatchSize = 100
+	// BatchFlushInterval is how often to flush partial batches.
+	BatchFlushInterval = 20 * time.Millisecond
+	// MaxBatchQueueSize is the maximum pending jobs before dropping.
+	MaxBatchQueueSize = 5000
+)
 
 // NewManager creates a new Kafka manager.
 func NewManager() *Manager {
 	m := &Manager{
-		producers:    make(map[string]*Producer),
-		lastValues:   make(map[string]interface{}),
-		publishQueue: make(chan publishJob, MaxPublishQueueSize),
-		stopChan:     make(chan struct{}),
+		producers:  make(map[string]*Producer),
+		lastValues: make(map[string]interface{}),
+		batchChan:  make(chan publishJob, MaxBatchQueueSize),
+		stopChan:   make(chan struct{}),
 	}
-	m.startWorkers()
+	m.startBatcher()
 	return m
 }
 
-// startWorkers starts the publish worker goroutines.
-func (m *Manager) startWorkers() {
+// startBatcher starts the batch aggregation goroutine.
+func (m *Manager) startBatcher() {
 	m.mu.Lock()
 	if m.started {
 		m.mu.Unlock()
@@ -97,33 +113,96 @@ func (m *Manager) startWorkers() {
 	m.started = true
 	m.mu.Unlock()
 
-	for i := 0; i < MaxPublishWorkers; i++ {
-		m.wg.Add(1)
-		go m.publishWorker()
-	}
+	m.wg.Add(1)
+	go m.batchProcessor()
 }
 
-// publishWorker processes publish jobs from the queue.
-func (m *Manager) publishWorker() {
+// batchProcessor collects messages and publishes them in batches per topic.
+func (m *Manager) batchProcessor() {
 	defer m.wg.Done()
+
+	// Batches per producer+topic key
+	batches := make(map[string]*topicBatch)
+	ticker := time.NewTicker(BatchFlushInterval)
+	defer ticker.Stop()
+
+	flushBatch := func(key string, batch *topicBatch) {
+		if len(batch.messages) == 0 {
+			return
+		}
+
+		batchStart := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := batch.producer.ProduceBatch(ctx, batch.topic, batch.messages)
+		cancel()
+
+		if err == nil {
+			// Update cache for all successful messages
+			m.lastMu.Lock()
+			for cacheKey, value := range batch.cacheUpdates {
+				m.lastValues[cacheKey] = value
+			}
+			m.lastMu.Unlock()
+
+			if time.Since(batchStart) > 50*time.Millisecond {
+				logKafka("BATCH: flushed %d msgs to %s in %v", len(batch.messages), batch.topic, time.Since(batchStart))
+			}
+		} else {
+			logKafka("BATCH: failed to flush %d msgs to %s: %v", len(batch.messages), batch.topic, err)
+		}
+	}
+
+	flushAll := func() {
+		for key, batch := range batches {
+			flushBatch(key, batch)
+			delete(batches, key)
+		}
+	}
 
 	for {
 		select {
 		case <-m.stopChan:
+			// Flush remaining batches before exit
+			flushAll()
 			return
-		case job, ok := <-m.publishQueue:
+
+		case job, ok := <-m.batchChan:
 			if !ok {
+				flushAll()
 				return
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := job.producer.Produce(ctx, job.topic, job.key, job.payload); err == nil {
-				m.lastMu.Lock()
-				m.lastValues[job.cacheKey] = job.value
-				m.lastMu.Unlock()
-			} else {
-				logKafka("Failed to publish %s: %v", job.cacheKey, err)
+
+			// Create batch key from producer name + topic
+			batchKey := job.producer.config.Name + ":" + job.topic
+
+			batch, exists := batches[batchKey]
+			if !exists {
+				batch = &topicBatch{
+					producer:     job.producer,
+					topic:        job.topic,
+					messages:     make([]kafka.Message, 0, MaxBatchSize),
+					cacheUpdates: make(map[string]interface{}),
+				}
+				batches[batchKey] = batch
 			}
-			cancel()
+
+			// Add message to batch
+			batch.messages = append(batch.messages, kafka.Message{
+				Key:   job.key,
+				Value: job.payload,
+				Time:  job.queueTime,
+			})
+			batch.cacheUpdates[job.cacheKey] = job.value
+
+			// Flush if batch is full
+			if len(batch.messages) >= MaxBatchSize {
+				flushBatch(batchKey, batch)
+				delete(batches, batchKey)
+			}
+
+		case <-ticker.C:
+			// Periodic flush of all partial batches
+			flushAll()
 		}
 	}
 }
@@ -213,13 +292,13 @@ func (m *Manager) ConnectEnabled() {
 	}
 }
 
-// StopAll disconnects from all Kafka clusters and stops workers.
+// StopAll disconnects from all Kafka clusters and stops the batcher.
 func (m *Manager) StopAll() {
-	// Stop the worker goroutines first
+	// Stop the batcher goroutine first
 	m.mu.Lock()
 	if !m.started {
 		m.mu.Unlock()
-		// Still disconnect producers even if workers weren't started
+		// Still disconnect producers even if batcher wasn't started
 		m.mu.RLock()
 		producers := make([]*Producer, 0, len(m.producers))
 		for _, p := range m.producers {
@@ -235,14 +314,14 @@ func (m *Manager) StopAll() {
 	// Save old channels and create new ones while holding lock
 	oldStopChan := m.stopChan
 	m.stopChan = make(chan struct{})
-	m.publishQueue = make(chan publishJob, MaxPublishQueueSize)
+	m.batchChan = make(chan publishJob, MaxBatchQueueSize)
 	m.started = false
 	m.mu.Unlock()
 
-	// Stop workers by closing old channel
+	// Stop batcher by closing old channel
 	close(oldStopChan)
 
-	// Wait for workers to finish (with timeout)
+	// Wait for batcher to finish (with timeout)
 	done := make(chan struct{})
 	go func() {
 		m.wg.Wait()
@@ -251,7 +330,7 @@ func (m *Manager) StopAll() {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		logKafka("Timeout waiting for publish workers to stop")
+		logKafka("Timeout waiting for batch processor to stop")
 	}
 
 	// Disconnect all producers
@@ -314,22 +393,8 @@ func (m *Manager) LoadFromConfigs(configs []Config) {
 	}
 }
 
-// DebugLogger is an interface for debug logging.
-type DebugLogger interface {
-	LogKafka(format string, args ...interface{})
-}
-
-var debugLog DebugLogger
-
-// SetDebugLogger sets the debug logger for Kafka.
-func SetDebugLogger(logger DebugLogger) {
-	debugLog = logger
-}
-
 func logKafka(format string, args ...interface{}) {
-	if debugLog != nil {
-		debugLog.LogKafka(format, args...)
-	}
+	logging.DebugLog("Kafka", format, args...)
 }
 
 // Publish sends a tag value to all connected Kafka clusters that have PublishChanges enabled.
@@ -337,7 +402,7 @@ func logKafka(format string, args ...interface{}) {
 // For S7 PLCs, alias is the user-defined name and address is the S7 address in uppercase.
 func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, value interface{}, writable, force bool) {
 	// Ensure workers are running
-	m.startWorkers()
+	m.startBatcher()
 
 	m.mu.RLock()
 	producers := make([]*Producer, 0, len(m.producers))
@@ -391,31 +456,32 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 			continue
 		}
 
-		// Use tag name as key for ordering
-		key := []byte(fmt.Sprintf("%s.%s", plcName, tagName))
+		// Use alias (or tag name if no alias) as key for ordering
+		key := []byte(fmt.Sprintf("%s.%s", plcName, displayTag))
 
-		// Queue the publish job (non-blocking with drop on overflow)
+		// Queue the publish job for batching (non-blocking with drop on overflow)
 		job := publishJob{
-			producer: p,
-			topic:    sanitizeTopic(p.config.Topic),
-			key:      key,
-			payload:  payload,
-			cacheKey: cacheKey,
-			value:    value,
+			producer:  p,
+			topic:     sanitizeTopic(p.config.Topic),
+			key:       key,
+			payload:   payload,
+			cacheKey:  cacheKey,
+			value:     value,
+			queueTime: time.Now(),
 		}
 		select {
-		case m.publishQueue <- job:
-			// Job queued successfully
+		case m.batchChan <- job:
+			// Job queued for batching
 		default:
 			// Queue full, drop the message and log
-			logKafka("Publish queue full, dropping message for %s", cacheKey)
+			logKafka("Batch queue full, dropping message for %s", cacheKey)
 		}
 	}
 }
 
 // PublishHealth publishes PLC health status to all connected Kafka clusters.
 func (m *Manager) PublishHealth(plcName, driver string, online bool, status, errMsg string) {
-	m.startWorkers()
+	m.startBatcher()
 
 	m.mu.RLock()
 	producers := make([]*Producer, 0, len(m.producers))
@@ -452,18 +518,19 @@ func (m *Manager) PublishHealth(plcName, driver string, online bool, status, err
 		key := []byte(plcName)
 
 		job := publishJob{
-			producer: p,
-			topic:    healthTopic,
-			key:      key,
-			payload:  payload,
-			cacheKey: fmt.Sprintf("%s/%s/health", p.config.Name, plcName),
-			value:    nil, // Health messages are always published
+			producer:  p,
+			topic:     healthTopic,
+			key:       key,
+			payload:   payload,
+			cacheKey:  fmt.Sprintf("%s/%s/health", p.config.Name, plcName),
+			value:     nil, // Health messages are always published
+			queueTime: time.Now(),
 		}
 		select {
-		case m.publishQueue <- job:
-			// Job queued successfully
+		case m.batchChan <- job:
+			// Job queued for batching
 		default:
-			logKafka("Publish queue full, dropping health message for %s", plcName)
+			logKafka("Batch queue full, dropping health message for %s", plcName)
 		}
 	}
 }

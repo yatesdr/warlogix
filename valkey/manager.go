@@ -2,9 +2,22 @@ package valkey
 
 import (
 	"sync"
+	"time"
 
 	"warlogix/config"
 )
+
+// Batching configuration for Valkey
+const (
+	ValkeyBatchSize     = 100
+	ValkeyBatchInterval = 20 * time.Millisecond
+	ValkeyBatchQueueSize = 5000
+)
+
+// valkeyJob represents a pending publish operation.
+type valkeyJob struct {
+	item TagPublishItem
+}
 
 // Manager manages multiple Valkey publishers.
 type Manager struct {
@@ -17,12 +30,86 @@ type Manager struct {
 	tagTypeLookup     func(plcName, tagName string) uint16
 	onConnectCallback func()
 	plcNames          []string
+
+	// Batching
+	batchChan chan valkeyJob
+	stopChan  chan struct{}
+	wg        sync.WaitGroup
+	started   bool
 }
 
 // NewManager creates a new Valkey manager.
 func NewManager() *Manager {
-	return &Manager{
+	m := &Manager{
 		publishers: make([]*Publisher, 0),
+		batchChan:  make(chan valkeyJob, ValkeyBatchQueueSize),
+		stopChan:   make(chan struct{}),
+	}
+	m.startBatcher()
+	return m
+}
+
+// startBatcher starts the batch processor goroutine.
+func (m *Manager) startBatcher() {
+	m.mu.Lock()
+	if m.started {
+		m.mu.Unlock()
+		return
+	}
+	m.started = true
+	m.mu.Unlock()
+
+	m.wg.Add(1)
+	go m.batchProcessor()
+}
+
+// batchProcessor collects items and publishes them in batches.
+func (m *Manager) batchProcessor() {
+	defer m.wg.Done()
+
+	var batch []TagPublishItem
+	ticker := time.NewTicker(ValkeyBatchInterval)
+	defer ticker.Stop()
+
+	flushBatch := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		m.mu.RLock()
+		publishers := make([]*Publisher, len(m.publishers))
+		copy(publishers, m.publishers)
+		m.mu.RUnlock()
+
+		for _, pub := range publishers {
+			if pub.IsRunning() {
+				if err := pub.PublishBatch(batch); err != nil {
+					debugLog("Valkey batch publish error (%s): %v", pub.config.Name, err)
+				}
+			}
+		}
+		batch = batch[:0] // Clear but keep capacity
+	}
+
+	for {
+		select {
+		case <-m.stopChan:
+			flushBatch()
+			return
+
+		case job, ok := <-m.batchChan:
+			if !ok {
+				flushBatch()
+				return
+			}
+			batch = append(batch, job.item)
+			if len(batch) >= ValkeyBatchSize {
+				flushBatch()
+			}
+
+		case <-ticker.C:
+			flushBatch()
+		}
 	}
 }
 
@@ -139,8 +226,35 @@ func (m *Manager) StartAll() int {
 	return started
 }
 
-// StopAll stops all publishers.
+// StopAll stops all publishers and the batcher.
 func (m *Manager) StopAll() {
+	// Stop batcher first
+	m.mu.Lock()
+	if m.started {
+		oldStopChan := m.stopChan
+		m.stopChan = make(chan struct{})
+		m.batchChan = make(chan valkeyJob, ValkeyBatchQueueSize)
+		m.started = false
+		m.mu.Unlock()
+
+		close(oldStopChan)
+
+		// Wait for batcher with timeout
+		done := make(chan struct{})
+		go func() {
+			m.wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			debugLog("Timeout waiting for Valkey batcher to stop")
+		}
+	} else {
+		m.mu.Unlock()
+	}
+
+	// Stop all publishers
 	m.mu.RLock()
 	publishers := make([]*Publisher, len(m.publishers))
 	copy(publishers, m.publishers)
@@ -164,30 +278,29 @@ func (m *Manager) AnyRunning() bool {
 	return false
 }
 
-// Publish publishes a tag value to all running publishers.
+// Publish queues a tag value for batched publishing to all running publishers.
 // For S7 PLCs, alias is the user-defined name and address is the S7 address in uppercase.
 func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, value interface{}, writable bool) {
-	m.mu.RLock()
-	publishers := make([]*Publisher, len(m.publishers))
-	copy(publishers, m.publishers)
-	m.mu.RUnlock()
+	// Ensure batcher is running
+	m.startBatcher()
 
-	if len(publishers) == 0 {
-		debugLog("Manager.Publish: no publishers configured")
-		return
+	job := valkeyJob{
+		item: TagPublishItem{
+			PLCName:  plcName,
+			TagName:  tagName,
+			Alias:    alias,
+			Address:  address,
+			TypeName: typeName,
+			Value:    value,
+			Writable: writable,
+		},
 	}
 
-	runningCount := 0
-	for _, pub := range publishers {
-		if pub.IsRunning() {
-			runningCount++
-			if err := pub.Publish(plcName, tagName, alias, address, typeName, value, writable); err != nil {
-				debugLog("Valkey publish error (%s): %v", pub.config.Name, err)
-			}
-		}
-	}
-	if runningCount == 0 {
-		debugLog("Manager.Publish: no publishers running")
+	select {
+	case m.batchChan <- job:
+		// Queued for batching
+	default:
+		debugLog("Valkey batch queue full, dropping message for %s/%s", plcName, tagName)
 	}
 }
 
