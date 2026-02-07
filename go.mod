@@ -9,9 +9,7 @@ require (
 	github.com/gliderlabs/ssh v0.3.8
 	github.com/redis/go-redis/v9 v9.17.3
 	github.com/rivo/tview v0.42.0
-	github.com/robinson/gos7 v0.0.0-20241205073040-7ea1d6fb9d20
 	github.com/segmentio/kafka-go v0.4.50
-	github.com/xiaotushaoxia/fins v0.0.2
 	golang.org/x/crypto v0.42.0
 	golang.org/x/sys v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -28,6 +26,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/stretchr/testify v1.9.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect

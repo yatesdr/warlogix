@@ -4,21 +4,17 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"strings"
 	"sync"
 	"time"
-
-	"github.com/robinson/gos7"
 )
 
 // Client is a high-level wrapper for S7 PLC communication.
 type Client struct {
-	handler   *gos7.TCPClientHandler
-	client    gos7.Client
+	transport *transport
 	address   string
 	rack      int
 	slot      int
-	connected bool
+	pduRef    uint16
 	mu        sync.Mutex
 }
 
@@ -63,26 +59,19 @@ func Connect(address string, opts ...Option) (*Client, error) {
 		opt(cfg)
 	}
 
-	// Create TCP handler
-	handler := gos7.NewTCPClientHandler(address, cfg.rack, cfg.slot)
-	handler.Timeout = cfg.timeout
-	handler.IdleTimeout = cfg.timeout
+	t := newTransport()
+	t.timeout = cfg.timeout
 
-	// Connect
-	if err := handler.Connect(); err != nil {
+	if err := t.connect(address, cfg.rack, cfg.slot); err != nil {
 		return nil, fmt.Errorf("Connect: %w", err)
 	}
 
-	// Create client
-	client := gos7.NewClient(handler)
-
 	return &Client{
-		handler:   handler,
-		client:    client,
+		transport: t,
 		address:   address,
 		rack:      cfg.rack,
 		slot:      cfg.slot,
-		connected: true,
+		pduRef:    0,
 	}, nil
 }
 
@@ -93,9 +82,8 @@ func (c *Client) Close() {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.connected = false
-	if c.handler != nil {
-		c.handler.Close()
+	if c.transport != nil {
+		c.transport.close()
 	}
 }
 
@@ -106,7 +94,7 @@ func (c *Client) IsConnected() bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.connected
+	return c.transport != nil && c.transport.isConnected()
 }
 
 // SetDisconnected marks the client as disconnected.
@@ -117,7 +105,11 @@ func (c *Client) SetDisconnected() {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.connected = false
+	if c.transport != nil {
+		c.transport.mu.Lock()
+		c.transport.connected = false
+		c.transport.mu.Unlock()
+	}
 }
 
 // Reconnect attempts to re-establish the connection.
@@ -128,14 +120,14 @@ func (c *Client) Reconnect() error {
 	}
 
 	c.mu.Lock()
-	if c.connected {
+	if c.transport != nil && c.transport.isConnected() {
 		c.mu.Unlock()
 		return nil
 	}
 
-	// Close existing handler if any
-	if c.handler != nil {
-		c.handler.Close()
+	// Close existing transport if any
+	if c.transport != nil {
+		c.transport.close()
 	}
 
 	address := c.address
@@ -143,21 +135,16 @@ func (c *Client) Reconnect() error {
 	slot := c.slot
 	c.mu.Unlock()
 
-	// Create new handler
-	handler := gos7.NewTCPClientHandler(address, rack, slot)
-	handler.Timeout = 10 * time.Second
-	handler.IdleTimeout = 10 * time.Second
+	// Create new transport
+	t := newTransport()
+	t.timeout = 10 * time.Second
 
-	if err := handler.Connect(); err != nil {
+	if err := t.connect(address, rack, slot); err != nil {
 		return fmt.Errorf("reconnect failed: %w", err)
 	}
 
-	client := gos7.NewClient(handler)
-
 	c.mu.Lock()
-	c.handler = handler
-	c.client = client
-	c.connected = true
+	c.transport = t
 	c.mu.Unlock()
 
 	return nil
@@ -169,7 +156,7 @@ func (c *Client) ConnectionMode() string {
 		return "Not connected"
 	}
 	c.mu.Lock()
-	connected := c.connected
+	connected := c.transport != nil && c.transport.isConnected()
 	rack := c.rack
 	slot := c.slot
 	c.mu.Unlock()
@@ -177,6 +164,15 @@ func (c *Client) ConnectionMode() string {
 		return fmt.Sprintf("S7 Connected (Rack %d, Slot %d)", rack, slot)
 	}
 	return "Disconnected"
+}
+
+// nextPDURef returns the next PDU reference number.
+func (c *Client) nextPDURef() uint16 {
+	c.pduRef++
+	if c.pduRef == 0 {
+		c.pduRef = 1
+	}
+	return c.pduRef
 }
 
 // TagRequest represents a tag to read with optional type hint.
@@ -199,7 +195,7 @@ func (c *Client) Read(addresses ...string) ([]*TagValue, error) {
 // ReadWithTypes reads addresses with optional type hints.
 // Type hints are used for simple addresses (DB1.0) that don't specify the data type.
 func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
-	if c == nil || c.client == nil {
+	if c == nil || c.transport == nil {
 		return nil, fmt.Errorf("Read: nil client")
 	}
 	if len(requests) == 0 {
@@ -288,58 +284,28 @@ func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
 
 // readAddress reads data from a specific S7 address.
 func (c *Client) readAddress(addr *Address) ([]byte, error) {
-	buf := make([]byte, addr.Size)
+	// Build read request
+	request := buildReadRequest([]*Address{addr}, c.nextPDURef())
 
-	var err error
-	switch addr.Area {
-	case AreaDB:
-		err = c.client.AGReadDB(addr.DBNumber, addr.Offset, addr.Size, buf)
-	case AreaI:
-		err = c.client.AGReadEB(addr.Offset, addr.Size, buf)
-	case AreaQ:
-		err = c.client.AGReadAB(addr.Offset, addr.Size, buf)
-	case AreaM:
-		err = c.client.AGReadMB(addr.Offset, addr.Size, buf)
-	case AreaT:
-		err = c.client.AGReadTM(addr.Offset, addr.Size, buf)
-	case AreaC:
-		err = c.client.AGReadCT(addr.Offset, addr.Size, buf)
-	default:
-		return nil, fmt.Errorf("unsupported area: %v", addr.Area)
-	}
-
+	// Send and receive
+	response, err := c.transport.sendReceive(request)
 	if err != nil {
-		// Check if this is a connection error that indicates the link is dead
-		if isConnectionError(err) {
-			c.connected = false
-		}
 		return nil, err
 	}
 
-	return buf, nil
-}
-
-// isConnectionError checks if an error indicates the TCP connection is broken.
-func isConnectionError(err error) bool {
-	if err == nil {
-		return false
+	// Parse response
+	results, errors := parseReadResponse(response, 1)
+	if errors[0] != nil {
+		return nil, errors[0]
 	}
-	errStr := strings.ToLower(err.Error())
-	// Common connection-related error patterns
-	return strings.Contains(errStr, "connection") ||
-		strings.Contains(errStr, "broken pipe") ||
-		strings.Contains(errStr, "reset by peer") ||
-		strings.Contains(errStr, "eof") ||
-		strings.Contains(errStr, "timeout") ||
-		strings.Contains(errStr, "refused") ||
-		strings.Contains(errStr, "closed") ||
-		strings.Contains(errStr, "nil")
+
+	return results[0], nil
 }
 
 // Write writes a value to an S7 address.
 // The value type is inferred and converted appropriately.
 func (c *Client) Write(address string, value interface{}) error {
-	if c == nil || c.client == nil {
+	if c == nil || c.transport == nil {
 		return fmt.Errorf("Write: nil client")
 	}
 
@@ -361,24 +327,17 @@ func (c *Client) Write(address string, value interface{}) error {
 
 // writeAddress writes data to a specific S7 address.
 func (c *Client) writeAddress(addr *Address, data []byte) error {
-	var err error
-	switch addr.Area {
-	case AreaDB:
-		err = c.client.AGWriteDB(addr.DBNumber, addr.Offset, len(data), data)
-	case AreaI:
-		err = c.client.AGWriteEB(addr.Offset, len(data), data)
-	case AreaQ:
-		err = c.client.AGWriteAB(addr.Offset, len(data), data)
-	case AreaM:
-		err = c.client.AGWriteMB(addr.Offset, len(data), data)
-	case AreaT:
-		err = c.client.AGWriteTM(addr.Offset, len(data), data)
-	case AreaC:
-		err = c.client.AGWriteCT(addr.Offset, len(data), data)
-	default:
-		return fmt.Errorf("unsupported area: %v", addr.Area)
+	// Build write request
+	request := buildWriteRequest(addr, data, c.nextPDURef())
+
+	// Send and receive
+	response, err := c.transport.sendReceive(request)
+	if err != nil {
+		return err
 	}
-	return err
+
+	// Parse response
+	return parseWriteResponse(response)
 }
 
 // encodeValue converts a Go value to bytes for the given address type.
@@ -609,25 +568,20 @@ func encodeULInt(value interface{}) ([]byte, error) {
 }
 
 // GetCPUInfo returns information about the connected CPU.
+// Note: CPU info retrieval is not yet implemented in native protocol.
 func (c *Client) GetCPUInfo() (*CPUInfo, error) {
-	if c == nil || c.client == nil {
+	if c == nil || c.transport == nil {
 		return nil, fmt.Errorf("GetCPUInfo: nil client")
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	info, err := c.client.GetCPUInfo()
-	if err != nil {
-		return nil, err
-	}
-
+	// CPU info retrieval requires UserData PDU type which is more complex
+	// Return a placeholder for now
 	return &CPUInfo{
-		ModuleTypeName: info.ModuleTypeName,
-		SerialNumber:   info.SerialNumber,
-		ASName:         info.ASName,
-		Copyright:      info.Copyright,
-		ModuleName:     info.ModuleName,
+		ModuleTypeName: "S7 PLC",
+		SerialNumber:   "",
+		ASName:         "",
+		Copyright:      "",
+		ModuleName:     "",
 	}, nil
 }
 
