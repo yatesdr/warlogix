@@ -152,7 +152,9 @@ func runBrokerTests(cfg *config.Config) {
 			fmt.Printf("  • %s\n", b)
 		}
 		fmt.Println()
-		fmt.Println("The test will send significant traffic to these brokers.")
+		fmt.Println("The test will send significant traffic that may saturate these servers.")
+		fmt.Println("Do not run in a production environment unless it is safe to do so.")
+		fmt.Println()
 		fmt.Println("Test topics/keys are prefixed with 'warlogix-test-stress'.")
 		fmt.Println()
 		fmt.Print("Continue? [y/N]: ")
