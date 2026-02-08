@@ -5,6 +5,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"warlogix/logging"
 )
 
 // NetworkDeviceInfo contains identity information about a discovered Omron PLC.
@@ -85,11 +87,13 @@ func NetworkDiscoverSubnet(cidr string, timeout time.Duration, concurrency int) 
 func probeOmron(ip net.IP, timeout time.Duration) *NetworkDeviceInfo {
 	// Try FINS/UDP first (most common for older Omron PLCs)
 	if device := probeFINSUDP(ip, timeout); device != nil {
+		logging.DebugLog("tui", "FINS probeOmron: %s responded to FINS/UDP", ip.String())
 		return device
 	}
 
 	// Try FINS/TCP
 	if device := probeFINSTCP(ip, timeout); device != nil {
+		logging.DebugLog("tui", "FINS probeOmron: %s responded to FINS/TCP", ip.String())
 		return device
 	}
 

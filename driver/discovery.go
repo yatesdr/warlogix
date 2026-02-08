@@ -529,11 +529,10 @@ func discoverADS(cidr string, timeout time.Duration, concurrency int) []Discover
 	logging.DebugLog("tui", "discoverADS: processing %d devices", len(devices))
 	var results []DiscoveredDevice
 	for i, dev := range devices {
-		logging.DebugLog("tui", "discoverADS: device %d: IP=%s Connected=%v ProductName=%q",
-			i, dev.IP.String(), dev.Connected, dev.ProductName)
-		if !dev.Connected {
-			continue
-		}
+		logging.DebugLog("tui", "discoverADS: device %d: IP=%s Connected=%v ProductName=%q AmsNetId=%s",
+			i, dev.IP.String(), dev.Connected, dev.ProductName, dev.AmsNetId)
+		// Include all devices that accepted TCP connection on ADS port
+		// Even "unconfirmed" devices are likely TwinCAT systems that need routes configured
 		results = append(results, DiscoveredDevice{
 			IP:          dev.IP,
 			Port:        dev.Port,
@@ -553,14 +552,18 @@ func discoverADS(cidr string, timeout time.Duration, concurrency int) []Discover
 
 // discoverFINS scans for Omron FINS PLCs.
 func discoverFINS(cidr string, timeout time.Duration, concurrency int) []DiscoveredDevice {
+	logging.DebugLog("tui", "discoverFINS: calling omron.NetworkDiscoverSubnet with cidr=%s", cidr)
 	devices, err := omron.NetworkDiscoverSubnet(cidr, timeout, concurrency)
+	logging.DebugLog("tui", "discoverFINS: NetworkDiscoverSubnet returned err=%v devices=%d", err, len(devices))
 	if err != nil {
 		logging.DebugLog("Discovery", "FINS scan error: %v", err)
 		return nil
 	}
 
 	var results []DiscoveredDevice
-	for _, dev := range devices {
+	for i, dev := range devices {
+		logging.DebugLog("tui", "discoverFINS: device %d: IP=%s Protocol=%s ProductName=%q Node=%d",
+			i, dev.IP.String(), dev.Protocol, dev.ProductName, dev.Node)
 		results = append(results, DiscoveredDevice{
 			IP:          dev.IP,
 			Port:        dev.Port,
@@ -574,7 +577,7 @@ func discoverFINS(cidr string, timeout time.Duration, concurrency int) []Discove
 		})
 	}
 
-	logging.DebugLog("Discovery", "FINS found %d device(s)", len(results))
+	logging.DebugLog("tui", "discoverFINS: returning %d devices", len(results))
 	return results
 }
 
