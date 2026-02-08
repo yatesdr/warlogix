@@ -453,7 +453,9 @@ func (c *Client) readFINSBatchedWithTypes(tagRequests []TagRequest) ([]*TagValue
 			continue
 		}
 
-		wordCount := (TypeSize(parsed.TypeCode) * parsed.Count) / 2
+		// Round up to ensure we read enough words for odd-byte types like BYTE[3]
+		byteCount := TypeSize(parsed.TypeCode) * parsed.Count
+		wordCount := (byteCount + 1) / 2
 		if wordCount < 1 {
 			wordCount = 1
 		}
