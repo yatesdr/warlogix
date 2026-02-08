@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"warlogix/logging"
 )
 
 // DiscoveredDevice contains identity information about a discovered Beckhoff/TwinCAT device.
@@ -44,11 +46,14 @@ func Discover(ips []net.IP, timeout time.Duration, concurrency int) []Discovered
 		concurrency = 20
 	}
 
+	logging.DebugLog("tui", "ADS Discover: starting scan of %d IPs with concurrency=%d timeout=%v", len(ips), concurrency, timeout)
+
 	var (
 		results []DiscoveredDevice
 		mu      sync.Mutex
 		wg      sync.WaitGroup
 		sem     = make(chan struct{}, concurrency)
+		scanned int
 	)
 
 	for _, ip := range ips {
@@ -65,21 +70,33 @@ func Discover(ips []net.IP, timeout time.Duration, concurrency int) []Discovered
 				results = append(results, *device)
 				mu.Unlock()
 			}
+			mu.Lock()
+			scanned++
+			if scanned%50 == 0 {
+				logging.DebugLog("tui", "ADS Discover: scanned %d/%d IPs, found %d devices so far", scanned, len(ips), len(results))
+			}
+			mu.Unlock()
 		}(ip)
 	}
 
 	wg.Wait()
+	logging.DebugLog("tui", "ADS Discover: complete, scanned %d IPs, found %d devices", len(ips), len(results))
 	return results
 }
 
 // DiscoverSubnet scans a subnet for Beckhoff/TwinCAT devices.
 // cidr is in the format "192.168.1.0/24".
 func DiscoverSubnet(cidr string, timeout time.Duration, concurrency int) ([]DiscoveredDevice, error) {
+	logging.DebugLog("tui", "ADS DiscoverSubnet: expanding CIDR %s", cidr)
 	ips, err := expandCIDR(cidr)
 	if err != nil {
+		logging.DebugLog("tui", "ADS DiscoverSubnet: expandCIDR error: %v", err)
 		return nil, err
 	}
-	return Discover(ips, timeout, concurrency), nil
+	logging.DebugLog("tui", "ADS DiscoverSubnet: scanning %d IPs", len(ips))
+	result := Discover(ips, timeout, concurrency)
+	logging.DebugLog("tui", "ADS DiscoverSubnet: scan complete, found %d devices", len(result))
+	return result, nil
 }
 
 // probeADS attempts to connect to a Beckhoff device and identify it.
