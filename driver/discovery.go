@@ -560,6 +560,18 @@ func discoverADS(cidr string, timeout time.Duration, concurrency int) []Discover
 		if !seen[key] {
 			seen[key] = true
 			results = append(results, dev)
+		} else {
+			// If we already have this device but the new one has more info (hasRoute=true),
+			// replace the existing one. This handles the case where TCP scan finds a device
+			// as "no route" but UDP broadcast later finds it with AMS Net ID.
+			if dev.Extra["hasRoute"] == "true" {
+				for i, existing := range results {
+					if existing.IP.String() == key && existing.Extra["hasRoute"] == "false" {
+						results[i] = dev
+						break
+					}
+				}
+			}
 		}
 	}
 
