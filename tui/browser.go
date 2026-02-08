@@ -843,26 +843,23 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 			writeValue = v
 		}
 
-		// Capture values for goroutine
+		// Capture values for goroutine before closing dialog
 		plcName := t.selectedPLC
 		writeVal := writeValue
 		tagN := tagName
 
-		// Perform write in background goroutine to not block UI
-		// Close dialog and start write asynchronously
-		go func() {
-			// Close dialog on UI thread first
-			t.app.QueueUpdateDraw(func() {
-				t.app.pages.RemovePage(pageName)
-				t.app.pages.SwitchToPage("main")
-				t.app.app.SetFocus(t.tree)
-				t.app.setStatus(fmt.Sprintf("Writing %v to %s...", writeVal, tagN))
-			})
+		// Close dialog synchronously (safe - we're on main UI thread)
+		t.app.pages.RemovePage(pageName)
+		t.app.pages.SwitchToPage("main")
+		t.app.app.SetFocus(t.tree)
+		t.app.setStatus(fmt.Sprintf("Writing %v to %s...", writeVal, tagN))
 
+		// Perform write in background goroutine to not block UI
+		go func() {
 			// Perform the actual write (this may block on network I/O)
 			err := t.app.manager.WriteTag(plcName, tagN, writeVal)
 
-			// Update status on UI thread
+			// Update status on UI thread when done
 			t.app.QueueUpdateDraw(func() {
 				if err != nil {
 					t.app.setStatus(fmt.Sprintf("Write failed: %v", err))
@@ -1034,6 +1031,12 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 	tagInstance := tagInfo.Instance
 	tagDimensions := tagInfo.Dimensions
 
+	// Get PLC family for type-specific handling
+	var plcFamily config.PLCFamily
+	if cfg := t.app.config.FindPLC(t.selectedPLC); cfg != nil {
+		plcFamily = cfg.GetFamily()
+	}
+
 	go func() {
 		th := CurrentTheme
 		boldAccent := th.TagAccent[:len(th.TagAccent)-1] + "::b]"
@@ -1046,9 +1049,44 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 		}
 
 		// For array types, show array info (dimensions come from tag list discovery)
+		// Use family-specific type functions
 		var arrayDebugInfo string
-		isArrayType := logix.IsArrayType(tagTypeCode)
-		isStruct := logix.IsStructure(tagTypeCode)
+		var isArrayType, isStruct bool
+		var baseType uint16
+		var baseTypeName string
+		var elemSize uint32
+
+		switch plcFamily {
+		case config.FamilyOmron:
+			isArrayType = omron.IsArray(tagTypeCode)
+			isStruct = false // Omron FINS doesn't have structured types like Logix
+			baseType = omron.BaseType(tagTypeCode)
+			baseTypeName = omron.TypeName(baseType)
+			elemSize = uint32(omron.TypeSize(baseType))
+		case config.FamilyS7:
+			isArrayType = s7.IsArray(tagTypeCode)
+			isStruct = false
+			baseType = s7.BaseType(tagTypeCode)
+			baseTypeName = s7.TypeName(baseType)
+			elemSize = uint32(s7.TypeSize(baseType))
+		case config.FamilyBeckhoff:
+			isArrayType = ads.IsArray(tagTypeCode)
+			isStruct = false
+			baseType = ads.BaseType(tagTypeCode)
+			baseTypeName = ads.TypeName(baseType)
+			elemSize = uint32(ads.TypeSize(baseType))
+		default:
+			isArrayType = logix.IsArrayType(tagTypeCode)
+			isStruct = logix.IsStructure(tagTypeCode)
+			baseType = logix.BaseType(tagTypeCode)
+			baseTypeName = logix.TypeName(baseType)
+			if client := plc.GetLogixClient(); client != nil {
+				elemSize = client.GetElementSize(tagTypeCode)
+			} else {
+				elemSize = uint32(logix.TypeSize(baseType))
+			}
+		}
+
 		if isArrayType || isStruct {
 			var debugSb strings.Builder
 			if isArrayType {
@@ -1057,22 +1095,14 @@ func (t *BrowserTab) showDetailedTagInfo(node *tview.TreeNode) {
 				debugSb.WriteString("\n" + boldAccent + "Type Info[-::-]\n")
 			}
 			debugSb.WriteString("─────────────────────────────\n")
-			baseType := logix.BaseType(tagTypeCode)
-			debugSb.WriteString(fmt.Sprintf("%sBase Type:%s %s\n", th.TagAccent, th.TagReset, logix.TypeName(baseType)))
+			debugSb.WriteString(fmt.Sprintf("%sBase Type:%s %s\n", th.TagAccent, th.TagReset, baseTypeName))
 
-			// For structures, show template ID
-			if isStruct {
+			// For Logix structures, show template ID
+			if isStruct && (plcFamily == config.FamilyLogix || plcFamily == config.FamilyMicro800) {
 				templateID := logix.TemplateID(tagTypeCode)
 				debugSb.WriteString(fmt.Sprintf("%sTemplate ID:%s %d (0x%04X)\n", th.TagAccent, th.TagReset, templateID, templateID))
 			}
 
-			// Get element size (handles both atomic and structure types)
-			var elemSize uint32
-			if client := plc.GetLogixClient(); client != nil {
-				elemSize = client.GetElementSize(tagTypeCode)
-			} else {
-				elemSize = uint32(logix.TypeSize(baseType))
-			}
 			debugSb.WriteString(fmt.Sprintf("%sElement Size:%s %d bytes\n", th.TagAccent, th.TagReset, elemSize))
 			arrayDebugInfo = debugSb.String()
 		}
