@@ -822,13 +822,12 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 			return
 		}
 
-		// Parse value - supports scalars and arrays
+		// Parse value - supports scalars, arrays, and strings
 		var writeValue interface{}
-
-		// Check if it looks like an array (starts with [ or contains spaces/commas)
 		trimmed := strings.TrimSpace(newValue)
-		if strings.HasPrefix(trimmed, "[") || strings.Contains(trimmed, ",") || strings.Contains(trimmed, " ") {
-			// Parse as array
+
+		// Arrays must start with [ to avoid confusion with strings containing spaces
+		if strings.HasPrefix(trimmed, "[") {
 			arrayVal, err := parseArrayValue(trimmed)
 			if err != nil {
 				t.app.setStatus(fmt.Sprintf("Invalid array: %s", err))
@@ -836,21 +835,15 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 			}
 			writeValue = arrayVal
 		} else {
-			// Parse as scalar - try integer first (handles hex with 0x prefix)
-			var v int64
-			var parseErr error
-			v, parseErr = strconv.ParseInt(newValue, 0, 64)
-			if parseErr != nil {
+			// Try integer first (handles hex with 0x prefix)
+			if v, err := strconv.ParseInt(trimmed, 0, 64); err == nil {
+				writeValue = v
+			} else if f, err := strconv.ParseFloat(trimmed, 64); err == nil {
 				// Try float
-				var f float64
-				f, parseErr = strconv.ParseFloat(newValue, 64)
-				if parseErr != nil {
-					t.app.setStatus(fmt.Sprintf("Invalid value: %s", newValue))
-					return
-				}
 				writeValue = f
 			} else {
-				writeValue = v
+				// Treat as string
+				writeValue = trimmed
 			}
 		}
 
