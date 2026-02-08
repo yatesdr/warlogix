@@ -1035,6 +1035,16 @@ func (a *App) closeModal(pageName string) {
 	a.focusCurrentTab()
 }
 
+// isModalOpen returns true if a modal dialog is currently showing (i.e., front page is not a main tab).
+func (a *App) isModalOpen() bool {
+	frontPage, _ := a.pages.GetFrontPage()
+	return frontPage != TabPLCs && frontPage != TabBrowser &&
+		frontPage != TabPacks && frontPage != TabTriggers &&
+		frontPage != TabREST && frontPage != TabMQTT &&
+		frontPage != TabValkey && frontPage != TabKafka &&
+		frontPage != TabDebug
+}
+
 // refreshAllThemes calls RefreshTheme on all tabs to apply theme changes.
 func (a *App) refreshAllThemes() {
 	a.updateNamespaceIndicator()

@@ -274,6 +274,13 @@ func (t *PLCsTab) discover() {
 				return
 			}
 
+			// Don't show discovery dialog if another modal is already open
+			// This prevents focus issues when user opens another dialog during discovery
+			if t.app.isModalOpen() {
+				t.app.setStatus(fmt.Sprintf("Found %d device(s) - press 'd' again to view", len(devices)))
+				return
+			}
+
 			t.app.setStatus(fmt.Sprintf("Found %d device(s)", len(devices)))
 			t.showDiscoveryResults(devices)
 		})
