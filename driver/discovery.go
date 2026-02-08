@@ -415,9 +415,15 @@ func discoverEIP(broadcastIP string, timeout time.Duration) []DiscoveredDevice {
 	var allIdentities []eip.Identity
 	client := eip.NewEipClient("")
 
+	// Use longer timeout for UDP broadcast (devices may be slow to respond)
+	udpTimeout := timeout * 3
+	if udpTimeout < 2*time.Second {
+		udpTimeout = 2 * time.Second
+	}
+
 	for _, addr := range broadcastAddrs {
-		logging.DebugLog("tui", "EIP discovery: sending ListIdentity to %s", addr)
-		identities, err := client.ListIdentityUDP(addr, timeout)
+		logging.DebugLog("tui", "EIP discovery: sending ListIdentity to %s (timeout=%v)", addr, udpTimeout)
+		identities, err := client.ListIdentityUDP(addr, udpTimeout)
 		if err != nil {
 			logging.DebugLog("tui", "EIP discovery: broadcast to %s error: %v", addr, err)
 			continue
