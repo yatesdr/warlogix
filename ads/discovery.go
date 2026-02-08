@@ -123,9 +123,8 @@ func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []Discove
 		seen    = make(map[string]bool)
 	)
 
-	// Build the TwinCAT discovery request packet
-	// This is based on the ADS router discovery protocol
-	packet := buildDiscoveryPacket()
+	// Build the TwinCAT discovery request packets (try multiple formats)
+	packets := buildDiscoveryPackets()
 
 	for _, broadcastAddr := range broadcastAddrs {
 		addr := fmt.Sprintf("%s:%d", broadcastAddr, DiscoveryUDPPort)
@@ -143,13 +142,14 @@ func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []Discove
 			continue
 		}
 
-		// Send discovery request
-		logging.DebugLog("tui", "ADS DiscoverBroadcast: sending to %s", addr)
-		_, err = conn.WriteTo(packet, destAddr)
-		if err != nil {
-			conn.Close()
-			logging.DebugLog("tui", "ADS DiscoverBroadcast: WriteTo error: %v", err)
-			continue
+		// Send all packet formats
+		for i, packet := range packets {
+			logging.DebugLog("tui", "ADS DiscoverBroadcast: sending format %d (%d bytes) to %s: %X",
+				i, len(packet), addr, packet)
+			_, err = conn.WriteTo(packet, destAddr)
+			if err != nil {
+				logging.DebugLog("tui", "ADS DiscoverBroadcast: WriteTo error: %v", err)
+			}
 		}
 
 		// Read responses until timeout
@@ -160,6 +160,7 @@ func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []Discove
 			n, srcAddr, err := conn.ReadFrom(buf)
 			if err != nil {
 				// Timeout or error - done with this broadcast
+				logging.DebugLog("tui", "ADS DiscoverBroadcast: read complete on %s (timeout or error)", broadcastAddr)
 				break
 			}
 
@@ -169,7 +170,12 @@ func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []Discove
 			}
 
 			ipStr := udpAddr.IP.String()
-			logging.DebugLog("tui", "ADS DiscoverBroadcast: received %d bytes from %s", n, ipStr)
+			// Log first 64 bytes of response in hex for debugging
+			hexLen := n
+			if hexLen > 64 {
+				hexLen = 64
+			}
+			logging.DebugLog("tui", "ADS DiscoverBroadcast: received %d bytes from %s: %X", n, ipStr, buf[:hexLen])
 
 			// Parse the discovery response
 			device := parseDiscoveryResponse(buf[:n], udpAddr.IP)
@@ -192,28 +198,47 @@ func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []Discove
 	return results
 }
 
-// buildDiscoveryPacket creates a TwinCAT UDP discovery request packet.
-// The discovery protocol uses a specific AMS-based format.
+// buildDiscoveryPackets creates TwinCAT UDP discovery request packets.
+// Returns multiple packet formats to try for compatibility.
+func buildDiscoveryPackets() [][]byte {
+	var packets [][]byte
+
+	// Format 1: TwinCAT 3 discovery packet
+	// Based on ADS router search protocol
+	// Header: 03 66 14 71 (magic for discovery)
+	packet1 := make([]byte, 32)
+	binary.LittleEndian.PutUint32(packet1[0:4], 0x71146603) // Discovery magic
+	binary.LittleEndian.PutUint32(packet1[4:8], 0x00000000) // Request ID
+	binary.LittleEndian.PutUint32(packet1[8:12], 0x00000001) // Service: search
+	packets = append(packets, packet1)
+
+	// Format 2: Simple AMS broadcast request
+	// Some TwinCAT versions respond to a simpler format
+	packet2 := []byte{
+		0x03, 0x66, 0x14, 0x71, // Magic
+		0x00, 0x00, 0x00, 0x00, // Padding
+		0x00, 0x00, 0x00, 0x00, // Padding
+		0x00, 0x00, 0x00, 0x00, // Padding
+	}
+	packets = append(packets, packet2)
+
+	// Format 3: TwinCAT System Service discovery
+	// Port 10000 is used for system service, but 48899 should also respond
+	packet3 := make([]byte, 8)
+	binary.LittleEndian.PutUint32(packet3[0:4], 0x00000001) // Service ID
+	binary.LittleEndian.PutUint32(packet3[4:8], 0x00000000) // Flags
+	packets = append(packets, packet3)
+
+	return packets
+}
+
+// buildDiscoveryPacket creates a TwinCAT UDP discovery request packet (legacy).
 func buildDiscoveryPacket() []byte {
-	// TwinCAT discovery packet format (simplified):
-	// This is based on the AMS router discovery protocol
-	// The packet triggers devices to respond with their identity info
-
-	// Service ID for discovery request
-	// Format: 4-byte header + request data
-	packet := make([]byte, 24)
-
-	// AMS/UDP header
-	binary.LittleEndian.PutUint32(packet[0:4], 0x71146603) // Discovery request magic
-
-	// Request body - minimal request asking for device info
-	// Set the request type to "identify"
-	binary.LittleEndian.PutUint32(packet[4:8], 1) // Request type: 1 = discovery
-
-	// Remaining bytes can be zero (minimal request)
-	// Some implementations include additional parameters
-
-	return packet
+	packets := buildDiscoveryPackets()
+	if len(packets) > 0 {
+		return packets[0]
+	}
+	return nil
 }
 
 // parseDiscoveryResponse parses a TwinCAT UDP discovery response.
@@ -256,13 +281,8 @@ func parseDiscoveryResponse(data []byte, sourceIP net.IP) *DiscoveredDevice {
 		}
 	}
 
-	// If no AMS Net ID found, derive from IP
-	if device.AmsNetId == "" {
-		ip4 := sourceIP.To4()
-		if ip4 != nil {
-			device.AmsNetId = fmt.Sprintf("%d.%d.%d.%d.1.1", ip4[0], ip4[1], ip4[2], ip4[3])
-		}
-	}
+	// If no AMS Net ID found from parsing, leave empty
+	// (Don't derive from IP - it's often wrong)
 
 	// Try to extract hostname (usually null-terminated string somewhere in the response)
 	device.Hostname = extractNullString(data, 16, 64)
@@ -378,9 +398,11 @@ func probeADS(ip net.IP, timeout time.Duration) *DiscoveredDevice {
 	logging.DebugLog("tui", "ADS probeADS: %s connected but no valid response (no route?)", addr)
 	// If ReadDeviceInfo failed, but we connected, it's an ADS device without a route
 	// The device accepted TCP connection on 48898 but didn't respond to ADS (no route configured)
+	// AMS Net ID left empty - need proper discovery or manual configuration
 	return &DiscoveredDevice{
 		IP:          ip,
 		Port:        DefaultTCPPort,
+		AmsNetId:    "", // Unknown - no route means we can't query it
 		ProductName: "Beckhoff TwinCAT (no route)",
 		Connected:   false,
 		HasRoute:    false, // No route - device didn't respond to ADS request
