@@ -1013,6 +1013,12 @@ func (c *Client) sendCIPRequest(req cip.Request) ([]byte, error) {
 
 // Write writes a value to an address.
 func (c *Client) Write(address string, value interface{}) error {
+	return c.WriteWithType(address, value, "")
+}
+
+// WriteWithType writes a value to an address with an explicit type hint.
+// The typeHint overrides the default type inferred from the address.
+func (c *Client) WriteWithType(address string, value interface{}, typeHint string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1026,12 +1032,12 @@ func (c *Client) Write(address string, value interface{}) error {
 	}
 
 	// FINS uses memory addressing
-	return c.writeFINS(address, value)
+	return c.writeFINS(address, value, typeHint)
 }
 
 // writeFINS writes to a FINS address.
-func (c *Client) writeFINS(address string, value interface{}) error {
-	parsed, err := ParseAddress(address)
+func (c *Client) writeFINS(address string, value interface{}, typeHint string) error {
+	parsed, err := ParseAddressWithType(address, typeHint)
 	if err != nil {
 		logging.DebugLog("Omron", "Write address parse error for %q: %v", address, err)
 		return err
@@ -1163,40 +1169,8 @@ func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
 
 // readFINSWithTypesBatched reads FINS addresses with type hints using batching.
 func (c *Client) readFINSWithTypesBatched(requests []TagRequest) ([]*TagValue, error) {
-	if len(requests) == 0 {
-		return nil, nil
-	}
-
-	// Convert to addresses for batched read
-	addresses := make([]string, len(requests))
-	for i, req := range requests {
-		addresses[i] = req.Address
-	}
-
-	// Use batched read
-	results, err := c.readFINSBatched(addresses)
-	if err != nil {
-		return nil, err
-	}
-
-	// Apply type hints to results, preserving array flag
-	for i, req := range requests {
-		if results[i] == nil || results[i].Error != nil {
-			continue
-		}
-
-		if req.TypeHint != "" {
-			if tc, ok := TypeCodeFromName(req.TypeHint); ok {
-				// Preserve array flag from the original DataType
-				if IsArray(results[i].DataType) {
-					tc = MakeArrayType(tc)
-				}
-				results[i].DataType = tc
-			}
-		}
-	}
-
-	return results, nil
+	// Use batched read with type hints applied during parsing
+	return c.readFINSBatchedWithTypes(requests)
 }
 
 // AllTags discovers all tags (EIP only).

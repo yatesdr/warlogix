@@ -426,20 +426,30 @@ func (c *Client) readEIPSingle(tagName string) *TagValue {
 // 3. Use multi-memory-read for scattered addresses
 // 4. Read bits separately (grouped by word if possible)
 func (c *Client) readFINSBatched(addresses []string) ([]*TagValue, error) {
-	if len(addresses) == 0 {
+	// Convert to TagRequests without type hints
+	requests := make([]TagRequest, len(addresses))
+	for i, addr := range addresses {
+		requests[i] = TagRequest{Address: addr}
+	}
+	return c.readFINSBatchedWithTypes(requests)
+}
+
+// readFINSBatchedWithTypes reads multiple FINS addresses with type hints using optimized batching.
+func (c *Client) readFINSBatchedWithTypes(tagRequests []TagRequest) ([]*TagValue, error) {
+	if len(tagRequests) == 0 {
 		return nil, nil
 	}
 
-	results := make([]*TagValue, len(addresses))
+	results := make([]*TagValue, len(tagRequests))
 
-	// Parse all addresses
-	requests := make([]finsReadRequest, 0, len(addresses))
+	// Parse all addresses with type hints
+	requests := make([]finsReadRequest, 0, len(tagRequests))
 	var bitRequests []finsReadRequest
 
-	for i, addr := range addresses {
-		parsed, err := ParseAddress(addr)
+	for i, tagReq := range tagRequests {
+		parsed, err := ParseAddressWithType(tagReq.Address, tagReq.TypeHint)
 		if err != nil {
-			results[i] = &TagValue{Name: addr, Error: err, bigEndian: true}
+			results[i] = &TagValue{Name: tagReq.Address, Error: err, bigEndian: true}
 			continue
 		}
 
@@ -450,7 +460,7 @@ func (c *Client) readFINSBatched(addresses []string) ([]*TagValue, error) {
 
 		req := finsReadRequest{
 			originalIndex: i,
-			address:       addr,
+			address:       tagReq.Address,
 			parsed:        parsed,
 			wordCount:     wordCount,
 		}
