@@ -289,7 +289,7 @@ func (p *Producer) getWriter(topic string) (*kafka.Writer, error) {
 	if p.config.AutoCreateTopics {
 		if err := p.ensureTopicExists(topic); err != nil {
 			logging.DebugLog("Kafka", "TOPIC %s: failed to create topic '%s': %v", p.config.Name, topic, err)
-			// Don't fail - let the write attempt proceed, it may succeed if topic exists
+			return nil, fmt.Errorf("failed to create topic '%s': %w", topic, err)
 		}
 	}
 

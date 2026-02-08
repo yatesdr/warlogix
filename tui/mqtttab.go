@@ -124,7 +124,7 @@ func (t *MQTTTab) updateInfo() {
 	th := CurrentTheme
 	text := "\n"
 	text += " " + th.TagAccent + "Topic Format:" + th.TagReset + "\n"
-	text += "   {root_topic}/{plc_name}/tags/{tag_name}\n\n"
+	text += "   {namespace}[/{selector}]/{plc}/tags/{tag}\n\n"
 	text += " " + th.TagAccent + "Message Format:" + th.TagReset + "\n"
 	text += "   {\"value\": <value>, \"type\": \"<type>\", \"timestamp\": \"<iso8601>\"}\n\n"
 	text += " " + th.Dim("Tag messages are retained and only published on value change") + "\n"

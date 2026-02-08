@@ -9,7 +9,8 @@ import (
 // Global sequence counter for message ordering
 var globalSequence uint64
 
-// Message represents a trigger event message to be sent to Kafka.
+// Message represents a trigger event message to be sent to Kafka/MQTT.
+// Contains all captured data at the moment of trigger: tags and packs combined.
 type Message struct {
 	Trigger   string                 `json:"trigger"`
 	Timestamp string                 `json:"timestamp"`
@@ -20,7 +21,18 @@ type Message struct {
 }
 
 // NewMessage creates a new trigger message with captured data.
-func NewMessage(triggerName, plcName string, metadata map[string]string, data map[string]interface{}) *Message {
+// Packs are merged into the data map alongside regular tags.
+func NewMessage(triggerName, plcName string, metadata map[string]string, data map[string]interface{}, packs map[string]interface{}) *Message {
+	// Merge packs into data - treat packs as virtual tags
+	if packs != nil {
+		if data == nil {
+			data = make(map[string]interface{})
+		}
+		for packName, packValue := range packs {
+			data[packName] = packValue
+		}
+	}
+
 	return &Message{
 		Trigger:   triggerName,
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
@@ -36,7 +48,7 @@ func (m *Message) ToJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// Key returns a key for Kafka partitioning (trigger name + PLC).
+// Key returns the trigger name for Kafka partitioning.
 func (m *Message) Key() []byte {
-	return []byte(m.PLC + ":" + m.Trigger)
+	return []byte(m.Trigger)
 }

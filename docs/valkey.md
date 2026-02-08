@@ -147,6 +147,51 @@ redis-cli SUBSCRIBE factory:line1:write:responses
 }
 ```
 
+## TagPacks
+
+TagPacks are stored as keys and published to channels, just like regular tags.
+
+### Key Format
+
+Pattern: `{namespace}:packs:{packname}`
+
+Example: `factory:packs:ProductionMetrics`
+
+### Value Format
+
+```json
+{
+  "name": "ProductionMetrics",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "tags": {
+    "MainPLC.Counter": {
+      "value": 42,
+      "type": "DINT",
+      "plc": "MainPLC"
+    },
+    "SecondaryPLC.Temperature": {
+      "value": 72.5,
+      "type": "REAL",
+      "plc": "SecondaryPLC"
+    }
+  }
+}
+```
+
+### Pub/Sub Channel
+
+When `publish_changes: true`, TagPack updates are also published to the same channel name for real-time subscribers:
+
+```bash
+redis-cli SUBSCRIBE factory:packs:ProductionMetrics
+```
+
+### Read TagPack
+
+```bash
+redis-cli GET factory:packs:ProductionMetrics
+```
+
 ## Multiple Servers
 
 Configure multiple Valkey/Redis servers:

@@ -115,6 +115,43 @@ Message key: `{plc}`
 
 Health publishing can be disabled per-PLC with `health_check_enabled: false`.
 
+### TagPacks
+
+TagPacks are published to the same topic as regular tags (`{namespace}[-{selector}]`).
+
+**Topic:** `{namespace}[-{selector}]` (same as tags)
+
+**Message key:** `pack:{packname}` (e.g., `pack:ProductionMetrics`)
+
+```json
+{
+  "name": "ProductionMetrics",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "tags": {
+    "MainPLC.Counter": {
+      "value": 42,
+      "type": "DINT",
+      "plc": "MainPLC"
+    },
+    "SecondaryPLC.Temperature": {
+      "value": 72.5,
+      "type": "REAL",
+      "plc": "SecondaryPLC"
+    }
+  }
+}
+```
+
+**Consume all messages (tags + packs):**
+```bash
+kafkacat -b localhost:9092 -t factory-line1 -C
+```
+
+**Filter TagPacks by key prefix:**
+```bash
+kafkacat -b localhost:9092 -t factory-line1 -C | grep '"name":'
+```
+
 ### Trigger Events
 
 Event triggers publish to their configured topic (see [Triggers](triggers.md)):

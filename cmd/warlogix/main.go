@@ -264,16 +264,19 @@ func runLocalMode(cfg *config.Config) {
 	packMgr.SetOnPublish(func(info tagpack.PackPublishInfo) {
 		data, err := json.Marshal(info.Value)
 		if err != nil {
-			tui.DebugLog("[TagPack] JSON marshal error: %v", err)
+			logging.DebugLog("tagpack", "JSON marshal error: %v", err)
 			return
 		}
+		logging.DebugLog("tagpack", "Callback for %s: MQTT=%v Kafka=%v Valkey=%v",
+			info.Config.Name, info.Config.MQTTEnabled, info.Config.KafkaEnabled, info.Config.ValkeyEnabled)
 		if info.Config.MQTTEnabled {
-			mqttMgr.PublishRaw(info.MQTTTopic, data)
+			mqttMgr.PublishTagPack(info.Config.Name, data)
 		}
 		if info.Config.KafkaEnabled {
-			kafkaMgr.PublishRaw(info.KafkaTopic, data)
+			kafkaMgr.PublishTagPack(info.Config.Name, data)
 		}
 		if info.Config.ValkeyEnabled {
+			logging.DebugLog("tagpack", "Publishing to Valkey channel: %s", info.ValkeyChannel)
 			valkeyMgr.PublishRaw(info.ValkeyChannel, data)
 		}
 	})
@@ -444,16 +447,19 @@ func runDaemonMode(cfg *config.Config) {
 	packMgrDaemon.SetOnPublish(func(info tagpack.PackPublishInfo) {
 		data, err := json.Marshal(info.Value)
 		if err != nil {
-			tui.DebugLog("[TagPack] JSON marshal error: %v", err)
+			logging.DebugLog("tagpack", "JSON marshal error: %v", err)
 			return
 		}
+		logging.DebugLog("tagpack", "Callback for %s: MQTT=%v Kafka=%v Valkey=%v",
+			info.Config.Name, info.Config.MQTTEnabled, info.Config.KafkaEnabled, info.Config.ValkeyEnabled)
 		if info.Config.MQTTEnabled {
-			mqttMgr.PublishRaw(info.MQTTTopic, data)
+			mqttMgr.PublishTagPack(info.Config.Name, data)
 		}
 		if info.Config.KafkaEnabled {
-			kafkaMgr.PublishRaw(info.KafkaTopic, data)
+			kafkaMgr.PublishTagPack(info.Config.Name, data)
 		}
 		if info.Config.ValkeyEnabled {
+			logging.DebugLog("tagpack", "Publishing to Valkey channel: %s", info.ValkeyChannel)
 			valkeyMgr.PublishRaw(info.ValkeyChannel, data)
 		}
 	})

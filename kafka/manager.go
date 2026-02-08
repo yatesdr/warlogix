@@ -690,8 +690,13 @@ func (m *Manager) SetTagTypeLookup(lookup TagTypeLookup) {
 }
 
 // PublishRaw publishes raw bytes to a topic on all connected clusters.
-// Used for TagPack publishing.
+// The key is used for Kafka partitioning.
 func (m *Manager) PublishRaw(topic string, data []byte) {
+	m.PublishRawWithKey(topic, topic, data)
+}
+
+// PublishRawWithKey publishes raw bytes to a topic with a specific key.
+func (m *Manager) PublishRawWithKey(topic, key string, data []byte) {
 	m.startBatcher()
 
 	m.mu.RLock()
@@ -709,7 +714,7 @@ func (m *Manager) PublishRaw(topic string, data []byte) {
 		job := publishJob{
 			producer:  p,
 			topic:     topic,
-			key:       []byte(topic),
+			key:       []byte(key),
 			payload:   data,
 			cacheKey:  "", // No caching for raw publishes
 			value:     nil,
@@ -721,6 +726,54 @@ func (m *Manager) PublishRaw(topic string, data []byte) {
 			// Queued
 		case <-time.After(5 * time.Second):
 			logKafka("WARN: Batch queue blocked >5s for raw publish to %s", topic)
+			m.batchChan <- job
+		}
+	}
+}
+
+// PublishTagPack publishes a TagPack to all connected clusters.
+// Each cluster uses its own namespace builder to compute the correct topic.
+func (m *Manager) PublishTagPack(packName string, data []byte) {
+	m.startBatcher()
+
+	m.mu.RLock()
+	producers := make([]*Producer, 0, len(m.producers))
+	builders := make(map[string]*namespace.Builder, len(m.builders))
+	for name, p := range m.producers {
+		producers = append(producers, p)
+		builders[p.config.Name] = m.builders[name]
+	}
+	m.mu.RUnlock()
+
+	for _, p := range producers {
+		if p.GetStatus() != StatusConnected {
+			continue
+		}
+
+		builder := builders[p.config.Name]
+		if builder == nil {
+			continue
+		}
+
+		// Compute topic using this cluster's namespace builder
+		topic := builder.KafkaTagTopic()
+		key := "pack:" + packName
+
+		job := publishJob{
+			producer:  p,
+			topic:     topic,
+			key:       []byte(key),
+			payload:   data,
+			cacheKey:  "", // No caching for TagPacks
+			value:     nil,
+			queueTime: time.Now(),
+		}
+
+		select {
+		case m.batchChan <- job:
+			// Queued
+		case <-time.After(5 * time.Second):
+			logKafka("WARN: Batch queue blocked >5s for TagPack %s to %s", packName, topic)
 			m.batchChan <- job
 		}
 	}

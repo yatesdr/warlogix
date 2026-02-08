@@ -220,10 +220,20 @@ func (m *Manager) publishPack(packName string) {
 	builder := m.builder
 	m.mu.RUnlock()
 
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
+		m.log("publishPack %s: pack not found in manager", packName)
 		return
 	}
-	if callback == nil || provider == nil {
+	if !cfg.Enabled {
+		m.log("publishPack %s: pack not enabled", packName)
+		return
+	}
+	if callback == nil {
+		m.log("publishPack %s: no publish callback set", packName)
+		return
+	}
+	if provider == nil {
+		m.log("publishPack %s: no data provider set", packName)
 		return
 	}
 

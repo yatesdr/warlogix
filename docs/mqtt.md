@@ -111,6 +111,44 @@ Published to: `{namespace}[/{selector}]/{plc}/write/response`
 }
 ```
 
+## TagPacks
+
+TagPacks are published with `retained: true`, so new subscribers receive the last value.
+
+### Topic Format
+
+Pattern: `{namespace}/packs/{packname}`
+
+Example: `factory/packs/ProductionMetrics`
+
+### Message Format
+
+```json
+{
+  "name": "ProductionMetrics",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "tags": {
+    "MainPLC.Counter": {
+      "value": 42,
+      "type": "DINT",
+      "plc": "MainPLC"
+    },
+    "SecondaryPLC.Temperature": {
+      "value": 72.5,
+      "type": "REAL",
+      "plc": "SecondaryPLC"
+    }
+  }
+}
+```
+
+### Subscribe
+
+```bash
+mosquitto_sub -t "factory/packs/ProductionMetrics"
+mosquitto_sub -t "factory/packs/#"   # All packs
+```
+
 ## TLS Configuration
 
 Enable TLS by setting `use_tls: true`. The system CA certificates are used for verification.

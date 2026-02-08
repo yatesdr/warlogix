@@ -124,12 +124,12 @@ func (t *ValkeyTab) updateInfo() {
 	th := CurrentTheme
 	text := "\n"
 	text += " " + th.TagAccent + "Key Format:" + th.TagReset + "\n"
-	text += "   {factory}/{plc}/tags/{tag}\n\n"
+	text += "   {namespace}[:{selector}]:{plc}:tags:{tag}\n\n"
 	text += " " + th.TagAccent + "Value Format:" + th.TagReset + "\n"
 	text += "   {\"value\": <value>, \"type\": \"<type>\", \"writable\": bool, \"timestamp\": \"<iso8601>\"}\n\n"
 	text += " " + th.TagAccent + "Pub/Sub Channels:" + th.TagReset + "\n"
-	text += "   {factory}/{plc}/changes - per-PLC changes\n"
-	text += "   {factory}/_all/changes  - all changes\n\n"
+	text += "   {namespace}[:{selector}]:{plc}:changes - per-PLC changes\n"
+	text += "   {namespace}[:{selector}]:_all:changes  - all changes\n\n"
 	text += " " + th.Dim("Keys are set with optional TTL for stale detection") + "\n"
 
 	t.info.SetText(text)

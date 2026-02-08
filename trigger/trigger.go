@@ -57,8 +57,6 @@ type TagWriter interface {
 
 // MQTTPublisher provides MQTT publishing for triggers.
 type MQTTPublisher interface {
-	// PublishRawQoS2 publishes raw bytes to a topic with QoS 2 (exactly once) on all brokers.
-	PublishRawQoS2(topic string, data []byte)
 	// PublishRawQoS2ToBroker publishes to a specific broker with QoS 2.
 	PublishRawQoS2ToBroker(broker, topic string, data []byte) bool
 	// ListBrokers returns all configured broker names.
@@ -323,6 +321,10 @@ func (t *Trigger) checkTrigger() {
 // fire captures data and sends to MQTT and Kafka.
 // If testMode is true, the trigger won't enter cooldown state.
 func (t *Trigger) fire(testMode bool) {
+	t.mu.RLock()
+	packMgr := t.packMgr
+	t.mu.RUnlock()
+
 	// Separate pack references from regular tags
 	var dataTags []string
 	var packRefs []string
@@ -332,6 +334,11 @@ func (t *Trigger) fire(testMode bool) {
 		} else {
 			dataTags = append(dataTags, tag)
 		}
+	}
+
+	// Also include legacy PublishPack if configured
+	if t.config.PublishPack != "" {
+		packRefs = append(packRefs, t.config.PublishPack)
 	}
 
 	t.log("triggered, capturing %d tags, %d packs", len(dataTags), len(packRefs))
@@ -349,8 +356,23 @@ func (t *Trigger) fire(testMode bool) {
 		data = make(map[string]interface{})
 	}
 
-	// Build message
-	msg := NewMessage(t.config.Name, t.config.PLC, t.config.Metadata, data)
+	// Collect all pack data (packs are embedded in trigger message, not published separately)
+	var packs map[string]interface{}
+	if packMgr != nil && len(packRefs) > 0 {
+		packs = make(map[string]interface{})
+		for _, packName := range packRefs {
+			pv := packMgr.GetPackValue(packName)
+			if pv == nil {
+				t.log("warning: pack '%s' not found", packName)
+				continue
+			}
+			// Include just the tag data, not the wrapper
+			packs[packName] = pv.Tags
+		}
+	}
+
+	// Build message with all data: tags and packs in one atomic snapshot
+	msg := NewMessage(t.config.Name, t.config.PLC, t.config.Metadata, data, packs)
 
 	// Serialize to JSON
 	jsonData, err := msg.ToJSON()
@@ -401,7 +423,7 @@ func (t *Trigger) fire(testMode bool) {
 		}
 	}
 
-	// Success - write acknowledgment
+	// Success - update state
 	t.mu.Lock()
 	t.fireCount++
 	t.lastFire = time.Now()
@@ -409,22 +431,7 @@ func (t *Trigger) fire(testMode bool) {
 		t.status = StatusCooldown
 	}
 	t.lastErr = nil
-	packMgr := t.packMgr
 	t.mu.Unlock()
-
-	// Publish packs from Tags list
-	if packMgr != nil {
-		for _, packName := range packRefs {
-			packMgr.PublishPackImmediate(packName)
-			t.log("published pack '%s'", packName)
-		}
-	}
-
-	// Publish legacy TagPack if configured (for backward compatibility)
-	if t.config.PublishPack != "" && packMgr != nil {
-		packMgr.PublishPackImmediate(t.config.PublishPack)
-		t.log("published pack '%s'", t.config.PublishPack)
-	}
 
 	// Write ack tag with success value (1) if configured
 	if t.config.AckTag != "" && t.writer != nil {

@@ -1232,6 +1232,25 @@ func (m *Manager) PublishRaw(topic string, data []byte) {
 	}
 }
 
+// PublishTagPack publishes a TagPack to all running publishers.
+// Each publisher computes its own topic based on its selector configuration.
+func (m *Manager) PublishTagPack(packName string, data []byte) {
+	m.mu.RLock()
+	pubs := make([]*Publisher, 0, len(m.publishers))
+	for _, pub := range m.publishers {
+		pubs = append(pubs, pub)
+	}
+	m.mu.RUnlock()
+
+	for _, pub := range pubs {
+		if pub.IsRunning() {
+			topic := pub.builder.MQTTPackTopic(packName)
+			logMQTT("PublishTagPack %s to topic %s via %s", packName, topic, pub.Name())
+			pub.PublishRaw(topic, data)
+		}
+	}
+}
+
 // PublishRawQoS2 publishes raw bytes to a topic on all running publishers with QoS 2.
 // Used for trigger messages where exactly-once delivery is important.
 func (m *Manager) PublishRawQoS2(topic string, data []byte) {
@@ -1259,6 +1278,36 @@ func (m *Manager) PublishRawQoS2ToBroker(broker, topic string, data []byte) bool
 		return false
 	}
 	return pub.PublishRawQoS2(topic, data)
+}
+
+// PublishTagPackToBroker publishes a TagPack to a specific broker.
+// The topic is computed using the broker's namespace builder.
+func (m *Manager) PublishTagPackToBroker(broker, packName string, data []byte) bool {
+	m.mu.RLock()
+	pub, exists := m.publishers[broker]
+	m.mu.RUnlock()
+
+	if !exists || !pub.IsRunning() {
+		return false
+	}
+
+	topic := pub.builder.MQTTPackTopic(packName)
+	logMQTT("PublishTagPackToBroker %s to topic %s via %s", packName, topic, broker)
+	return pub.PublishRaw(topic, data)
+}
+
+// PublishRawToBroker publishes raw bytes to a specific topic on a specific broker.
+// Used when the caller provides the exact topic (e.g., trigger publishing with selector).
+func (m *Manager) PublishRawToBroker(broker, topic string, data []byte) bool {
+	m.mu.RLock()
+	pub, exists := m.publishers[broker]
+	m.mu.RUnlock()
+
+	if !exists || !pub.IsRunning() {
+		return false
+	}
+
+	return pub.PublishRaw(topic, data)
 }
 
 // ListBrokers returns all configured broker names.

@@ -40,9 +40,9 @@ func (b *Builder) MQTTWriteResponseTopic(plc string) string {
 	return b.mqttBase() + "/" + plc + "/write/response"
 }
 
-// MQTTPackTopic returns the topic for a TagPack: {ns}/packs/{pack}
+// MQTTPackTopic returns the topic for a TagPack: {ns}[/{sel}]/packs/{pack}
 func (b *Builder) MQTTPackTopic(pack string) string {
-	return b.namespace + "/packs/" + pack
+	return b.mqttBase() + "/packs/" + pack
 }
 
 // MQTTTriggerTopic returns the topic for a trigger message: {ns}[/{sel}]/triggers/{trigger}
@@ -94,9 +94,9 @@ func (b *Builder) ValkeyWriteResponseChannel() string {
 	return b.valkeyBase() + ":write:responses"
 }
 
-// ValkeyPackChannel returns the channel for a TagPack: {ns}:packs:{pack}
+// ValkeyPackChannel returns the channel for a TagPack: {ns}[:{sel}]:packs:{pack}
 func (b *Builder) ValkeyPackChannel(pack string) string {
-	return b.namespace + ":packs:" + pack
+	return b.valkeyBase() + ":packs:" + pack
 }
 
 // ValkeyFactory returns the factory identifier for JSON messages: {ns}[:{sel}]
@@ -133,14 +133,20 @@ func (b *Builder) KafkaWriteResponseTopic() string {
 	return b.kafkaBase() + "-write-responses"
 }
 
-// KafkaPackTopic returns the topic for a TagPack: {ns}-packs-{pack}
+// KafkaPackTopic returns the topic for a TagPack: {ns}[-{sel}] (same as tags)
+// The pack name is used as the message key for partitioning.
 func (b *Builder) KafkaPackTopic(pack string) string {
-	return b.namespace + "-packs-" + sanitizeKafkaTopic(pack)
+	return b.kafkaBase()
 }
 
-// KafkaTriggerTopic returns the topic for trigger messages: {ns}[-{sel}]-triggers
+// KafkaTriggerTopic returns the topic for trigger messages.
+// With selector: {ns}-{sel} (selector IS the topic)
+// Without selector: {ns}-triggers
 func (b *Builder) KafkaTriggerTopic() string {
-	return b.kafkaBase() + "-triggers"
+	if b.selector != "" {
+		return b.namespace + "-" + b.selector
+	}
+	return b.namespace + "-triggers"
 }
 
 func (b *Builder) kafkaBase() string {

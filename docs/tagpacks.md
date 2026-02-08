@@ -23,10 +23,9 @@ TagPacks group tags from multiple PLCs and publish them atomically as a single J
 tag_packs:
   - name: ProductionMetrics
     enabled: true
-    topic: packs/production
     mqtt_enabled: true
     kafka_enabled: true
-    valkey_enabled: false
+    valkey_enabled: true
     members:
       - plc: MainPLC
         tag: ProductCount
@@ -47,10 +46,9 @@ tag_packs:
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique identifier for the pack |
 | `enabled` | bool | No | Enable/disable the pack (default: false) |
-| `topic` | string | Yes | Topic/channel name for all brokers |
 | `mqtt_enabled` | bool | No | Publish to MQTT brokers |
 | `kafka_enabled` | bool | No | Publish to Kafka clusters |
-| `valkey_enabled` | bool | No | Publish to Valkey/Redis |
+| `valkey_enabled` | bool | No | Store/publish to Valkey/Redis |
 | `members` | list | Yes | Tags included in the pack |
 
 ### Member Fields
@@ -60,6 +58,28 @@ tag_packs:
 | `plc` | string | Yes | PLC name (must exist in config) |
 | `tag` | string | Yes | Tag name to include |
 | `ignore_changes` | bool | No | If true, changes to this tag don't trigger publish (default: false) |
+
+## Topic/Key Naming
+
+TagPack topics and keys are automatically derived from the `namespace` and `selector` settings:
+
+| Service | Topic/Key | Message Key | Example |
+|---------|-----------|-------------|---------|
+| **MQTT** | `{namespace}[/{selector}]/packs/{packname}` | - | `factory/line1/packs/ProductionMetrics` |
+| **Kafka** | `{namespace}[-{selector}]` (same as tags) | `pack:{packname}` | Topic: `factory-line1`, Key: `pack:ProductionMetrics` |
+| **Valkey** | `{namespace}[:{selector}]:packs:{packname}` | - | `factory:line1:packs:ProductionMetrics` |
+
+## Storage and Delivery
+
+TagPacks are stored/published consistently with regular tags:
+
+| Service | Behavior |
+|---------|----------|
+| **MQTT** | Published with `retained: true` - new subscribers receive last value |
+| **Kafka** | Published to topic - retained per Kafka topic retention policy |
+| **Valkey** | Stored as key AND published to channel - persists and notifies subscribers |
+
+This means TagPacks appear in Redis browsers alongside regular tags, and MQTT clients connecting later will receive the last published pack value.
 
 ## Published JSON Format
 
@@ -213,8 +233,8 @@ GET /tagpack
 Response:
 ```json
 [
-  {"name": "ProductionMetrics", "enabled": true, "topic": "packs/production", "members": 4, "url": "/tagpack/ProductionMetrics"},
-  {"name": "Alarm Pack", "enabled": false, "topic": "packs/alarms", "members": 8, "url": "/tagpack/Alarm%20Pack"}
+  {"name": "ProductionMetrics", "enabled": true, "members": 4, "url": "/tagpack/ProductionMetrics"},
+  {"name": "Alarm Pack", "enabled": false, "members": 8, "url": "/tagpack/Alarm%20Pack"}
 ]
 ```
 
@@ -250,7 +270,7 @@ Response: Full PackValue JSON with current tag values (same flat `plc.tag` key f
 
 ## Integration with Triggers
 
-Triggers can publish a TagPack immediately when they fire, bypassing the normal 250ms debounce.
+Triggers can include TagPack data in their snapshot. When a trigger fires, pack data is embedded directly in the trigger message (like a UDT), not published separately.
 
 ```yaml
 triggers:
@@ -258,15 +278,20 @@ triggers:
     plc: MainPLC
     trigger_tag: ProductReady
     condition: { operator: "==", value: true }
-    publish_pack: ProductionMetrics    # Publish this pack when trigger fires
+    tags:
+      - ProductID
+      - BatchNumber
+      - pack:ProductionMetrics    # Include pack data with pack: prefix
     kafka_cluster: LocalKafka
-    topic: events
 ```
 
 When the trigger fires:
-1. Normal trigger data is captured and published to Kafka
-2. The specified TagPack is published immediately to its configured brokers
-3. Pack debounce timer is reset (won't double-publish)
+1. All configured tags are read from the PLC
+2. All referenced packs have their tag data collected
+3. Everything is combined into a single atomic JSON message
+4. Pack data appears in the trigger's `data` field as a nested object
+
+See [Triggers](triggers.md) for the complete trigger message format.
 
 ## Debouncing
 
@@ -293,12 +318,14 @@ This prevents message floods when multiple tags change in quick succession.
 - Keep important status tags as non-ignored for responsive updates
 - Consider ignoring all but one tag if you want controlled publish timing
 
-### Topic Naming
+### Pack Naming
+
+Use descriptive pack names since they become part of the topic/key:
 
 ```yaml
-topic: packs/production     # Functional grouping
-topic: packs/line1/metrics  # Hierarchical
-topic: machine/status       # Flat naming
+name: ProductionMetrics    # → factory/line1/packs/ProductionMetrics (MQTT with selector)
+name: Line1Status          # → factory:line1:packs:Line1Status (Valkey with selector)
+name: AlarmSummary         # → Topic: factory-line1, Key: pack:AlarmSummary (Kafka)
 ```
 
 ### Performance
@@ -314,7 +341,6 @@ topic: machine/status       # Flat naming
 tag_packs:
   - name: Line1Status
     enabled: true
-    topic: factory/line1/status
     mqtt_enabled: true
     kafka_enabled: true
     valkey_enabled: true
@@ -327,7 +353,6 @@ tag_packs:
 
   - name: Line2Status
     enabled: true
-    topic: factory/line2/status
     mqtt_enabled: true
     kafka_enabled: true
     valkey_enabled: true
@@ -344,7 +369,6 @@ tag_packs:
 tag_packs:
   - name: AllAlarms
     enabled: true
-    topic: alarms/all
     mqtt_enabled: true
     kafka_enabled: false
     valkey_enabled: true

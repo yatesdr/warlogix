@@ -542,8 +542,8 @@ func (p *Publisher) processWriteRequest(client *redis.Client, req WriteRequest, 
 	debugLog("Valkey write %s:%s = %v -> success=%v", req.PLC, req.Tag, req.Value, response.Success)
 }
 
-// PublishRaw publishes raw bytes to a channel.
-// Used for TagPack publishing.
+// PublishRaw stores and publishes raw bytes.
+// Used for TagPack publishing - stores as a key AND publishes to the channel.
 func (p *Publisher) PublishRaw(channel string, data []byte) error {
 	p.mu.RLock()
 	if !p.running || p.client == nil {
@@ -551,12 +551,29 @@ func (p *Publisher) PublishRaw(channel string, data []byte) error {
 		return nil
 	}
 	client := p.client
+	cfg := p.config
 	p.mu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	return client.Publish(ctx, channel, data).Err()
+	// Use pipeline to SET (store) and PUBLISH (notify) in one round-trip
+	pipe := client.Pipeline()
+
+	// Store as a key (same path as channel, e.g., "warlogix:packs:pack1")
+	if cfg.KeyTTL > 0 {
+		pipe.Set(ctx, channel, data, cfg.KeyTTL)
+	} else {
+		pipe.Set(ctx, channel, data, 0)
+	}
+
+	// Also publish for real-time subscribers
+	if cfg.PublishChanges {
+		pipe.Publish(ctx, channel, data)
+	}
+
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func debugLog(format string, args ...interface{}) {

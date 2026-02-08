@@ -62,7 +62,7 @@ Triggers can publish to multiple MQTT brokers and Kafka clusters:
 
 ## Message Format
 
-Trigger messages are published to both MQTT and Kafka with the same JSON format:
+Trigger messages are published to both MQTT and Kafka with the same JSON format. All configured tags and packs are captured atomically and included in a single message:
 
 ```json
 {
@@ -78,7 +78,12 @@ Trigger messages are published to both MQTT and Kafka with the same JSON format:
     "ProductID": 12345,
     "BatchNumber": "B2024-001",
     "Quantity": 100,
-    "Temperature": 72.5
+    "Temperature": 72.5,
+    "ProductionMetrics": {
+      "MainPLC.Counter": { "value": 1234, "type": "DINT", "plc": "MainPLC" },
+      "MainPLC.Speed": { "value": 100.5, "type": "REAL", "plc": "MainPLC" },
+      "SecondaryPLC.Status": { "value": 1, "type": "INT", "plc": "SecondaryPLC" }
+    }
   }
 }
 ```
@@ -90,7 +95,7 @@ Trigger messages are published to both MQTT and Kafka with the same JSON format:
 | `sequence` | Incrementing sequence number (resets on restart) |
 | `plc` | Source PLC name |
 | `metadata` | Static metadata from config |
-| `data` | Captured tag values |
+| `data` | Captured tag values and pack data (packs appear as nested objects) |
 
 ### Topics
 
@@ -103,7 +108,7 @@ MQTT publishes with **QoS 2** (exactly-once delivery) for reliable event capture
 
 ## TagPack Integration
 
-Triggers can publish a TagPack immediately when they fire, bypassing the normal 250ms debounce:
+Triggers can include TagPack data in their snapshot. Packs are embedded directly in the trigger message alongside regular tags, treating them like UDTs:
 
 ```yaml
 triggers:
@@ -111,15 +116,31 @@ triggers:
     plc: MainPLC
     trigger_tag: ProductReady
     condition: { operator: "==", value: true }
-    publish_pack: ProductionMetrics    # Publish this pack when trigger fires
+    tags:
+      - ProductID
+      - BatchNumber
+      - pack:ProductionMetrics    # Include pack data with pack: prefix
     kafka_cluster: LocalKafka
-    topic: events
+```
+
+You can also use the legacy `publish_pack` field:
+
+```yaml
+triggers:
+  - name: ProductComplete
+    plc: MainPLC
+    trigger_tag: ProductReady
+    condition: { operator: "==", value: true }
+    publish_pack: ProductionMetrics    # Legacy syntax
 ```
 
 When the trigger fires:
-1. Normal trigger data is captured and published to Kafka
-2. The specified TagPack is published immediately to its configured brokers
-3. Pack debounce timer is reset (won't double-publish)
+1. All configured tags are read from the PLC
+2. All referenced packs have their tag data collected
+3. Everything is combined into a single atomic JSON message
+4. The message is published to MQTT and/or Kafka
+
+Packs appear in the `data` field as nested objects containing their tag data (see Message Format above).
 
 See [TagPacks](tagpacks.md) for more details on TagPack configuration.
 
@@ -163,7 +184,7 @@ The Triggers tab uses context-sensitive hotkeys based on which pane has focus:
 | `e` | Edit selected trigger |
 | `s` | Start/arm trigger |
 | `S` | Stop/disarm trigger |
-| `T` | Test fire trigger (does not enter cooldown) |
+| `F` | Fire trigger (test mode, does not enter cooldown) |
 
 **Data tags list (right pane):**
 
