@@ -998,6 +998,7 @@ const helpTextBase = `
    p            Focus PLC dropdown
    Space        Toggle tag publishing
    w            Toggle tag writable
+   W            Write value to tag
    d            Show tag details
    a            Add manual tag (Micro800/S7/Omron)
    e            Edit manual tag (Micro800/S7/Omron)

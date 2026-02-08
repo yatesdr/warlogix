@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
@@ -207,6 +208,13 @@ func (t *BrowserTab) handleTreeKeys(event *tcell.EventKey) *tcell.EventKey {
 		node := t.tree.GetCurrentNode()
 		if node != nil {
 			t.toggleNodeWritable(node)
+		}
+		return nil
+	case 'W':
+		// Write value to tag (only if writable)
+		node := t.tree.GetCurrentNode()
+		if node != nil {
+			t.showWriteDialog(node)
 		}
 		return nil
 	case 'i':
@@ -756,6 +764,135 @@ func (t *BrowserTab) updateConfigTag(tagName string, enabled, writable bool) {
 	}
 
 	t.app.SaveConfig()
+}
+
+func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
+	ref := node.GetReference()
+	if ref == nil {
+		return
+	}
+
+	tagInfo, ok := ref.(*driver.TagInfo)
+	if !ok {
+		return
+	}
+
+	tagName := tagInfo.Name
+
+	// Check if tag is writable
+	if !t.writableTags[tagName] {
+		t.app.showError("Not Writable", "Tag must be marked writable first.\nPress 'w' to toggle writable flag.")
+		return
+	}
+
+	// Get current value
+	var currentValue string
+	plc := t.app.manager.GetPLC(t.selectedPLC)
+	if plc != nil {
+		values := plc.GetValues()
+		if val, ok := values[tagName]; ok && val != nil && val.Error == nil {
+			currentValue = formatValue(val.GoValue())
+		}
+	}
+
+	th := CurrentTheme
+
+	// Create write form
+	form := tview.NewForm()
+	ApplyFormTheme(form)
+	form.SetBorder(true)
+	form.SetTitle(" Write Value ")
+	form.SetTitleColor(th.Accent)
+	form.SetBorderColor(th.Border)
+
+	// Show tag info
+	form.AddTextView("Tag:", tagName, 40, 1, true, false)
+	form.AddTextView("Current:", currentValue, 40, 1, true, false)
+	form.AddInputField("New Value:", "", 40, nil, nil)
+
+	form.AddButton("Write", func() {
+		newValue := form.GetFormItemByLabel("New Value:").(*tview.InputField).GetText()
+		if newValue == "" {
+			t.app.showErrorWithFocus("Error", "Value is required", form)
+			return
+		}
+
+		// Parse value based on tag type
+		var writeValue interface{}
+		var parseErr error
+
+		switch tagInfo.TypeCode {
+		case 0xC1, 0xD1: // BOOL, BYTE
+			var v int64
+			v, parseErr = strconv.ParseInt(newValue, 0, 8)
+			writeValue = byte(v)
+		case 0xC2, 0xD2: // INT, WORD (signed/unsigned 16-bit)
+			var v int64
+			v, parseErr = strconv.ParseInt(newValue, 0, 16)
+			writeValue = int16(v)
+		case 0xC3, 0xD3: // DINT, DWORD (signed/unsigned 32-bit)
+			var v int64
+			v, parseErr = strconv.ParseInt(newValue, 0, 32)
+			writeValue = int32(v)
+		case 0xC4, 0xD4: // LINT, LWORD (signed/unsigned 64-bit)
+			var v int64
+			v, parseErr = strconv.ParseInt(newValue, 0, 64)
+			writeValue = v
+		case 0xCA, 0xDA: // REAL (32-bit float)
+			var v float64
+			v, parseErr = strconv.ParseFloat(newValue, 32)
+			writeValue = float32(v)
+		case 0xCB, 0xDB: // LREAL (64-bit float)
+			writeValue, parseErr = strconv.ParseFloat(newValue, 64)
+		default:
+			// Default to integer
+			var v int64
+			v, parseErr = strconv.ParseInt(newValue, 0, 64)
+			writeValue = v
+		}
+
+		if parseErr != nil {
+			t.app.showErrorWithFocus("Parse Error", fmt.Sprintf("Invalid value: %v", parseErr), form)
+			return
+		}
+
+		// Perform write via manager
+		err := t.app.manager.WriteTag(t.selectedPLC, tagName, writeValue)
+		if err != nil {
+			t.app.showError("Write Error", fmt.Sprintf("Failed to write: %v", err))
+			t.app.pages.RemovePage("write-dialog")
+			t.app.pages.SwitchToPage("main")
+			return
+		}
+
+		// Success
+		t.app.pages.RemovePage("write-dialog")
+		t.app.pages.SwitchToPage("main")
+		t.updateStatus()
+		t.app.setStatus(fmt.Sprintf("Wrote %v to %s", writeValue, tagName))
+	})
+
+	form.AddButton("Cancel", func() {
+		t.app.pages.RemovePage("write-dialog")
+		t.app.pages.SwitchToPage("main")
+	})
+
+	form.SetCancelFunc(func() {
+		t.app.pages.RemovePage("write-dialog")
+		t.app.pages.SwitchToPage("main")
+	})
+
+	// Center the form
+	modal := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 12, 1, true).
+			AddItem(nil, 0, 1, false), 50, 1, true).
+		AddItem(nil, 0, 1, false)
+
+	t.app.pages.AddPage("write-dialog", modal, true, true)
+	t.app.app.SetFocus(form)
 }
 
 func (t *BrowserTab) showTagDetails(tag *driver.TagInfo) {
