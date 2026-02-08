@@ -837,10 +837,19 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 		} else {
 			// Try integer first (handles hex with 0x prefix)
 			if v, err := strconv.ParseInt(trimmed, 0, 64); err == nil {
-				writeValue = v
+				// Use int32 for values that fit, since DINT is more common than LINT
+				if v >= -2147483648 && v <= 2147483647 {
+					writeValue = int32(v)
+				} else {
+					writeValue = v
+				}
 			} else if f, err := strconv.ParseFloat(trimmed, 64); err == nil {
-				// Try float
-				writeValue = f
+				// Try float - use float32 since REAL is more common than LREAL
+				if f >= -3.4e38 && f <= 3.4e38 {
+					writeValue = float32(f)
+				} else {
+					writeValue = f
+				}
 			} else {
 				// Treat as string
 				writeValue = trimmed
