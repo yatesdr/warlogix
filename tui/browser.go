@@ -847,7 +847,6 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 		plcName := t.selectedPLC
 		writeVal := writeValue
 		tagN := tagName
-		app := t.app.app // Capture tview.Application for Draw()
 
 		// Close dialog synchronously (safe - we're on main UI thread)
 		t.app.pages.RemovePage(pageName)
@@ -855,22 +854,11 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 		t.app.app.SetFocus(t.tree)
 		t.app.setStatus(fmt.Sprintf("Writing %v to %s...", writeVal, tagN))
 
-		// Force a draw to ensure dialog is closed before goroutine runs
-		app.Draw()
-
 		// Perform write in background goroutine to not block UI
+		// Don't try to update UI from goroutine - let polling show the result
 		go func() {
-			// Perform the actual write (this may block on network I/O)
-			err := t.app.manager.WriteTag(plcName, tagN, writeVal)
-
-			// Update status - use Go channel pattern to avoid QueueUpdateDraw deadlock
-			// The Draw() call is safe from goroutines
-			if err != nil {
-				t.app.setStatus(fmt.Sprintf("Write failed: %v", err))
-			} else {
-				t.app.setStatus(fmt.Sprintf("Wrote %v to %s", writeVal, tagN))
-			}
-			app.Draw()
+			_ = t.app.manager.WriteTag(plcName, tagN, writeVal)
+			// Status will be updated by next poll cycle showing new value
 		}()
 	})
 
