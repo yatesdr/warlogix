@@ -123,8 +123,8 @@ func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []Discove
 		seen    = make(map[string]bool)
 	)
 
-	// Build the TwinCAT discovery request packet (correct format based on pyads)
-	packet := buildDiscoveryPacket()
+	// Build multiple discovery packet formats for compatibility
+	packets := buildDiscoveryPackets()
 
 	for _, broadcastAddr := range broadcastAddrs {
 		addr := fmt.Sprintf("%s:%d", broadcastAddr, DiscoveryUDPPort)
@@ -142,13 +142,14 @@ func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []Discove
 			continue
 		}
 
-		// Send discovery packet
-		logging.DebugLog("tui", "ADS DiscoverBroadcast: sending %d bytes to %s: %X", len(packet), addr, packet)
-		_, err = conn.WriteTo(packet, destAddr)
-		if err != nil {
-			conn.Close()
-			logging.DebugLog("tui", "ADS DiscoverBroadcast: WriteTo error: %v", err)
-			continue
+		// Send all packet formats
+		for i, packet := range packets {
+			logging.DebugLog("tui", "ADS DiscoverBroadcast: sending format %d (%d bytes) to %s: %X",
+				i, len(packet), addr, packet)
+			_, err = conn.WriteTo(packet, destAddr)
+			if err != nil {
+				logging.DebugLog("tui", "ADS DiscoverBroadcast: WriteTo error for format %d: %v", i, err)
+			}
 		}
 
 		// Read responses until timeout
@@ -197,73 +198,71 @@ func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []Discove
 	return results
 }
 
-// buildDiscoveryPacket creates the TwinCAT UDP discovery request packet.
-// Based on pyads implementation - this is the correct format that TwinCAT devices respond to.
-// Packet format (24 bytes total):
-// - Header (12 bytes): 03 66 14 71 00 00 00 00 01 00 00 00
-// - Dummy AMS Net ID (6 bytes): any non-zero values
-// - Port (2 bytes, little-endian): 10000 (system service port)
-// - Padding (4 bytes): 00 00 00 00
-func buildDiscoveryPacket() []byte {
-	packet := make([]byte, 24)
+// buildDiscoveryPackets creates TwinCAT UDP discovery request packets.
+// Returns multiple packet formats to try for compatibility with different TwinCAT versions.
+func buildDiscoveryPackets() [][]byte {
+	var packets [][]byte
 
-	// Header magic bytes (big-endian as per pyads)
-	packet[0] = 0x03
-	packet[1] = 0x66
-	packet[2] = 0x14
-	packet[3] = 0x71
-	packet[4] = 0x00
-	packet[5] = 0x00
-	packet[6] = 0x00
-	packet[7] = 0x00
-	packet[8] = 0x01
-	packet[9] = 0x00
-	packet[10] = 0x00
-	packet[11] = 0x00
+	// Format 1: TwinCAT 3 discovery packet (32 bytes)
+	// This format was confirmed to get responses from TwinCAT devices
+	packet1 := make([]byte, 32)
+	binary.LittleEndian.PutUint32(packet1[0:4], 0x71146603)  // Discovery magic
+	binary.LittleEndian.PutUint32(packet1[4:8], 0x00000000)  // Request ID
+	binary.LittleEndian.PutUint32(packet1[8:12], 0x00000001) // Service: search
+	packets = append(packets, packet1)
 
-	// Dummy AMS Net ID (6 bytes) - use non-zero placeholder
-	packet[12] = 0x01
-	packet[13] = 0x01
-	packet[14] = 0x01
-	packet[15] = 0x01
-	packet[16] = 0x01
-	packet[17] = 0x01
-
+	// Format 2: pyads-style packet (24 bytes)
+	// Based on pyads implementation for getting AMS Net ID
+	packet2 := make([]byte, 24)
+	packet2[0] = 0x03
+	packet2[1] = 0x66
+	packet2[2] = 0x14
+	packet2[3] = 0x71
+	packet2[4] = 0x00
+	packet2[5] = 0x00
+	packet2[6] = 0x00
+	packet2[7] = 0x00
+	packet2[8] = 0x01
+	packet2[9] = 0x00
+	packet2[10] = 0x00
+	packet2[11] = 0x00
+	// Dummy AMS Net ID
+	packet2[12] = 0x01
+	packet2[13] = 0x01
+	packet2[14] = 0x01
+	packet2[15] = 0x01
+	packet2[16] = 0x01
+	packet2[17] = 0x01
 	// System service port (10000) - little-endian
-	binary.LittleEndian.PutUint16(packet[18:20], PortSystemService)
+	binary.LittleEndian.PutUint16(packet2[18:20], PortSystemService)
+	packets = append(packets, packet2)
 
-	// Padding
-	packet[20] = 0x00
-	packet[21] = 0x00
-	packet[22] = 0x00
-	packet[23] = 0x00
+	// Format 3: Simple 16-byte magic packet
+	packet3 := []byte{
+		0x03, 0x66, 0x14, 0x71, // Magic
+		0x00, 0x00, 0x00, 0x00, // Padding
+		0x00, 0x00, 0x00, 0x00, // Padding
+		0x00, 0x00, 0x00, 0x00, // Padding
+	}
+	packets = append(packets, packet3)
 
-	return packet
+	return packets
 }
 
 // parseDiscoveryResponse parses a TwinCAT UDP discovery response.
-// Response format (based on pyads):
-// - Header (12 bytes): includes response flag at byte 11 (should be 0x80)
-// - AMS Net ID (6 bytes): at offset 12-17
-// - Additional data follows (hostname, version, etc.)
+// The response format varies by TwinCAT version, so we try multiple parsing strategies.
 func parseDiscoveryResponse(data []byte, sourceIP net.IP) *DiscoveredDevice {
-	if len(data) < 18 {
+	if len(data) < 12 {
 		logging.DebugLog("tui", "ADS parseDiscoveryResponse: packet too short (%d bytes)", len(data))
 		return nil
 	}
 
-	// Log raw packet for debugging
-	logging.DebugLog("tui", "ADS parseDiscoveryResponse: parsing %d byte response", len(data))
-
-	// Check response flag at byte 11 (should be 0x80 for valid response)
-	responseFlag := data[11]
-	logging.DebugLog("tui", "ADS parseDiscoveryResponse: response flag=0x%02X", responseFlag)
-
-	// Note: Some devices may not set 0x80, so we'll try to parse anyway
-	// but log if it's different
-	if responseFlag != 0x80 {
-		logging.DebugLog("tui", "ADS parseDiscoveryResponse: unexpected response flag (expected 0x80, got 0x%02X)", responseFlag)
+	// Log first 100 bytes of response for debugging
+	logLen := len(data)
+	if logLen > 100 {
+		logLen = 100
 	}
+	logging.DebugLog("tui", "ADS parseDiscoveryResponse: %d bytes, first %d: %X", len(data), logLen, data[:logLen])
 
 	device := &DiscoveredDevice{
 		IP:        sourceIP,
@@ -272,52 +271,62 @@ func parseDiscoveryResponse(data []byte, sourceIP net.IP) *DiscoveredDevice {
 		HasRoute:  true, // Device responded to UDP discovery
 	}
 
-	// Extract AMS Net ID from bytes 12-17 (6 bytes)
-	if len(data) >= 18 {
-		amsBytes := data[12:18]
-		device.AmsNetId = fmt.Sprintf("%d.%d.%d.%d.%d.%d",
-			amsBytes[0], amsBytes[1], amsBytes[2], amsBytes[3], amsBytes[4], amsBytes[5])
-		logging.DebugLog("tui", "ADS parseDiscoveryResponse: AMS Net ID = %s", device.AmsNetId)
+	// Try to find AMS Net ID at various offsets
+	// The AMS Net ID is 6 bytes and typically looks like: A.B.C.D.1.1 where A.B.C.D is IP-like
+	amsOffsets := []int{4, 8, 12, 16, 20, 24}
+	for _, offset := range amsOffsets {
+		if offset+6 > len(data) {
+			continue
+		}
+		amsBytes := data[offset : offset+6]
 
-		// Validate AMS Net ID (should not be all zeros)
-		if !isValidAmsNetIdBytes(amsBytes) {
-			logging.DebugLog("tui", "ADS parseDiscoveryResponse: AMS Net ID appears invalid (all zeros or similar)")
-			device.AmsNetId = ""
+		// Check if this looks like a valid AMS Net ID
+		// Valid: non-zero first 4 bytes (like an IP), last 2 bytes usually 1.1
+		if isValidAmsNetIdBytes(amsBytes) {
+			candidate := fmt.Sprintf("%d.%d.%d.%d.%d.%d",
+				amsBytes[0], amsBytes[1], amsBytes[2], amsBytes[3], amsBytes[4], amsBytes[5])
+			logging.DebugLog("tui", "ADS parseDiscoveryResponse: found candidate AMS Net ID at offset %d: %s", offset, candidate)
+
+			// Prefer AMS Net IDs that look like they're based on an IP address
+			// (first octet in common private ranges: 10.x, 172.16-31, 192.168)
+			firstOctet := amsBytes[0]
+			if firstOctet == 10 || firstOctet == 172 || firstOctet == 192 {
+				device.AmsNetId = candidate
+				logging.DebugLog("tui", "ADS parseDiscoveryResponse: using AMS Net ID: %s", device.AmsNetId)
+				break
+			} else if device.AmsNetId == "" {
+				// Use first valid candidate if we don't find an IP-like one
+				device.AmsNetId = candidate
+			}
 		}
 	}
 
-	// The response typically contains more data after the AMS Net ID
-	// Try to extract hostname and version info from the remaining data
-	// Response structure (approx 395 bytes total):
-	// - Offset 18+: Additional device information including hostname, TwinCAT version, OS version
-
-	// Look for hostname - typically a null-terminated string
-	// Common locations vary by TwinCAT version
-	if len(data) > 50 {
-		// Try various offsets where hostname might be
-		for _, offset := range []int{18, 24, 32, 40, 48} {
+	// Look for hostname - scan for printable ASCII strings
+	if len(data) > 30 {
+		for offset := 20; offset < len(data)-8 && offset < 200; offset++ {
 			hostname := extractNullString(data, offset, 64)
-			if hostname != "" && len(hostname) >= 2 {
-				device.Hostname = hostname
-				logging.DebugLog("tui", "ADS parseDiscoveryResponse: hostname at offset %d = %q", offset, hostname)
-				break
+			if len(hostname) >= 3 && len(hostname) <= 32 {
+				// Check if it looks like a hostname (alphanumeric, hyphens, no spaces at start)
+				if hostname[0] >= 'A' && hostname[0] <= 'z' {
+					device.Hostname = hostname
+					logging.DebugLog("tui", "ADS parseDiscoveryResponse: hostname at offset %d: %q", offset, hostname)
+					break
+				}
 			}
 		}
 	}
 
 	// Try to find TwinCAT version info
-	// Version format is typically: Major(1), Minor(1), Build(2)
-	if len(data) > 100 {
-		// Search for version pattern in likely locations
-		for offset := 50; offset < len(data)-4 && offset < 200; offset++ {
+	if len(data) > 50 {
+		for offset := 30; offset < len(data)-4 && offset < 200; offset++ {
 			major := data[offset]
 			minor := data[offset+1]
 			build := binary.LittleEndian.Uint16(data[offset+2 : offset+4])
 
-			// TwinCAT 2.x or 3.x with reasonable minor and build numbers
+			// TwinCAT 2.x or 3.x with reasonable version numbers
 			if (major == 2 || major == 3) && minor < 20 && build >= 1000 && build < 10000 {
 				device.TwinCATVersion = fmt.Sprintf("%d.%d.%d", major, minor, build)
-				logging.DebugLog("tui", "ADS parseDiscoveryResponse: TwinCAT version at offset %d = %s", offset, device.TwinCATVersion)
+				logging.DebugLog("tui", "ADS parseDiscoveryResponse: TwinCAT version at offset %d: %s", offset, device.TwinCATVersion)
 				break
 			}
 		}
