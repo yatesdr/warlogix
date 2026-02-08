@@ -259,11 +259,19 @@ func (t *PLCsTab) Refresh() {
 	t.statusBar.SetText(statusText)
 }
 
-// escapeTviewText removes square brackets that tview interprets as style tags
+// escapeTviewText removes characters that tview interprets as style tags
 func escapeTviewText(s string) string {
-	s = strings.ReplaceAll(s, "[", "(")
-	s = strings.ReplaceAll(s, "]", ")")
-	return s
+	// Remove square brackets entirely - tview interprets them as style tags
+	s = strings.ReplaceAll(s, "[", "")
+	s = strings.ReplaceAll(s, "]", "")
+	// Also remove any control characters
+	var result strings.Builder
+	for _, r := range s {
+		if r >= 32 && r < 127 {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
 }
 
 // discoveredDevicesCache holds cached discovered devices
@@ -381,9 +389,9 @@ func (t *PLCsTab) showDiscoveryModal() {
 		discoveredDevicesCacheMu.Unlock()
 
 		for i, dev := range devices {
-			ip := dev.IP.String()
-			driverName := string(dev.Family)
-			protocol := dev.Protocol
+			ip := escapeTviewText(dev.IP.String())
+			driverName := escapeTviewText(string(dev.Family))
+			protocol := escapeTviewText(dev.Protocol)
 			deviceId := escapeTviewText(dev.ProductName)
 
 			// Apply filter
