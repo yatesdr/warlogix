@@ -43,15 +43,6 @@ go build -o warlogix ./cmd/warlogix
 
 Configuration is stored at `~/.warlogix/config.yaml` and created automatically on first run.
 
-### Navigation
-
-- **Direct tab access**: `P`LCs, Repu`B`lisher, `T`agPacks, Tri`G`gers, R`E`ST, `M`QTT, `V`alkey, `K`afka, `D`ebug
-- `Shift+Tab` - Cycle through tabs
-- `N` - Configure namespace
-- `?` - Help
-- `Q` - Quit
-
-Press `d` to discover PLCs on your network, or `a` to add manually.
 
 ## Documentation
 
