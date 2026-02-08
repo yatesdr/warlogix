@@ -7,13 +7,13 @@ Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwh
 
 At its heart WarLogix is a TUI (Text User Interface) gateway for industrial PLCs, and can connect and read / write data from Allen-Bradley, Siemens, Beckhoff, and Omron PLCs.  It will then republish that data via REST API, MQTT, Kafka, and Redis/Valkey for use in the wider factory infrastructure.   It includes advanced features for grouping tags into 'Soft-UDTs' and for publishing tags or groups of tags when specific trigger condition are met.   It is optimized for high-performance read from PLCs and writing to upstream services, with write-back functionality for discrete types.
 
-War was originally designed as an "Edge" application to simplify pushing data out of NAT'd process networks, but is found to also work well in the server room for aggregating and monitoring data factory-wide.   It has been designed for easy configuration and back up (single-file config), and works well for distribution with Ansible and other distribution managers.   WarLogix runs on most modern terminals, and includes a built-in SSH server and daemon-mode for when you prefer to run it in the background on existing computers or servers, while connecting to it remotely to refine the configuration or monitor conditions.
+
 
 > **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff is stable but requires more testing, and Omron support is still experimental.
 
 <img width="916" height="548" alt="image" src="https://github.com/user-attachments/assets/26355fa0-95bc-4987-b6c1-2420e5c60d71" />
 
-
+War was originally designed as an "Edge" application to simplify pushing data out of NAT'd process networks, but is found to also work well in the server room for aggregating and monitoring data factory-wide.   It has been designed for easy configuration and back up (single-file config), and works well for distribution with Ansible and other distribution managers.   WarLogix runs on most modern terminals, and includes a built-in SSH server and daemon-mode for when you prefer to run it in the background on existing computers or servers, while connecting to it remotely to refine the configuration or monitor conditions.
 
 
 ## Warnings
