@@ -263,6 +263,9 @@ func (t *PLCsTab) Refresh() {
 var discoveredDevicesCache []driver.DiscoveredDevice
 var discoveredDevicesCacheMu sync.Mutex
 
+// activeDiscoverySession is the currently running discovery session
+var activeDiscoverySession *driver.DiscoverySession
+
 func (t *PLCsTab) discover() {
 	// Don't start new discovery if modal is already open
 	if t.app.isModalOpen() {
@@ -270,47 +273,57 @@ func (t *PLCsTab) discover() {
 		return
 	}
 
-	t.app.setStatus("Discovering PLCs (EIP broadcast)...")
+	// Stop any existing discovery session
+	if activeDiscoverySession != nil {
+		activeDiscoverySession.Stop()
+		activeDiscoverySession = nil
+	}
 
-	// Start discovery in background, show modal when we have initial results
+	// Get local subnets for scanning
+	subnets := driver.GetLocalSubnets()
+	scanCIDR := ""
+	if len(subnets) > 0 {
+		scanCIDR = subnets[0] // Use first subnet for port scanning
+	}
+
+	// Create new discovery session
+	activeDiscoverySession = driver.NewDiscoverySession()
+
+	t.app.setStatus("Scanning network (EIP, S7, ADS, FINS)...")
+
+	// Show modal immediately (it will populate as devices are discovered)
+	t.showDiscoveryModal()
+
+	// Start discovery - devices will stream in via channel
+	deviceChan := activeDiscoverySession.Start("255.255.255.255", scanCIDR, 50)
+
+	// Handle incoming devices in background
 	go func() {
-		// Use EIP-only discovery (more stable, works for Allen-Bradley and Omron NJ/NX)
-		devices := driver.DiscoverEIPOnly("255.255.255.255", 3*time.Second)
-
-		// Merge with cache
-		discoveredDevicesCacheMu.Lock()
-		seen := make(map[string]bool)
-		for _, dev := range discoveredDevicesCache {
-			seen[dev.Key()] = true
-		}
-		for _, dev := range devices {
-			if !seen[dev.Key()] {
+		for dev := range deviceChan {
+			// Add to cache
+			discoveredDevicesCacheMu.Lock()
+			key := dev.Key()
+			found := false
+			for _, cached := range discoveredDevicesCache {
+				if cached.Key() == key {
+					found = true
+					break
+				}
+			}
+			if !found {
 				discoveredDevicesCache = append(discoveredDevicesCache, dev)
 			}
+			discoveredDevicesCacheMu.Unlock()
+
+			// Update the modal table (will be handled by the modal's refresh mechanism)
+			t.app.QueueUpdateDraw(func() {
+				// The modal refresh is handled inside showDiscoveryModal
+			})
 		}
-		// Use the merged cache as our device list
-		allDevices := make([]driver.DiscoveredDevice, len(discoveredDevicesCache))
-		copy(allDevices, discoveredDevicesCache)
-		discoveredDevicesCacheMu.Unlock()
-
-		t.app.QueueUpdateDraw(func() {
-			if t.app.isModalOpen() {
-				t.app.setStatus(fmt.Sprintf("Found %d device(s) - press 'd' again to view", len(allDevices)))
-				return
-			}
-
-			if len(allDevices) == 0 {
-				t.app.setStatus("No PLCs discovered")
-				return
-			}
-
-			t.app.setStatus(fmt.Sprintf("Found %d device(s)", len(allDevices)))
-			t.showDiscoveryModal(allDevices)
-		})
 	}()
 }
 
-func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
+func (t *PLCsTab) showDiscoveryModal() {
 	const pageName = "discovery"
 
 	th := CurrentTheme
@@ -320,7 +333,7 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 	flex.SetBorder(true)
 	flex.SetBorderColor(th.Border).SetTitleColor(th.Accent)
 	flex.SetBackgroundColor(th.Background)
-	flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d) ", len(devices)))
+	flex.SetTitle(" Discovering Devices... ")
 
 	// Filter input (hidden by default)
 	filterInput := tview.NewInputField()
@@ -335,17 +348,21 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 	filterVisible := false
 	currentFilter := ""
 
-	// Create the list
-	list := tview.NewList()
-	list.SetBackgroundColor(th.Background)
-	list.SetMainTextColor(th.Text)
-	list.SetSecondaryTextColor(th.TextDim)
-	list.SetSelectedBackgroundColor(th.Accent)
-	list.SetSelectedTextColor(th.SelectedText)
-	list.ShowSecondaryText(true)
+	// Create the table
+	table := tview.NewTable().
+		SetBorders(false).
+		SetSelectable(true, false).
+		SetFixed(1, 0)
+	ApplyTableTheme(table)
 
-	// Track filtered indices to map selection back to original devices
-	var filteredIndices []int
+	// Set up headers
+	headers := []string{"IP Address", "Driver", "Protocol", "Device Identifier"}
+	for i, h := range headers {
+		table.SetCell(0, i, tview.NewTableCell(h).
+			SetTextColor(th.Accent).
+			SetSelectable(false).
+			SetAttributes(tcell.AttrBold))
+	}
 
 	// Helper to escape tview style tags (square brackets)
 	escapeText := func(s string) string {
@@ -354,47 +371,83 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 		return s
 	}
 
-	// Function to populate list based on filter
-	populateList := func() {
-		list.Clear()
+	// Track filtered indices to map selection back to original devices
+	var filteredIndices []int
+
+	// Function to populate table based on filter
+	populateTable := func() {
+		// Clear existing rows (keep header)
+		for table.GetRowCount() > 1 {
+			table.RemoveRow(1)
+		}
 		filteredIndices = nil
+
 		filter := strings.ToLower(currentFilter)
+
+		// Get current cached devices
+		discoveredDevicesCacheMu.Lock()
+		devices := make([]driver.DiscoveredDevice, len(discoveredDevicesCache))
+		copy(devices, discoveredDevicesCache)
+		discoveredDevicesCacheMu.Unlock()
 
 		for i, dev := range devices {
 			ip := dev.IP.String()
-			// Escape square brackets in product names to prevent tview style tag interpretation
-			productName := escapeText(dev.ProductName)
-			vendor := escapeText(dev.Vendor)
-			mainText := fmt.Sprintf("%s - %s", ip, productName)
-			secondaryText := fmt.Sprintf("  %s | %s | %s", vendor, dev.Family, dev.Protocol)
+			driverName := string(dev.Family)
+			protocol := dev.Protocol
+			deviceId := escapeText(dev.ProductName)
 
 			// Apply filter
 			if filter != "" {
-				searchText := strings.ToLower(mainText + secondaryText)
+				searchText := strings.ToLower(ip + driverName + protocol + deviceId + dev.Vendor)
 				if !strings.Contains(searchText, filter) {
 					continue
 				}
 			}
 
 			filteredIndices = append(filteredIndices, i)
-			list.AddItem(mainText, secondaryText, 0, nil)
+			row := len(filteredIndices) // 1-indexed because of header
+
+			table.SetCell(row, 0, tview.NewTableCell(ip).SetExpansion(1))
+			table.SetCell(row, 1, tview.NewTableCell(driverName).SetExpansion(1))
+			table.SetCell(row, 2, tview.NewTableCell(protocol).SetExpansion(1))
+			table.SetCell(row, 3, tview.NewTableCell(deviceId).SetExpansion(2))
 		}
 
 		// Update title with count
+		total := len(devices)
 		if filter != "" {
-			flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d/%d) ", len(filteredIndices), len(devices)))
+			flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d/%d) ", len(filteredIndices), total))
+		} else if total == 0 {
+			flex.SetTitle(" Discovering Devices... ")
 		} else {
-			flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d) ", len(devices)))
+			flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d) ", total))
 		}
 	}
 
-	// Initial population
-	populateList()
+	// Initial population (may show cached devices)
+	populateTable()
+
+	// Set up periodic refresh while discovery is running
+	stopRefresh := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopRefresh:
+				return
+			case <-ticker.C:
+				t.app.QueueUpdateDraw(func() {
+					populateTable()
+				})
+			}
+		}
+	}()
 
 	// Filter input change handler
 	filterInput.SetChangedFunc(func(text string) {
 		currentFilter = text
-		populateList()
+		populateTable()
 	})
 
 	// Close button
@@ -405,15 +458,26 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 	clearBtn := tview.NewButton("Clear Cache")
 	ApplyButtonTheme(clearBtn)
 
-	closeBtn.SetSelectedFunc(func() {
+	closeModal := func() {
+		close(stopRefresh)
+		if activeDiscoverySession != nil {
+			activeDiscoverySession.Stop()
+			activeDiscoverySession = nil
+		}
+		discoveredDevicesCacheMu.Lock()
+		count := len(discoveredDevicesCache)
+		discoveredDevicesCacheMu.Unlock()
+		t.app.setStatus(fmt.Sprintf("Discovery stopped (%d device(s) found)", count))
 		t.app.closeModal(pageName)
-	})
+	}
+
+	closeBtn.SetSelectedFunc(closeModal)
 
 	clearBtn.SetSelectedFunc(func() {
 		discoveredDevicesCacheMu.Lock()
 		discoveredDevicesCache = nil
 		discoveredDevicesCacheMu.Unlock()
-		t.app.closeModal(pageName)
+		populateTable()
 		t.app.setStatus("Discovery cache cleared")
 	})
 
@@ -434,24 +498,29 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 	helpText.SetTextAlign(tview.AlignCenter)
 
 	// Build layout
-	flex.AddItem(list, 0, 1, true)
+	flex.AddItem(table, 0, 1, true)
 	flex.AddItem(helpText, 1, 0, false)
 	flex.AddItem(buttonFlex, 1, 0, false)
 
-	// Handle list selection
-	list.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		if index >= 0 && index < len(filteredIndices) {
-			originalIndex := filteredIndices[index]
-			if originalIndex < len(devices) {
-				dev := devices[originalIndex]
-				t.app.closeModal(pageName)
-				t.showAddDialogWithDevice(&dev)
-			}
+	// Handle table selection
+	table.SetSelectedFunc(func(row, col int) {
+		if row <= 0 || row-1 >= len(filteredIndices) {
+			return
 		}
+		originalIndex := filteredIndices[row-1]
+		discoveredDevicesCacheMu.Lock()
+		if originalIndex < len(discoveredDevicesCache) {
+			dev := discoveredDevicesCache[originalIndex]
+			discoveredDevicesCacheMu.Unlock()
+			closeModal()
+			t.showAddDialogWithDevice(&dev)
+			return
+		}
+		discoveredDevicesCacheMu.Unlock()
 	})
 
-	// Input capture for the list
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	// Input capture for the table
+	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
 			if filterVisible {
@@ -459,15 +528,15 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 				filterVisible = false
 				filterInput.SetText("")
 				currentFilter = ""
-				populateList()
+				populateTable()
 				flex.Clear()
-				flex.AddItem(list, 0, 1, true)
+				flex.AddItem(table, 0, 1, true)
 				flex.AddItem(helpText, 1, 0, false)
 				flex.AddItem(buttonFlex, 1, 0, false)
-				t.app.app.SetFocus(list)
+				t.app.app.SetFocus(table)
 				return nil
 			}
-			t.app.closeModal(pageName)
+			closeModal()
 			return nil
 		case tcell.KeyTab:
 			t.app.app.SetFocus(clearBtn)
@@ -480,7 +549,7 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 					// Insert filter at top
 					flex.Clear()
 					flex.AddItem(filterInput, 1, 0, true)
-					flex.AddItem(list, 0, 1, false)
+					flex.AddItem(table, 0, 1, false)
 					flex.AddItem(helpText, 1, 0, false)
 					flex.AddItem(buttonFlex, 1, 0, false)
 					t.app.app.SetFocus(filterInput)
@@ -491,7 +560,7 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 				discoveredDevicesCacheMu.Lock()
 				discoveredDevicesCache = nil
 				discoveredDevicesCacheMu.Unlock()
-				t.app.closeModal(pageName)
+				populateTable()
 				t.app.setStatus("Discovery cache cleared")
 				return nil
 			}
@@ -507,15 +576,15 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 			filterVisible = false
 			filterInput.SetText("")
 			currentFilter = ""
-			populateList()
+			populateTable()
 			flex.Clear()
-			flex.AddItem(list, 0, 1, true)
+			flex.AddItem(table, 0, 1, true)
 			flex.AddItem(helpText, 1, 0, false)
 			flex.AddItem(buttonFlex, 1, 0, false)
-			t.app.app.SetFocus(list)
+			t.app.app.SetFocus(table)
 			return nil
 		case tcell.KeyEnter, tcell.KeyDown:
-			t.app.app.SetFocus(list)
+			t.app.app.SetFocus(table)
 			return nil
 		}
 		return event
@@ -525,13 +594,13 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 	clearBtn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
-			t.app.closeModal(pageName)
+			closeModal()
 			return nil
 		case tcell.KeyTab:
 			t.app.app.SetFocus(closeBtn)
 			return nil
 		case tcell.KeyBacktab:
-			t.app.app.SetFocus(list)
+			t.app.app.SetFocus(table)
 			return nil
 		}
 		return event
@@ -539,17 +608,17 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 	closeBtn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
-			t.app.closeModal(pageName)
+			closeModal()
 			return nil
 		case tcell.KeyTab, tcell.KeyBacktab:
-			t.app.app.SetFocus(list)
+			t.app.app.SetFocus(table)
 			return nil
 		}
 		return event
 	})
 
 	// Show modal
-	t.app.showCenteredModal(pageName, flex, 75, 22)
+	t.app.showCenteredModal(pageName, flex, 85, 22)
 }
 
 func (t *PLCsTab) showAddDialog() {
