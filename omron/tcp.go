@@ -96,8 +96,9 @@ func (t *tcpTransport) negotiateNodeAddress() error {
 	// FINS magic
 	copy(req[0:4], finsTCPMagic)
 
-	// Length: 8 bytes (command + error code + client node)
-	binary.BigEndian.PutUint32(req[4:8], 8)
+	// Length: 12 bytes (command + error code + client node)
+	// Length field indicates bytes after "FINS"(4) + "Length"(4) = 8 bytes
+	binary.BigEndian.PutUint32(req[4:8], 12)
 
 	// Command: Node Address Data Send
 	binary.BigEndian.PutUint32(req[8:12], cmdNodeAddressRequest)
