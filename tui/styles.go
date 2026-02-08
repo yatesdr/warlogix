@@ -929,7 +929,9 @@ func GetTreeCollapsed() string {
 // GetCheckboxChecked returns the appropriate checked checkbox for the current mode.
 func GetCheckboxChecked() string {
 	if ASCIIModeEnabled {
-		return "[X]"
+		// Use parentheses instead of brackets to avoid tview interpreting
+		// them as color formatting tags (tview uses [color] syntax)
+		return "(X)"
 	}
 	return CheckboxChecked
 }
@@ -937,7 +939,9 @@ func GetCheckboxChecked() string {
 // GetCheckboxUnchecked returns the appropriate unchecked checkbox for the current mode.
 func GetCheckboxUnchecked() string {
 	if ASCIIModeEnabled {
-		return "[ ]"
+		// Use parentheses instead of brackets to avoid tview interpreting
+		// them as color formatting tags (tview uses [color] syntax)
+		return "( )"
 	}
 	return CheckboxUnchecked
 }

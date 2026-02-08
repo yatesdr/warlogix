@@ -694,7 +694,7 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *driver.TagInfo, e
 	// UDT expandable indicator
 	udtIndicator := ""
 	if logix.IsStructure(tag.TypeCode) {
-		udtIndicator = th.TagAccent + "▶" + th.TagReset + " "
+		udtIndicator = th.TagAccent + GetTreeCollapsed() + th.TagReset
 	}
 
 	typeName := t.getTypeName(tag.TypeCode)
@@ -796,102 +796,83 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 	}
 
 	th := CurrentTheme
+	pageName := "write-dialog"
 
 	// Create write form
 	form := tview.NewForm()
 	ApplyFormTheme(form)
 	form.SetBorder(true)
-	form.SetTitle(" Write Value ")
+	form.SetTitle(fmt.Sprintf(" Write: %s ", tagName))
 	form.SetTitleColor(th.Accent)
 	form.SetBorderColor(th.Border)
 
-	// Show tag info
-	form.AddTextView("Tag:", tagName, 40, 1, true, false)
-	form.AddTextView("Current:", currentValue, 40, 1, true, false)
-	form.AddInputField("New Value:", "", 40, nil, nil)
+	// Show current value as label, input for new value
+	form.AddInputField("Current:", currentValue, 30, nil, nil)
+	form.GetFormItemByLabel("Current:").(*tview.InputField).SetDisabled(true)
+	form.AddInputField("New Value:", "", 30, nil, nil)
+
+	closeDialog := func() {
+		t.app.pages.RemovePage(pageName)
+		t.app.pages.SwitchToPage("main")
+		t.app.app.SetFocus(t.tree)
+	}
 
 	form.AddButton("Write", func() {
 		newValue := form.GetFormItemByLabel("New Value:").(*tview.InputField).GetText()
 		if newValue == "" {
-			t.app.showErrorWithFocus("Error", "Value is required", form)
 			return
 		}
 
-		// Parse value based on tag type
+		// Parse value - default to int64 for FINS WORD types
 		var writeValue interface{}
 		var parseErr error
 
-		switch tagInfo.TypeCode {
-		case 0xC1, 0xD1: // BOOL, BYTE
-			var v int64
-			v, parseErr = strconv.ParseInt(newValue, 0, 8)
-			writeValue = byte(v)
-		case 0xC2, 0xD2: // INT, WORD (signed/unsigned 16-bit)
-			var v int64
-			v, parseErr = strconv.ParseInt(newValue, 0, 16)
-			writeValue = int16(v)
-		case 0xC3, 0xD3: // DINT, DWORD (signed/unsigned 32-bit)
-			var v int64
-			v, parseErr = strconv.ParseInt(newValue, 0, 32)
-			writeValue = int32(v)
-		case 0xC4, 0xD4: // LINT, LWORD (signed/unsigned 64-bit)
-			var v int64
-			v, parseErr = strconv.ParseInt(newValue, 0, 64)
-			writeValue = v
-		case 0xCA, 0xDA: // REAL (32-bit float)
-			var v float64
-			v, parseErr = strconv.ParseFloat(newValue, 32)
-			writeValue = float32(v)
-		case 0xCB, 0xDB: // LREAL (64-bit float)
-			writeValue, parseErr = strconv.ParseFloat(newValue, 64)
-		default:
-			// Default to integer
-			var v int64
-			v, parseErr = strconv.ParseInt(newValue, 0, 64)
-			writeValue = v
-		}
-
+		// Try parsing as integer first (handles hex with 0x prefix)
+		var v int64
+		v, parseErr = strconv.ParseInt(newValue, 0, 64)
 		if parseErr != nil {
-			t.app.showErrorWithFocus("Parse Error", fmt.Sprintf("Invalid value: %v", parseErr), form)
-			return
+			// Try float
+			var f float64
+			f, parseErr = strconv.ParseFloat(newValue, 64)
+			if parseErr != nil {
+				t.app.setStatus(fmt.Sprintf("Invalid value: %s", newValue))
+				return
+			}
+			writeValue = f
+		} else {
+			writeValue = v
 		}
 
-		// Perform write via manager
-		err := t.app.manager.WriteTag(t.selectedPLC, tagName, writeValue)
-		if err != nil {
-			t.app.showError("Write Error", fmt.Sprintf("Failed to write: %v", err))
-			t.app.pages.RemovePage("write-dialog")
-			t.app.pages.SwitchToPage("main")
-			return
-		}
+		// Close dialog first to return UI to normal state
+		closeDialog()
 
-		// Success
-		t.app.pages.RemovePage("write-dialog")
-		t.app.pages.SwitchToPage("main")
-		t.updateStatus()
-		t.app.setStatus(fmt.Sprintf("Wrote %v to %s", writeValue, tagName))
+		// Perform write in background to not block UI
+		plcName := t.selectedPLC
+		go func() {
+			err := t.app.manager.WriteTag(plcName, tagName, writeValue)
+			t.app.QueueUpdateDraw(func() {
+				if err != nil {
+					t.app.setStatus(fmt.Sprintf("Write failed: %v", err))
+				} else {
+					t.app.setStatus(fmt.Sprintf("Wrote %v to %s", writeValue, tagName))
+				}
+			})
+		}()
 	})
 
-	form.AddButton("Cancel", func() {
-		t.app.pages.RemovePage("write-dialog")
-		t.app.pages.SwitchToPage("main")
-	})
+	form.AddButton("Cancel", closeDialog)
+	form.SetCancelFunc(closeDialog)
 
-	form.SetCancelFunc(func() {
-		t.app.pages.RemovePage("write-dialog")
-		t.app.pages.SwitchToPage("main")
-	})
-
-	// Center the form
+	// Center the form in a modal
 	modal := tview.NewFlex().
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(form, 12, 1, true).
-			AddItem(nil, 0, 1, false), 50, 1, true).
+			AddItem(form, 9, 1, true).
+			AddItem(nil, 0, 1, false), 45, 1, true).
 		AddItem(nil, 0, 1, false)
 
-	t.app.pages.AddPage("write-dialog", modal, true, true)
+	t.app.pages.AddPage(pageName, modal, true, true)
 	t.app.app.SetFocus(form)
 }
 
@@ -1406,17 +1387,55 @@ func (t *BrowserTab) loadTags() {
 		values = make(map[string]*plcman.TagValue)
 	}
 
-	// For manual PLCs not yet connected, build tags from config
+	// For manual PLCs not yet connected, build tags from config using proper family parsing
 	if isManual && len(tags) == 0 && len(cfg.Tags) > 0 {
+		family := cfg.GetFamily()
 		for _, sel := range cfg.Tags {
-			typeCode, ok := logix.TypeCodeFromName(sel.DataType)
-			if !ok {
-				typeCode = logix.TypeDINT
+			var typeCode uint16
+			var typeName string
+			var dimensions []uint32
+			var ok bool
+
+			switch family {
+			case config.FamilyS7:
+				typeCode, ok = s7.TypeCodeFromName(sel.DataType)
+				if !ok {
+					typeCode = s7.TypeDInt
+				}
+				typeName = s7.TypeName(typeCode)
+				if parsed, err := s7.ParseAddress(sel.Name); err == nil && parsed.Count > 1 {
+					dimensions = []uint32{uint32(parsed.Count)}
+					typeCode = s7.MakeArrayType(typeCode)
+				}
+			case config.FamilyOmron:
+				typeCode, ok = omron.TypeCodeFromName(sel.DataType)
+				if !ok {
+					typeCode = omron.TypeWord
+				}
+				typeName = omron.TypeName(typeCode)
+				if parsed, err := omron.ParseAddress(sel.Name); err == nil && parsed.Count > 1 {
+					dimensions = []uint32{uint32(parsed.Count)}
+					typeCode = omron.MakeArrayType(typeCode)
+				}
+			case config.FamilyBeckhoff:
+				typeCode, ok = ads.TypeCodeFromName(sel.DataType)
+				if !ok {
+					typeCode = ads.TypeInt32
+				}
+				typeName = ads.TypeName(typeCode)
+			default:
+				typeCode, ok = logix.TypeCodeFromName(sel.DataType)
+				if !ok {
+					typeCode = logix.TypeDINT
+				}
+				typeName = logix.TypeName(typeCode)
 			}
+
 			tags = append(tags, driver.TagInfo{
-				Name:     sel.Name,
-				TypeCode: typeCode,
-				TypeName: logix.TypeName(typeCode),
+				Name:       sel.Name,
+				TypeCode:   typeCode,
+				TypeName:   typeName,
+				Dimensions: dimensions,
 			})
 		}
 	}
@@ -1626,7 +1645,7 @@ func (t *BrowserTab) createTagNodeWithError(tag *driver.TagInfo, enabled, writab
 	// UDT expandable indicator
 	udtIndicator := ""
 	if logix.IsStructure(tag.TypeCode) {
-		udtIndicator = th.TagAccent + "▶" + th.TagReset + " "
+		udtIndicator = th.TagAccent + GetTreeCollapsed() + th.TagReset
 	}
 
 	typeName := t.getTypeName(tag.TypeCode)
