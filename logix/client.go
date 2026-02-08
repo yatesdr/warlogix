@@ -1161,9 +1161,15 @@ func (c *Client) writeArrayTyped(tagName string, value interface{}, elemType uin
 			if err != nil {
 				return err
 			}
-			// For STRING arrays, pad each element to 88 bytes
+			// For STRING arrays, pad each element to 88 bytes (4-byte len + 84 chars)
 			if elemType == TypeSTRING {
 				for len(elem) < 88 {
+					elem = append(elem, 0)
+				}
+			}
+			// For SHORT_STRING arrays, pad each element to 83 bytes (1-byte len + 82 chars)
+			if elemType == TypeShortSTRING {
+				for len(elem) < 83 {
 					elem = append(elem, 0)
 				}
 			}

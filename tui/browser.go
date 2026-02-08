@@ -2350,7 +2350,8 @@ func formatMapValue(m map[string]interface{}, indent int) string {
 
 // parseArrayValue parses an array input string like "[1, 2, 3]" or "1 2 3" into a slice.
 // Supports formats: [1,2,3], [1 2 3], 1,2,3, 1 2 3
-// Returns []int64 for integer arrays or []float64 for float arrays.
+// Quoted strings are preserved: ["one dog" "two dog"] becomes ["one dog", "two dog"]
+// Returns []int32 for integers, []float32 for floats, []bool for bools, or []string.
 func parseArrayValue(input string) (interface{}, error) {
 	// Remove brackets if present
 	s := strings.TrimSpace(input)
@@ -2362,13 +2363,8 @@ func parseArrayValue(input string) (interface{}, error) {
 		return nil, fmt.Errorf("empty array")
 	}
 
-	// Split by comma or space
-	var parts []string
-	if strings.Contains(s, ",") {
-		parts = strings.Split(s, ",")
-	} else {
-		parts = strings.Fields(s)
-	}
+	// Parse with quote awareness
+	parts := parseQuotedParts(s)
 
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("empty array")
@@ -2453,4 +2449,54 @@ func parseArrayValue(input string) (interface{}, error) {
 		strVals[i] = strings.TrimSpace(p)
 	}
 	return strVals, nil
+}
+
+// parseQuotedParts splits a string by commas or spaces, preserving quoted strings.
+// Examples:
+//   - "one two three" -> ["one", "two", "three"]
+//   - `"one dog" "two dog"` -> ["one dog", "two dog"]
+//   - "one, two, three" -> ["one", "two", "three"]
+//   - `"a,b", "c,d"` -> ["a,b", "c,d"]
+func parseQuotedParts(s string) []string {
+	var parts []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := byte(0)
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+
+		if !inQuote {
+			if c == '"' || c == '\'' {
+				// Start of quoted string
+				inQuote = true
+				quoteChar = c
+				continue
+			}
+			if c == ',' || c == ' ' || c == '\t' {
+				// Delimiter - end current part
+				if current.Len() > 0 {
+					parts = append(parts, strings.TrimSpace(current.String()))
+					current.Reset()
+				}
+				continue
+			}
+		} else {
+			if c == quoteChar {
+				// End of quoted string
+				inQuote = false
+				quoteChar = 0
+				continue
+			}
+		}
+
+		current.WriteByte(c)
+	}
+
+	// Don't forget the last part
+	if current.Len() > 0 {
+		parts = append(parts, strings.TrimSpace(current.String()))
+	}
+
+	return parts
 }
