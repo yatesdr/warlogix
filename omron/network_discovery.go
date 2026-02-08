@@ -79,7 +79,9 @@ func NetworkDiscoverSubnet(cidr string, timeout time.Duration, concurrency int) 
 	return NetworkDiscover(ips, timeout, concurrency), nil
 }
 
-// probeOmron attempts to connect to an Omron PLC using multiple protocols.
+// probeOmron attempts to connect to an Omron PLC using FINS protocols.
+// Note: EIP discovery is handled separately by the main EIP broadcast discovery
+// to avoid misidentifying non-Omron EIP devices as Omron.
 func probeOmron(ip net.IP, timeout time.Duration) *NetworkDeviceInfo {
 	// Try FINS/UDP first (most common for older Omron PLCs)
 	if device := probeFINSUDP(ip, timeout); device != nil {
@@ -88,11 +90,6 @@ func probeOmron(ip net.IP, timeout time.Duration) *NetworkDeviceInfo {
 
 	// Try FINS/TCP
 	if device := probeFINSTCP(ip, timeout); device != nil {
-		return device
-	}
-
-	// Try EIP (for NJ/NX series)
-	if device := probeOmronEIP(ip, timeout); device != nil {
 		return device
 	}
 

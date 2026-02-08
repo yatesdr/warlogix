@@ -206,8 +206,12 @@ func (s *DiscoverySession) discoverEIPOnce(broadcastIP string, timeout time.Dura
 		family := config.FamilyLogix
 		vendor := "Rockwell Automation"
 
-		// Check vendor ID for Omron
-		if id.VendorID == 5 {
+		logging.DebugLog("tui", "EIP device: IP=%s VendorID=%d ProductName=%q",
+			id.IP.String(), id.VendorID, id.ProductName)
+
+		// Check vendor ID for Omron (vendor ID 47)
+		// Rockwell Automation is vendor ID 1
+		if id.VendorID == 47 {
 			family = config.FamilyOmron
 			vendor = "Omron"
 		}
@@ -401,7 +405,8 @@ func discoverEIP(broadcastIP string, timeout time.Duration) []DiscoveredDevice {
 		family := config.FamilyLogix
 		vendor := "Rockwell Automation"
 
-		if id.VendorID == 5 {
+		// Omron vendor ID is 47, Rockwell is 1
+		if id.VendorID == 47 {
 			family = config.FamilyOmron
 			vendor = "Omron"
 		}
