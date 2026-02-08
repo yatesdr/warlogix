@@ -259,9 +259,6 @@ func (t *PLCsTab) Refresh() {
 	t.statusBar.SetText(statusText)
 }
 
-// discoverySession holds the active discovery session
-var discoverySession *driver.DiscoverySession
-
 // discoveredDevicesCache holds cached discovered devices
 var discoveredDevicesCache []driver.DiscoveredDevice
 var discoveredDevicesCacheMu sync.Mutex
@@ -273,38 +270,64 @@ func (t *PLCsTab) discover() {
 		return
 	}
 
-	// Load cached devices first
-	discoveredDevicesCacheMu.Lock()
-	cachedDevices := make([]driver.DiscoveredDevice, len(discoveredDevicesCache))
-	copy(cachedDevices, discoveredDevicesCache)
-	discoveredDevicesCacheMu.Unlock()
+	t.app.setStatus("Discovering PLCs...")
 
-	// Show modal immediately with cached devices (if any), then update as new devices are found
-	t.showDiscoveryModal(cachedDevices)
+	// Start discovery in background, show modal when we have initial results
+	go func() {
+		// Get local subnets for port scanning
+		subnets := driver.GetLocalSubnets()
+		scanCIDR := ""
+		if len(subnets) > 0 {
+			scanCIDR = subnets[0]
+		}
+
+		// Run discovery (blocking, with 5 second timeout for initial results)
+		devices := driver.DiscoverAll("255.255.255.255", scanCIDR, 500*time.Millisecond, 50)
+
+		// Merge with cache
+		discoveredDevicesCacheMu.Lock()
+		seen := make(map[string]bool)
+		for _, dev := range discoveredDevicesCache {
+			seen[dev.Key()] = true
+		}
+		for _, dev := range devices {
+			if !seen[dev.Key()] {
+				discoveredDevicesCache = append(discoveredDevicesCache, dev)
+			}
+		}
+		// Use the merged cache as our device list
+		allDevices := make([]driver.DiscoveredDevice, len(discoveredDevicesCache))
+		copy(allDevices, discoveredDevicesCache)
+		discoveredDevicesCacheMu.Unlock()
+
+		t.app.QueueUpdateDraw(func() {
+			if t.app.isModalOpen() {
+				t.app.setStatus(fmt.Sprintf("Found %d device(s) - press 'd' again to view", len(allDevices)))
+				return
+			}
+
+			if len(allDevices) == 0 {
+				t.app.setStatus("No PLCs discovered")
+				return
+			}
+
+			t.app.setStatus(fmt.Sprintf("Found %d device(s)", len(allDevices)))
+			t.showDiscoveryModal(allDevices)
+		})
+	}()
 }
 
-func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
+func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 	const pageName = "discovery"
 
 	th := CurrentTheme
-
-	// Track all devices (starts with cached, adds new ones)
-	var devices []driver.DiscoveredDevice
-	var devicesMu sync.Mutex
-	devices = append(devices, initialDevices...)
 
 	// Create the main container
 	flex := tview.NewFlex().SetDirection(tview.FlexRow)
 	flex.SetBorder(true)
 	flex.SetBorderColor(th.Border).SetTitleColor(th.Accent)
 	flex.SetBackgroundColor(th.Background)
-
-	// Status bar showing discovery progress
-	statusBar := tview.NewTextView()
-	statusBar.SetTextColor(th.Accent)
-	statusBar.SetBackgroundColor(th.Background)
-	statusBar.SetTextAlign(tview.AlignCenter)
-	statusBar.SetText(" Scanning network... ")
+	flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d) ", len(devices)))
 
 	// Filter input (hidden by default)
 	filterInput := tview.NewInputField()
@@ -331,34 +354,13 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 	// Track filtered indices to map selection back to original devices
 	var filteredIndices []int
 
-	// Function to update title
-	updateTitle := func(scanning bool) {
-		devicesMu.Lock()
-		total := len(devices)
-		devicesMu.Unlock()
-
-		title := fmt.Sprintf(" Discovered Devices (%d) ", total)
-		if currentFilter != "" {
-			title = fmt.Sprintf(" Discovered Devices (%d/%d) ", len(filteredIndices), total)
-		}
-		if scanning {
-			title = fmt.Sprintf(" Discovering... (%d found) ", total)
-		}
-		flex.SetTitle(title)
-	}
-
 	// Function to populate list based on filter
 	populateList := func() {
-		devicesMu.Lock()
-		devicesCopy := make([]driver.DiscoveredDevice, len(devices))
-		copy(devicesCopy, devices)
-		devicesMu.Unlock()
-
 		list.Clear()
 		filteredIndices = nil
 		filter := strings.ToLower(currentFilter)
 
-		for i, dev := range devicesCopy {
+		for i, dev := range devices {
 			ip := dev.IP.String()
 			mainText := fmt.Sprintf("%s - %s", ip, dev.ProductName)
 			secondaryText := fmt.Sprintf("  %s | %s | %s", dev.Vendor, dev.Family, dev.Protocol)
@@ -375,7 +377,12 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 			list.AddItem(mainText, secondaryText, 0, nil)
 		}
 
-		updateTitle(discoverySession != nil)
+		// Update title with count
+		if filter != "" {
+			flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d/%d) ", len(filteredIndices), len(devices)))
+		} else {
+			flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d) ", len(devices)))
+		}
 	}
 
 	// Initial population
@@ -389,25 +396,13 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 
 	// Close button
 	closeBtn := tview.NewButton("Close")
-	closeBtn.SetBackgroundColor(th.FieldBackground)
-	closeBtn.SetLabelColor(th.ButtonText)
+	ApplyButtonTheme(closeBtn)
 
 	// Clear cache button
 	clearBtn := tview.NewButton("Clear Cache")
-	clearBtn.SetBackgroundColor(th.FieldBackground)
-	clearBtn.SetLabelColor(th.ButtonText)
-
-	// Stop/cleanup function
-	stopDiscovery := func() {
-		if discoverySession != nil {
-			discoverySession.Stop()
-			discoverySession = nil
-		}
-		statusBar.SetText(" Discovery stopped ")
-	}
+	ApplyButtonTheme(clearBtn)
 
 	closeBtn.SetSelectedFunc(func() {
-		stopDiscovery()
 		t.app.closeModal(pageName)
 	})
 
@@ -415,12 +410,7 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 		discoveredDevicesCacheMu.Lock()
 		discoveredDevicesCache = nil
 		discoveredDevicesCacheMu.Unlock()
-
-		devicesMu.Lock()
-		devices = nil
-		devicesMu.Unlock()
-
-		populateList()
+		t.app.closeModal(pageName)
 		t.app.setStatus("Discovery cache cleared")
 	})
 
@@ -441,7 +431,6 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 	helpText.SetTextAlign(tview.AlignCenter)
 
 	// Build layout
-	flex.AddItem(statusBar, 1, 0, false)
 	flex.AddItem(list, 0, 1, true)
 	flex.AddItem(helpText, 1, 0, false)
 	flex.AddItem(buttonFlex, 1, 0, false)
@@ -449,17 +438,12 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 	// Handle list selection
 	list.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		if index >= 0 && index < len(filteredIndices) {
-			devicesMu.Lock()
 			originalIndex := filteredIndices[index]
 			if originalIndex < len(devices) {
 				dev := devices[originalIndex]
-				devicesMu.Unlock()
-				stopDiscovery()
 				t.app.closeModal(pageName)
 				t.showAddDialogWithDevice(&dev)
-				return
 			}
-			devicesMu.Unlock()
 		}
 	})
 
@@ -474,14 +458,12 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 				currentFilter = ""
 				populateList()
 				flex.Clear()
-				flex.AddItem(statusBar, 1, 0, false)
 				flex.AddItem(list, 0, 1, true)
 				flex.AddItem(helpText, 1, 0, false)
 				flex.AddItem(buttonFlex, 1, 0, false)
 				t.app.app.SetFocus(list)
 				return nil
 			}
-			stopDiscovery()
 			t.app.closeModal(pageName)
 			return nil
 		case tcell.KeyTab:
@@ -494,7 +476,6 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 					filterVisible = true
 					// Insert filter at top
 					flex.Clear()
-					flex.AddItem(statusBar, 1, 0, false)
 					flex.AddItem(filterInput, 1, 0, true)
 					flex.AddItem(list, 0, 1, false)
 					flex.AddItem(helpText, 1, 0, false)
@@ -507,12 +488,7 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 				discoveredDevicesCacheMu.Lock()
 				discoveredDevicesCache = nil
 				discoveredDevicesCacheMu.Unlock()
-
-				devicesMu.Lock()
-				devices = nil
-				devicesMu.Unlock()
-
-				populateList()
+				t.app.closeModal(pageName)
 				t.app.setStatus("Discovery cache cleared")
 				return nil
 			}
@@ -530,7 +506,6 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 			currentFilter = ""
 			populateList()
 			flex.Clear()
-			flex.AddItem(statusBar, 1, 0, false)
 			flex.AddItem(list, 0, 1, true)
 			flex.AddItem(helpText, 1, 0, false)
 			flex.AddItem(buttonFlex, 1, 0, false)
@@ -544,10 +519,9 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 	})
 
 	// Input capture for buttons
-	buttonInputCapture := func(event *tcell.EventKey) *tcell.EventKey {
+	clearBtn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
-			stopDiscovery()
 			t.app.closeModal(pageName)
 			return nil
 		case tcell.KeyTab:
@@ -558,12 +532,10 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 			return nil
 		}
 		return event
-	}
-	clearBtn.SetInputCapture(buttonInputCapture)
+	})
 	closeBtn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
-			stopDiscovery()
 			t.app.closeModal(pageName)
 			return nil
 		case tcell.KeyTab, tcell.KeyBacktab:
@@ -575,48 +547,6 @@ func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 
 	// Show modal
 	t.app.showCenteredModal(pageName, flex, 75, 22)
-
-	// Start discovery in background
-	go func() {
-		// Get local subnets for port scanning
-		subnets := driver.GetLocalSubnets()
-		scanCIDR := ""
-		if len(subnets) > 0 {
-			scanCIDR = subnets[0]
-		}
-
-		// Create new discovery session
-		discoverySession = driver.NewDiscoverySession()
-		deviceChan := discoverySession.Start("255.255.255.255", scanCIDR, 50)
-
-		// Process discovered devices as they come in
-		for dev := range deviceChan {
-			devicesMu.Lock()
-			devices = append(devices, dev)
-			devicesMu.Unlock()
-
-			// Update cache
-			discoveredDevicesCacheMu.Lock()
-			discoveredDevicesCache = append(discoveredDevicesCache, dev)
-			discoveredDevicesCacheMu.Unlock()
-
-			// Update UI
-			t.app.QueueUpdateDraw(func() {
-				populateList()
-			})
-		}
-
-		// Discovery complete
-		t.app.QueueUpdateDraw(func() {
-			devicesMu.Lock()
-			count := len(devices)
-			devicesMu.Unlock()
-
-			statusBar.SetText(fmt.Sprintf(" Discovery complete - %d device(s) found ", count))
-			updateTitle(false)
-			discoverySession = nil
-		})
-	}()
 }
 
 func (t *PLCsTab) showAddDialog() {
