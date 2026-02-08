@@ -672,9 +672,9 @@ func (t *BrowserTab) isMemberIgnored(tagPath string) bool {
 }
 
 func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *driver.TagInfo, enabled, writable bool) {
-	checkbox := CheckboxUnchecked
+	checkbox := GetCheckboxUnchecked()
 	if enabled {
-		checkbox = CheckboxChecked
+		checkbox = GetCheckboxChecked()
 	}
 
 	th := CurrentTheme
@@ -949,14 +949,14 @@ func (t *BrowserTab) showTagDetails(tag *driver.TagInfo) {
 			}
 		}
 		if len(services) == 0 {
-			sb.WriteString("\n" + th.Dim(CheckboxChecked+" Publishing disabled (no services)"))
+			sb.WriteString("\n" + th.Dim(GetCheckboxChecked()+" Publishing disabled (no services)"))
 		} else if len(services) == 4 {
-			sb.WriteString("\n" + th.SuccessText(CheckboxChecked+" Publishing to all services"))
+			sb.WriteString("\n" + th.SuccessText(GetCheckboxChecked()+" Publishing to all services"))
 		} else {
-			sb.WriteString("\n" + th.SuccessText(CheckboxChecked+" Publishing to "+strings.Join(services, ", ")))
+			sb.WriteString("\n" + th.SuccessText(GetCheckboxChecked()+" Publishing to "+strings.Join(services, ", ")))
 		}
 	} else {
-		sb.WriteString("\n" + th.Dim(CheckboxUnchecked+" Not publishing"))
+		sb.WriteString("\n" + th.Dim(GetCheckboxUnchecked()+" Not publishing"))
 	}
 
 	if writable {
@@ -1600,9 +1600,9 @@ func (t *BrowserTab) createTagNode(tag *driver.TagInfo, enabled, writable bool) 
 
 func (t *BrowserTab) createTagNodeWithError(tag *driver.TagInfo, enabled, writable, hasError bool) *tview.TreeNode {
 	th := CurrentTheme
-	checkbox := CheckboxUnchecked
+	checkbox := GetCheckboxUnchecked()
 	if enabled {
-		checkbox = CheckboxChecked
+		checkbox = GetCheckboxChecked()
 	}
 
 	// Writable indicator

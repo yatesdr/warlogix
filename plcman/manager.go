@@ -205,6 +205,7 @@ func (m *ManagedPLC) BuildManualTags() {
 	for _, sel := range m.Config.Tags {
 		var typeCode uint16
 		var typeName string
+		var dimensions []uint32
 		var ok bool
 
 		// Use appropriate type lookup based on family
@@ -215,6 +216,11 @@ func (m *ManagedPLC) BuildManualTags() {
 				typeCode = s7.TypeDInt
 			}
 			typeName = s7.TypeName(typeCode)
+			// Parse S7 address for array dimensions
+			if parsed, err := s7.ParseAddress(sel.Name); err == nil && parsed.Count > 1 {
+				dimensions = []uint32{uint32(parsed.Count)}
+				typeCode = s7.MakeArrayType(typeCode)
+			}
 		case config.FamilyBeckhoff:
 			typeCode, ok = ads.TypeCodeFromName(sel.DataType)
 			if !ok {
@@ -227,6 +233,11 @@ func (m *ManagedPLC) BuildManualTags() {
 				typeCode = omron.TypeWord // Default to WORD
 			}
 			typeName = omron.TypeName(typeCode)
+			// Parse Omron address for array dimensions
+			if parsed, err := omron.ParseAddress(sel.Name); err == nil && parsed.Count > 1 {
+				dimensions = []uint32{uint32(parsed.Count)}
+				typeCode = omron.MakeArrayType(typeCode)
+			}
 		default:
 			typeCode, ok = logix.TypeCodeFromName(sel.DataType)
 			if !ok {
@@ -236,10 +247,11 @@ func (m *ManagedPLC) BuildManualTags() {
 		}
 
 		tagInfo := driver.TagInfo{
-			Name:     sel.Name,
-			TypeCode: typeCode,
-			TypeName: typeName,
-			Writable: sel.Writable,
+			Name:       sel.Name,
+			TypeCode:   typeCode,
+			TypeName:   typeName,
+			Writable:   sel.Writable,
+			Dimensions: dimensions,
 		}
 		m.ManualTags = append(m.ManualTags, tagInfo)
 	}
