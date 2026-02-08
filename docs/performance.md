@@ -12,7 +12,7 @@ warlogix --stress-test-republishing
 
 ### Benchmark Results
 
-Test conditions: 50 PLCs × 100 tags = 5,000 total tags, 10-second duration, localhost brokers.
+Test conditions: 50 PLCs × 100 tags = 5,000 total tags, 10-second duration, localhost brokers. Kafka configured with 2 partitions.
 
 | Broker | Throughput | Messages | Latency (avg) | Status |
 |--------|-----------|----------|---------------|--------|
