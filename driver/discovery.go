@@ -593,7 +593,6 @@ func discoverADS(cidr string, timeout time.Duration, concurrency int) []Discover
 					"amsNetId":  dev.AmsNetId,
 					"hostname":  dev.Hostname,
 					"tcVersion": dev.TwinCATVersion,
-					"osVersion": dev.OSVersion,
 					"hasRoute":  hasRoute,
 				},
 			})
@@ -629,7 +628,6 @@ func discoverADS(cidr string, timeout time.Duration, concurrency int) []Discover
 					"amsNetId":  dev.AmsNetId,
 					"hostname":  dev.Hostname,
 					"tcVersion": dev.TwinCATVersion,
-					"osVersion": dev.OSVersion,
 					"hasRoute":  hasRoute,
 				},
 			})
