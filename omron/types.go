@@ -492,6 +492,7 @@ func DecodeValue(typeCode uint16, data []byte, bigEndian bool) interface{} {
 }
 
 // EncodeValue encodes a Go value into bytes for writing.
+// Supports both scalar values and slices (for array writes).
 func EncodeValue(value interface{}, typeCode uint16, bigEndian bool) ([]byte, error) {
 	var order binary.ByteOrder
 	if bigEndian {
@@ -500,6 +501,46 @@ func EncodeValue(value interface{}, typeCode uint16, bigEndian bool) ([]byte, er
 		order = binary.LittleEndian
 	}
 
+	// Handle slice types - encode each element and concatenate
+	switch v := value.(type) {
+	case []int64:
+		var result []byte
+		for _, elem := range v {
+			encoded, err := encodeScalar(elem, typeCode, order)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+		return result, nil
+	case []float64:
+		var result []byte
+		for _, elem := range v {
+			encoded, err := encodeScalar(elem, typeCode, order)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+		return result, nil
+	case []int:
+		var result []byte
+		for _, elem := range v {
+			encoded, err := encodeScalar(int64(elem), typeCode, order)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+		return result, nil
+	}
+
+	// Handle scalar values
+	return encodeScalar(value, typeCode, order)
+}
+
+// encodeScalar encodes a single scalar value into bytes.
+func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([]byte, error) {
 	switch BaseType(typeCode) {
 	case TypeBool, TypeCIPBool:
 		var v uint16

@@ -822,24 +822,36 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 			return
 		}
 
-		// Parse value - default to int64 for FINS WORD types
+		// Parse value - supports scalars and arrays
 		var writeValue interface{}
-		var parseErr error
 
-		// Try parsing as integer first (handles hex with 0x prefix)
-		var v int64
-		v, parseErr = strconv.ParseInt(newValue, 0, 64)
-		if parseErr != nil {
-			// Try float
-			var f float64
-			f, parseErr = strconv.ParseFloat(newValue, 64)
-			if parseErr != nil {
-				t.app.setStatus(fmt.Sprintf("Invalid value: %s", newValue))
+		// Check if it looks like an array (starts with [ or contains spaces/commas)
+		trimmed := strings.TrimSpace(newValue)
+		if strings.HasPrefix(trimmed, "[") || strings.Contains(trimmed, ",") || strings.Contains(trimmed, " ") {
+			// Parse as array
+			arrayVal, err := parseArrayValue(trimmed)
+			if err != nil {
+				t.app.setStatus(fmt.Sprintf("Invalid array: %s", err))
 				return
 			}
-			writeValue = f
+			writeValue = arrayVal
 		} else {
-			writeValue = v
+			// Parse as scalar - try integer first (handles hex with 0x prefix)
+			var v int64
+			var parseErr error
+			v, parseErr = strconv.ParseInt(newValue, 0, 64)
+			if parseErr != nil {
+				// Try float
+				var f float64
+				f, parseErr = strconv.ParseFloat(newValue, 64)
+				if parseErr != nil {
+					t.app.setStatus(fmt.Sprintf("Invalid value: %s", newValue))
+					return
+				}
+				writeValue = f
+			} else {
+				writeValue = v
+			}
 		}
 
 		// Perform write synchronously - goroutines seem to cause issues in PTY mode
@@ -2326,4 +2338,61 @@ func formatMapValue(m map[string]interface{}, indent int) string {
 	sb.WriteString("}")
 
 	return sb.String()
+}
+
+// parseArrayValue parses an array input string like "[1, 2, 3]" or "1 2 3" into a slice.
+// Supports formats: [1,2,3], [1 2 3], 1,2,3, 1 2 3
+// Returns []int64 for integer arrays or []float64 for float arrays.
+func parseArrayValue(input string) (interface{}, error) {
+	// Remove brackets if present
+	s := strings.TrimSpace(input)
+	if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
+		s = s[1 : len(s)-1]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, fmt.Errorf("empty array")
+	}
+
+	// Split by comma or space
+	var parts []string
+	if strings.Contains(s, ",") {
+		parts = strings.Split(s, ",")
+	} else {
+		parts = strings.Fields(s)
+	}
+
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("empty array")
+	}
+
+	// Try parsing as integers first
+	intVals := make([]int64, len(parts))
+	allInts := true
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		v, err := strconv.ParseInt(p, 0, 64)
+		if err != nil {
+			allInts = false
+			break
+		}
+		intVals[i] = v
+	}
+
+	if allInts {
+		return intVals, nil
+	}
+
+	// Try parsing as floats
+	floatVals := make([]float64, len(parts))
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		v, err := strconv.ParseFloat(p, 64)
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse %q as number", p)
+		}
+		floatVals[i] = v
+	}
+
+	return floatVals, nil
 }
