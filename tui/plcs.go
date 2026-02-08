@@ -10,7 +10,7 @@ import (
 	"github.com/rivo/tview"
 
 	"warlogix/config"
-	"warlogix/logix"
+	"warlogix/driver"
 	"warlogix/plcman"
 )
 
@@ -258,17 +258,20 @@ func (t *PLCsTab) Refresh() {
 }
 
 func (t *PLCsTab) discover() {
-	t.app.setStatus("Discovering PLCs...")
+	t.app.setStatus("Discovering PLCs (scanning network)...")
 
 	go func() {
-		devices, err := logix.Discover("255.255.255.255", 3*time.Second)
+		// Get local subnets for port scanning
+		subnets := driver.GetLocalSubnets()
+		scanCIDR := ""
+		if len(subnets) > 0 {
+			scanCIDR = subnets[0] // Use first subnet for scanning
+		}
+
+		// Run unified discovery across all protocols
+		devices := driver.DiscoverAll("255.255.255.255", scanCIDR, 500*time.Millisecond, 50)
 
 		t.app.QueueUpdateDraw(func() {
-			if err != nil {
-				t.app.setStatus(fmt.Sprintf("Discovery error: %v", err))
-				return
-			}
-
 			if len(devices) == 0 {
 				t.app.setStatus("No PLCs discovered")
 				return
@@ -287,7 +290,7 @@ func (t *PLCsTab) discover() {
 	}()
 }
 
-func (t *PLCsTab) showDiscoveryResults(devices []logix.DeviceInfo) {
+func (t *PLCsTab) showDiscoveryResults(devices []driver.DiscoveredDevice) {
 	const pageName = "discovery"
 
 	th := CurrentTheme
@@ -298,7 +301,7 @@ func (t *PLCsTab) showDiscoveryResults(devices []logix.DeviceInfo) {
 
 	for _, dev := range devices {
 		ip := dev.IP.String()
-		text := fmt.Sprintf("%s - %s", ip, dev.ProductName)
+		text := fmt.Sprintf("%s - %s (%s)", ip, dev.ProductName, dev.Protocol)
 		list.AddItem(text, "", 0, nil)
 	}
 
@@ -349,7 +352,7 @@ type plcFormState struct {
 var familyOptions = []string{"logix", "micro800", "s7", "beckhoff", "omron"}
 var omronProtocolOptions = []string{"fins", "eip"}
 
-func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
+func (t *PLCsTab) showAddDialogWithDevice(dev *driver.DiscoveredDevice) {
 	state := &plcFormState{
 		family:      0,     // Default to logix
 		slot:        "0",
@@ -362,6 +365,37 @@ func (t *PLCsTab) showAddDialogWithDevice(dev *logix.DeviceInfo) {
 	if dev != nil {
 		state.address = dev.IP.String()
 		state.name = dev.ProductName
+
+		// Set family based on discovered protocol
+		switch dev.Family {
+		case config.FamilyLogix:
+			state.family = 0
+		case config.FamilyMicro800:
+			state.family = 1
+		case config.FamilyS7:
+			state.family = 2
+			// Set slot from discovery if available
+			if slot, ok := dev.Extra["slot"]; ok {
+				state.slot = slot
+			}
+		case config.FamilyBeckhoff:
+			state.family = 3
+			// Set AMS Net ID from discovery if available
+			if amsNetId, ok := dev.Extra["amsNetId"]; ok {
+				state.amsNetId = amsNetId
+			}
+		case config.FamilyOmron:
+			state.family = 4
+			// Set protocol based on discovery
+			if dev.Protocol == "EIP" {
+				state.protocol = 1 // eip
+			} else {
+				state.protocol = 0 // fins
+				if node, ok := dev.Extra["node"]; ok {
+					state.finsNode = node
+				}
+			}
+		}
 	}
 
 	t.buildAddForm(state)
