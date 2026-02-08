@@ -203,17 +203,26 @@ func (s *DiscoverySession) discoverEIPOnce(broadcastIP string, timeout time.Dura
 	}
 
 	for _, id := range identities {
+		// Determine vendor and family based on vendor ID
+		// CIP Vendor IDs: 1=Rockwell Automation, 47=Omron
 		family := config.FamilyLogix
 		vendor := "Rockwell Automation"
 
-		logging.DebugLog("tui", "EIP device: IP=%s VendorID=%d ProductName=%q",
-			id.IP.String(), id.VendorID, id.ProductName)
-
-		// Check vendor ID for Omron (vendor ID 47)
-		// Rockwell Automation is vendor ID 1
-		if id.VendorID == 47 {
+		switch id.VendorID {
+		case 1: // Rockwell Automation
+			vendor = "Rockwell Automation"
+			// Check if it's Micro800 series (product names start with "2080-")
+			if len(id.ProductName) >= 5 && id.ProductName[:5] == "2080-" {
+				family = config.FamilyMicro800
+			} else {
+				family = config.FamilyLogix
+			}
+		case 47: // Omron
 			family = config.FamilyOmron
 			vendor = "Omron"
+		default:
+			logging.DebugLog("tui", "EIP: unknown vendor ID %d for %s (%s)",
+				id.VendorID, id.IP.String(), id.ProductName)
 		}
 
 		s.addDevice(DiscoveredDevice{
@@ -393,23 +402,66 @@ func discoverEIP(broadcastIP string, timeout time.Duration) []DiscoveredDevice {
 		broadcastIP = "255.255.255.255"
 	}
 
-	client := eip.NewEipClient("")
-	identities, err := client.ListIdentityUDP(broadcastIP, timeout*3)
-	if err != nil {
-		logging.DebugLog("Discovery", "EIP broadcast error: %v", err)
-		return nil
+	// Try multiple broadcast addresses for better coverage
+	broadcastAddrs := []string{broadcastIP}
+	for _, addr := range GetBroadcastAddresses() {
+		if addr != broadcastIP {
+			broadcastAddrs = append(broadcastAddrs, addr)
+		}
 	}
 
+	logging.DebugLog("tui", "EIP discovery: trying broadcast addresses: %v", broadcastAddrs)
+
+	var allIdentities []eip.Identity
+	client := eip.NewEipClient("")
+
+	for _, addr := range broadcastAddrs {
+		logging.DebugLog("tui", "EIP discovery: sending ListIdentity to %s", addr)
+		identities, err := client.ListIdentityUDP(addr, timeout)
+		if err != nil {
+			logging.DebugLog("tui", "EIP discovery: broadcast to %s error: %v", addr, err)
+			continue
+		}
+		logging.DebugLog("tui", "EIP discovery: %s returned %d identities", addr, len(identities))
+		allIdentities = append(allIdentities, identities...)
+	}
+
+	// Deduplicate by IP
+	seen := make(map[string]bool)
 	var results []DiscoveredDevice
-	for _, id := range identities {
+
+	for _, id := range allIdentities {
+		ipStr := id.IP.String()
+		if seen[ipStr] {
+			continue
+		}
+		seen[ipStr] = true
+
+		// Determine vendor and family based on vendor ID
+		// CIP Vendor IDs: 1=Rockwell Automation, 47=Omron
 		family := config.FamilyLogix
 		vendor := "Rockwell Automation"
 
-		// Omron vendor ID is 47, Rockwell is 1
-		if id.VendorID == 47 {
+		switch id.VendorID {
+		case 1: // Rockwell Automation
+			vendor = "Rockwell Automation"
+			// Check if it's Micro800 series (product names start with "2080-")
+			if len(id.ProductName) >= 5 && id.ProductName[:5] == "2080-" {
+				family = config.FamilyMicro800
+			} else {
+				family = config.FamilyLogix
+			}
+		case 47: // Omron
 			family = config.FamilyOmron
 			vendor = "Omron"
+		default:
+			// Unknown vendor - log it and default to Logix
+			logging.DebugLog("tui", "EIP discovery: unknown vendor ID %d for %s (%s)",
+				id.VendorID, ipStr, id.ProductName)
 		}
+
+		logging.DebugLog("tui", "EIP discovery: found %s at %s (VendorID=%d, Family=%s)",
+			id.ProductName, ipStr, id.VendorID, family)
 
 		results = append(results, DiscoveredDevice{
 			IP:          id.IP,
@@ -426,7 +478,7 @@ func discoverEIP(broadcastIP string, timeout time.Duration) []DiscoveredDevice {
 		})
 	}
 
-	logging.DebugLog("Discovery", "EIP found %d device(s)", len(results))
+	logging.DebugLog("tui", "EIP discovery: total %d unique device(s)", len(results))
 	return results
 }
 
