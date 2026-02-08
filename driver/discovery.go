@@ -329,73 +329,46 @@ func DiscoverAll(broadcastIP string, scanCIDR string, timeout time.Duration, con
 	logging.DebugLog("tui", "DiscoverAll: starting with broadcast=%s cidr=%s timeout=%v concurrency=%d",
 		broadcastIP, scanCIDR, timeout, concurrency)
 
-	var (
-		results []DiscoveredDevice
-		mu      sync.Mutex
-		wg      sync.WaitGroup
-	)
+	var results []DiscoveredDevice
 
-	// Run all discoveries in parallel
-	wg.Add(4)
+	// Run discoveries SEQUENTIALLY to isolate issues
 
 	// 1. EIP broadcast discovery (Allen-Bradley, Omron NJ/NX)
-	go func() {
-		defer wg.Done()
-		logging.DebugLog("tui", "DiscoverAll: EIP starting")
-		devices := discoverEIP(broadcastIP, timeout)
-		logging.DebugLog("tui", "DiscoverAll: EIP done, found %d devices", len(devices))
-		mu.Lock()
-		results = append(results, devices...)
-		mu.Unlock()
-	}()
+	logging.DebugLog("tui", "DiscoverAll: EIP starting")
+	eipDevices := discoverEIP(broadcastIP, timeout)
+	logging.DebugLog("tui", "DiscoverAll: EIP done, found %d devices", len(eipDevices))
+	results = append(results, eipDevices...)
 
 	// 2. S7 port scan (Siemens)
-	go func() {
-		defer wg.Done()
-		if scanCIDR == "" {
-			logging.DebugLog("tui", "DiscoverAll: S7 skipped (no CIDR)")
-			return
-		}
+	if scanCIDR != "" {
 		logging.DebugLog("tui", "DiscoverAll: S7 starting")
-		devices := discoverS7(scanCIDR, timeout, concurrency)
-		logging.DebugLog("tui", "DiscoverAll: S7 done, found %d devices", len(devices))
-		mu.Lock()
-		results = append(results, devices...)
-		mu.Unlock()
-	}()
+		s7Devices := discoverS7(scanCIDR, timeout, concurrency)
+		logging.DebugLog("tui", "DiscoverAll: S7 done, found %d devices", len(s7Devices))
+		results = append(results, s7Devices...)
+	} else {
+		logging.DebugLog("tui", "DiscoverAll: S7 skipped (no CIDR)")
+	}
 
 	// 3. ADS port scan (Beckhoff)
-	go func() {
-		defer wg.Done()
-		if scanCIDR == "" {
-			logging.DebugLog("tui", "DiscoverAll: ADS skipped (no CIDR)")
-			return
-		}
+	if scanCIDR != "" {
 		logging.DebugLog("tui", "DiscoverAll: ADS starting")
-		devices := discoverADS(scanCIDR, timeout, concurrency)
-		logging.DebugLog("tui", "DiscoverAll: ADS done, found %d devices", len(devices))
-		mu.Lock()
-		results = append(results, devices...)
-		mu.Unlock()
-	}()
+		adsDevices := discoverADS(scanCIDR, timeout, concurrency)
+		logging.DebugLog("tui", "DiscoverAll: ADS done, found %d devices", len(adsDevices))
+		results = append(results, adsDevices...)
+	} else {
+		logging.DebugLog("tui", "DiscoverAll: ADS skipped (no CIDR)")
+	}
 
 	// 4. FINS discovery (Omron)
-	go func() {
-		defer wg.Done()
-		if scanCIDR == "" {
-			logging.DebugLog("tui", "DiscoverAll: FINS skipped (no CIDR)")
-			return
-		}
+	if scanCIDR != "" {
 		logging.DebugLog("tui", "DiscoverAll: FINS starting")
-		devices := discoverFINS(scanCIDR, timeout, concurrency)
-		logging.DebugLog("tui", "DiscoverAll: FINS done, found %d devices", len(devices))
-		mu.Lock()
-		results = append(results, devices...)
-		mu.Unlock()
-	}()
+		finsDevices := discoverFINS(scanCIDR, timeout, concurrency)
+		logging.DebugLog("tui", "DiscoverAll: FINS done, found %d devices", len(finsDevices))
+		results = append(results, finsDevices...)
+	} else {
+		logging.DebugLog("tui", "DiscoverAll: FINS skipped (no CIDR)")
+	}
 
-	logging.DebugLog("tui", "DiscoverAll: waiting for all protocols to complete")
-	wg.Wait()
 	logging.DebugLog("tui", "DiscoverAll: all done, total %d devices before dedup", len(results))
 
 	// Deduplicate by IP (prefer more specific protocol match)
