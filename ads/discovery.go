@@ -135,6 +135,8 @@ func probeADS(ip net.IP, timeout time.Duration) *DiscoveredDevice {
 
 // tryADSDeviceInfo attempts to read device info via ADS.
 func tryADSDeviceInfo(conn net.Conn, ip net.IP) *DiscoveredDevice {
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: starting for IP %s", ip.String())
+
 	// Build source AMS Net ID from IP (common convention: ip.ip.ip.ip.1.1)
 	sourceNetId := [6]byte{ip[12], ip[13], ip[14], ip[15], 1, 1}
 	if len(ip) == 4 {
@@ -235,14 +237,23 @@ func tryADSDeviceInfo(conn net.Conn, ip net.IP) *DiscoveredDevice {
 	minorVersion := deviceData[1]
 	buildVersion := binary.LittleEndian.Uint16(deviceData[2:4])
 
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: version %d.%d.%d, parsing device name from bytes", majorVersion, minorVersion, buildVersion)
+
 	// Device name is null-terminated string up to 16 bytes
+	// Only include printable ASCII characters to avoid terminal corruption
 	deviceName := ""
 	for i := 4; i < 20 && i < len(deviceData); i++ {
-		if deviceData[i] == 0 {
+		b := deviceData[i]
+		if b == 0 {
 			break
 		}
-		deviceName += string(deviceData[i])
+		// Only include printable ASCII (32-126)
+		if b >= 32 && b <= 126 {
+			deviceName += string(b)
+		}
 	}
+
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: parsed device name: %q", deviceName)
 
 	productName := fmt.Sprintf("%s v%d.%d.%d", deviceName, majorVersion, minorVersion, buildVersion)
 	if deviceName == "" {
