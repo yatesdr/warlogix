@@ -33,6 +33,32 @@ No expensive middleware. No vendor lock-in. Just a single binary that runs anywh
 - **Valkey/Redis** - Key storage with Pub/Sub and write-back queue
 - **Kafka** - Tag changes and event triggers
 - **Daemon Mode** - Background service with SSH access
+- **High Performance** - Batched reads, optimized publishing, 100K+ messages/sec
+
+## Performance
+
+WarLogix is designed for high-throughput industrial data streaming. Optimizations include batched PLC reads, change filtering, and efficient broker publishing.
+
+### Republishing Throughput
+
+Tested with 50 PLCs × 100 tags (5,000 total tags) on localhost:
+
+| Broker | Confirmed Delivery | Implementation |
+|--------|-------------------|----------------|
+| Kafka | 290,000+ msg/s | Batched async |
+| Valkey | 45,000+ msg/s | Synchronous |
+| MQTT | 32,000+ msg/s | Synchronous QoS 1 |
+
+### PLC Read Performance
+
+| PLC Family | Batching | Typical Throughput |
+|------------|----------|-------------------|
+| Allen-Bradley Logix | Yes (scalars) | 500-2,000 tags/sec |
+| Siemens S7 | Yes (aggressive) | 300-1,500 tags/sec |
+| Beckhoff ADS | Yes (SumUp Read) | 1,000-5,000 tags/sec |
+| Omron FINS | No | 50-200 tags/sec |
+
+Run `warlogix --stress-test-republishing` to benchmark your system. See [Performance Guide](docs/performance.md) for optimization tips.
 
 ## Quick Start
 
