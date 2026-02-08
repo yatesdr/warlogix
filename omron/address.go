@@ -19,9 +19,11 @@ type ParsedAddress struct {
 // Address parsing regex patterns.
 var (
 	// Pattern: DM100, CIO50, HR10, WR5, AR20, EM0:100
-	wordAddrPattern = regexp.MustCompile(`^([A-Z]+\d?)(?::)?(\d+)(?:\[(\d+)\])?$`)
+	// Note: Only EM (extended memory) areas have a digit suffix (EM0-EM9, EMA-EMC)
+	// The area name is captured as letters only, with special handling for EM banks
+	wordAddrPattern = regexp.MustCompile(`^(EM[0-9A-C]|[A-Z]+)(?::)?(\d+)(?:\[(\d+)\])?$`)
 	// Pattern: DM100.5, CIO50.0 (bit access)
-	bitAddrPattern = regexp.MustCompile(`^([A-Z]+\d?)(?::)?(\d+)\.(\d+)(?:\[(\d+)\])?$`)
+	bitAddrPattern = regexp.MustCompile(`^(EM[0-9A-C]|[A-Z]+)(?::)?(\d+)\.(\d+)(?:\[(\d+)\])?$`)
 )
 
 // ParseAddress parses a FINS address string into its components.
