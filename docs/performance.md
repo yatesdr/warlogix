@@ -178,6 +178,13 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 3. **Automatic Fallback** - If a batch fails, individual reads are used for that batch automatically.
 
+**Tag Discovery:**
+
+- Uses Get Instance Attribute List (service 0x55) for efficient paginated discovery
+- Discovers hundreds of tags per request instead of instance-by-instance
+- Automatically filters system/internal tags (prefixed with `_` or `$`)
+- Falls back to legacy discovery for PLCs that don't support 0x55
+
 **Protocol Notes:**
 
 - Uses CIP (Common Industrial Protocol) over EtherNet/IP, same as Allen-Bradley Logix

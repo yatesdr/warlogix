@@ -1058,6 +1058,7 @@ func (c *Client) readFINSWithTypesBatched(requests []TagRequest) ([]*TagValue, e
 }
 
 // AllTags discovers all tags (EIP only).
+// Uses efficient CIP pagination with Get Instance Attribute List (0x55).
 func (c *Client) AllTags() ([]TagInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1066,38 +1067,15 @@ func (c *Client) AllTags() ([]TagInfo, error) {
 		return nil, fmt.Errorf("tag discovery only supported for EIP transport")
 	}
 
-	var tags []TagInfo
-	instanceID := uint32(0)
-
-	for {
-		instanceID++
-
-		path, _ := cip.EPath().Class16(0x6B).Instance32(instanceID).Build()
-		req := cip.Request{
-			Service: cip.SvcGetAttributesAll,
-			Path:    path,
-		}
-
-		respData, err := c.sendCIPRequest(req)
-		if err != nil {
-			break
-		}
-
-		if len(respData) < 4 {
-			break
-		}
-
-		tag := c.parseSymbolInstance(respData, instanceID)
-		if tag.Name != "" {
-			tags = append(tags, tag)
-		}
-
-		if instanceID > 10000 {
-			break
-		}
+	// Try efficient pagination first
+	tags, err := c.allTagsEIP()
+	if err == nil && len(tags) > 0 {
+		return tags, nil
 	}
 
-	return tags, nil
+	// Fall back to legacy instance-by-instance discovery
+	// Some older PLCs may not support Get Instance Attribute List
+	return c.allTagsEIPFallback()
 }
 
 // parseSymbolInstance parses a Symbol Object instance response.

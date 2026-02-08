@@ -408,9 +408,11 @@ tags:
 
 WarLogix implements several EIP/CIP optimizations for NJ/NX series:
 
-1. **Multiple Service Packet (MSP) Batching** - Multiple tag reads are combined into single CIP requests using service 0x0A, reading up to 50 tags per request in connected mode (20 in unconnected mode)
+1. **Efficient Tag Discovery** - Uses CIP Get Instance Attribute List (service 0x55) with pagination to discover tags in batches, instead of instance-by-instance queries. This significantly reduces discovery time for projects with many tags.
 
-2. **Connected Messaging (Forward Open)** - Establishes a CIP connection for efficient persistent communication with larger payload sizes (up to 4002 bytes vs 504 bytes unconnected)
+2. **Multiple Service Packet (MSP) Batching** - Multiple tag reads are combined into single CIP requests using service 0x0A, reading up to 50 tags per request in connected mode (20 in unconnected mode)
+
+3. **Connected Messaging (Forward Open)** - Establishes a CIP connection for efficient persistent communication with larger payload sizes (up to 4002 bytes vs 504 bytes unconnected)
 
 3. **Automatic Fallback** - If batched reads fail, individual tag reads are used automatically
 
