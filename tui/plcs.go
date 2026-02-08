@@ -270,9 +270,6 @@ func escapeTviewText(s string) string {
 var discoveredDevicesCache []driver.DiscoveredDevice
 var discoveredDevicesCacheMu sync.Mutex
 
-// activeDiscoverySession is the currently running discovery session
-var activeDiscoverySession *driver.DiscoverySession
-
 func (t *PLCsTab) discover() {
 	// Don't start new discovery if modal is already open
 	if t.app.isModalOpen() {
@@ -280,35 +277,16 @@ func (t *PLCsTab) discover() {
 		return
 	}
 
-	// Stop any existing discovery session
-	if activeDiscoverySession != nil {
-		activeDiscoverySession.Stop()
-		activeDiscoverySession = nil
-	}
+	t.app.setStatus("Scanning network (EIP broadcast)...")
 
-	// Get local subnets for scanning
-	subnets := driver.GetLocalSubnets()
-	scanCIDR := ""
-	if len(subnets) > 0 {
-		scanCIDR = subnets[0] // Use first subnet for port scanning
-	}
-
-	// Create new discovery session
-	activeDiscoverySession = driver.NewDiscoverySession()
-
-	t.app.setStatus("Scanning network (EIP, S7, ADS, FINS)...")
-
-	// Show modal immediately (it will populate as devices are discovered)
-	t.showDiscoveryModal()
-
-	// Start discovery - devices will stream in via channel
-	deviceChan := activeDiscoverySession.Start("255.255.255.255", scanCIDR, 50)
-
-	// Handle incoming devices in background
+	// Run discovery in background, show modal when complete
 	go func() {
-		for dev := range deviceChan {
-			// Add to cache
-			discoveredDevicesCacheMu.Lock()
+		// Use EIP-only discovery (stable, no port scanning)
+		devices := driver.DiscoverEIPOnly("255.255.255.255", 5*time.Second)
+
+		// Add to cache
+		discoveredDevicesCacheMu.Lock()
+		for _, dev := range devices {
 			key := dev.Key()
 			found := false
 			for _, cached := range discoveredDevicesCache {
@@ -320,13 +298,18 @@ func (t *PLCsTab) discover() {
 			if !found {
 				discoveredDevicesCache = append(discoveredDevicesCache, dev)
 			}
+		}
+		discoveredDevicesCacheMu.Unlock()
+
+		// Show modal on UI thread
+		t.app.QueueUpdateDraw(func() {
+			discoveredDevicesCacheMu.Lock()
+			count := len(discoveredDevicesCache)
 			discoveredDevicesCacheMu.Unlock()
 
-			// Update the modal table (will be handled by the modal's refresh mechanism)
-			t.app.QueueUpdateDraw(func() {
-				// The modal refresh is handled inside showDiscoveryModal
-			})
-		}
+			t.app.setStatus(fmt.Sprintf("Found %d device(s)", count))
+			t.showDiscoveryModal()
+		})
 	}()
 }
 
@@ -424,25 +407,8 @@ func (t *PLCsTab) showDiscoveryModal() {
 		}
 	}
 
-	// Initial population (may show cached devices)
+	// Initial population from cache
 	populateTable()
-
-	// Set up periodic refresh while discovery is running
-	stopRefresh := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopRefresh:
-				return
-			case <-ticker.C:
-				t.app.QueueUpdateDraw(func() {
-					populateTable()
-				})
-			}
-		}
-	}()
 
 	// Filter input change handler
 	filterInput.SetChangedFunc(func(text string) {
@@ -459,15 +425,6 @@ func (t *PLCsTab) showDiscoveryModal() {
 	ApplyButtonTheme(clearBtn)
 
 	closeModal := func() {
-		close(stopRefresh)
-		if activeDiscoverySession != nil {
-			activeDiscoverySession.Stop()
-			activeDiscoverySession = nil
-		}
-		discoveredDevicesCacheMu.Lock()
-		count := len(discoveredDevicesCache)
-		discoveredDevicesCacheMu.Unlock()
-		t.app.setStatus(fmt.Sprintf("Discovery stopped (%d device(s) found)", count))
 		t.app.closeModal(pageName)
 	}
 
