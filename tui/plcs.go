@@ -286,21 +286,40 @@ func (t *PLCsTab) discover() {
 		return
 	}
 
-	// Get local subnets for port scanning (S7, ADS, FINS)
+	// Get all local subnets for port scanning (S7, ADS, FINS)
 	subnets := driver.GetLocalSubnets()
-	scanCIDR := ""
-	if len(subnets) > 0 {
-		scanCIDR = subnets[0]
-	}
 
 	t.app.setStatus("Scanning network (EIP, S7, ADS, FINS)...")
 
 	// Run discovery in background, show modal when complete
 	go func() {
-		logging.DebugLog("tui", "Discovery: starting DiscoverAll with CIDR=%s", scanCIDR)
+		logging.DebugLog("tui", "Discovery: found %d local subnets: %v", len(subnets), subnets)
 
-		// Use full multi-protocol discovery
-		devices := driver.DiscoverAll("255.255.255.255", scanCIDR, 500*time.Millisecond, 50)
+		// Scan all subnets and combine results
+		var allDevices []driver.DiscoveredDevice
+		seen := make(map[string]bool)
+
+		for _, cidr := range subnets {
+			logging.DebugLog("tui", "Discovery: scanning subnet %s", cidr)
+			devices := driver.DiscoverAll("255.255.255.255", cidr, 500*time.Millisecond, 50)
+			logging.DebugLog("tui", "Discovery: subnet %s returned %d devices", cidr, len(devices))
+
+			for _, dev := range devices {
+				key := dev.Key()
+				if !seen[key] {
+					seen[key] = true
+					allDevices = append(allDevices, dev)
+				}
+			}
+		}
+
+		// If no subnets found, still do EIP broadcast
+		if len(subnets) == 0 {
+			logging.DebugLog("tui", "Discovery: no subnets, doing EIP-only")
+			allDevices = driver.DiscoverEIPOnly("255.255.255.255", 3*time.Second)
+		}
+
+		devices := allDevices
 
 		logging.DebugLog("tui", "Discovery: DiscoverAll returned %d devices", len(devices))
 		for i, dev := range devices {
