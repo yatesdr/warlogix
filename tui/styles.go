@@ -125,12 +125,26 @@ func NewTheme(name string, primary, secondary, accent, text, textDim, err, succe
 	t.TagWritable = colorToTag(warning) // Default, will be updated if Writable is set
 
 	// Build status indicators
-	t.StatusConnected = t.TagSuccess + "●" + t.TagReset
-	t.StatusDisconnected = t.TagTextDim + "○" + t.TagReset
-	t.StatusConnecting = t.TagWarning + "◐" + t.TagReset
-	t.StatusError = t.TagError + "●" + t.TagReset
+	t.updateStatusIndicators()
 
 	return t
+}
+
+// updateStatusIndicators rebuilds status indicators based on ASCII mode.
+func (t *Theme) updateStatusIndicators() {
+	if ASCIIModeEnabled {
+		// ASCII fallbacks for terminals without Unicode support
+		t.StatusConnected = t.TagSuccess + "[*]" + t.TagReset
+		t.StatusDisconnected = t.TagTextDim + "[ ]" + t.TagReset
+		t.StatusConnecting = t.TagWarning + "[~]" + t.TagReset
+		t.StatusError = t.TagError + "[!]" + t.TagReset
+	} else {
+		// Unicode indicators
+		t.StatusConnected = t.TagSuccess + "●" + t.TagReset
+		t.StatusDisconnected = t.TagTextDim + "○" + t.TagReset
+		t.StatusConnecting = t.TagWarning + "◐" + t.TagReset
+		t.StatusError = t.TagError + "●" + t.TagReset
+	}
 }
 
 // NewThemeWithFieldColors creates a theme with explicit field colors.
@@ -746,36 +760,146 @@ var (
 	IndicatorGray  = tcell.ColorGray
 )
 
-// Box drawing characters
+// Box drawing characters (Unicode defaults)
 const (
-	BoxHorizontal = "─"
-	BoxVertical   = "│"
-	BoxTopLeft    = "┌"
-	BoxTopRight   = "┐"
-	BoxBottomLeft = "└"
+	BoxHorizontal  = "─"
+	BoxVertical    = "│"
+	BoxTopLeft     = "┌"
+	BoxTopRight    = "┐"
+	BoxBottomLeft  = "└"
 	BoxBottomRight = "┘"
-	BoxCross      = "┼"
-	BoxTeeRight   = "├"
-	BoxTeeLeft    = "┤"
-	BoxTeeDown    = "┬"
-	BoxTeeUp      = "┴"
+	BoxCross       = "┼"
+	BoxTeeRight    = "├"
+	BoxTeeLeft     = "┤"
+	BoxTeeDown     = "┬"
+	BoxTeeUp       = "┴"
 )
 
-// Tree characters
+// ASCIIModeEnabled tracks whether ASCII mode is active for terminals without Unicode support.
+var ASCIIModeEnabled = false
+
+// EnableASCIIMode switches tview to use ASCII box-drawing characters.
+// This is useful for terminals that don't render Unicode properly (e.g., SSH with limited locale settings).
+func EnableASCIIMode() {
+	ASCIIModeEnabled = true
+	// Set tview's border characters to ASCII equivalents
+	tview.Borders.Horizontal = '-'
+	tview.Borders.Vertical = '|'
+	tview.Borders.TopLeft = '+'
+	tview.Borders.TopRight = '+'
+	tview.Borders.BottomLeft = '+'
+	tview.Borders.BottomRight = '+'
+	tview.Borders.LeftT = '+'
+	tview.Borders.RightT = '+'
+	tview.Borders.TopT = '+'
+	tview.Borders.BottomT = '+'
+	tview.Borders.Cross = '+'
+	tview.Borders.HorizontalFocus = '='
+	tview.Borders.VerticalFocus = '|'
+	tview.Borders.TopLeftFocus = '+'
+	tview.Borders.TopRightFocus = '+'
+	tview.Borders.BottomLeftFocus = '+'
+	tview.Borders.BottomRightFocus = '+'
+	// Update status indicators in current theme
+	CurrentTheme.updateStatusIndicators()
+}
+
+// DisableASCIIMode restores tview's default Unicode box-drawing characters.
+func DisableASCIIMode() {
+	ASCIIModeEnabled = false
+	// Restore tview's default Unicode borders
+	tview.Borders.Horizontal = '─'
+	tview.Borders.Vertical = '│'
+	tview.Borders.TopLeft = '┌'
+	tview.Borders.TopRight = '┐'
+	tview.Borders.BottomLeft = '└'
+	tview.Borders.BottomRight = '┘'
+	tview.Borders.LeftT = '├'
+	tview.Borders.RightT = '┤'
+	tview.Borders.TopT = '┬'
+	tview.Borders.BottomT = '┴'
+	tview.Borders.Cross = '┼'
+	tview.Borders.HorizontalFocus = '━'
+	tview.Borders.VerticalFocus = '┃'
+	tview.Borders.TopLeftFocus = '┏'
+	tview.Borders.TopRightFocus = '┓'
+	tview.Borders.BottomLeftFocus = '┗'
+	tview.Borders.BottomRightFocus = '┛'
+	// Update status indicators in current theme
+	CurrentTheme.updateStatusIndicators()
+}
+
+// Tree characters (Unicode defaults - use GetTree* functions for ASCII-aware versions)
 const (
-	TreeBranch    = "├── "
+	TreeBranch     = "├── "
 	TreeLastBranch = "└── "
-	TreeVertical  = "│   "
-	TreeSpace     = "    "
-	TreeExpanded  = "▼ "
-	TreeCollapsed = "▶ "
+	TreeVertical   = "│   "
+	TreeSpace      = "    "
+	TreeExpanded   = "▼ "
+	TreeCollapsed  = "▶ "
 )
 
-// Checkbox characters
+// Checkbox characters (Unicode defaults - use GetCheckbox* functions for ASCII-aware versions)
 const (
 	CheckboxChecked   = "☑"
 	CheckboxUnchecked = "☐"
 )
+
+// GetTreeBranch returns the appropriate tree branch character for the current mode.
+func GetTreeBranch() string {
+	if ASCIIModeEnabled {
+		return "+-- "
+	}
+	return TreeBranch
+}
+
+// GetTreeLastBranch returns the appropriate last tree branch character for the current mode.
+func GetTreeLastBranch() string {
+	if ASCIIModeEnabled {
+		return "`-- "
+	}
+	return TreeLastBranch
+}
+
+// GetTreeVertical returns the appropriate tree vertical character for the current mode.
+func GetTreeVertical() string {
+	if ASCIIModeEnabled {
+		return "|   "
+	}
+	return TreeVertical
+}
+
+// GetTreeExpanded returns the appropriate expanded indicator for the current mode.
+func GetTreeExpanded() string {
+	if ASCIIModeEnabled {
+		return "v "
+	}
+	return TreeExpanded
+}
+
+// GetTreeCollapsed returns the appropriate collapsed indicator for the current mode.
+func GetTreeCollapsed() string {
+	if ASCIIModeEnabled {
+		return "> "
+	}
+	return TreeCollapsed
+}
+
+// GetCheckboxChecked returns the appropriate checked checkbox for the current mode.
+func GetCheckboxChecked() string {
+	if ASCIIModeEnabled {
+		return "[X]"
+	}
+	return CheckboxChecked
+}
+
+// GetCheckboxUnchecked returns the appropriate unchecked checkbox for the current mode.
+func GetCheckboxUnchecked() string {
+	if ASCIIModeEnabled {
+		return "[ ]"
+	}
+	return CheckboxUnchecked
+}
 
 // Tab labels
 const (

@@ -45,15 +45,11 @@ func (a *OmronAdapter) Connect() error {
 		if a.config.FinsPort > 0 {
 			opts = append(opts, omron.WithPort(a.config.FinsPort))
 		}
-		if a.config.FinsNetwork > 0 {
-			opts = append(opts, omron.WithNetwork(a.config.FinsNetwork))
-		}
-		if a.config.FinsNode > 0 {
-			opts = append(opts, omron.WithNode(a.config.FinsNode))
-		}
-		if a.config.FinsUnit > 0 {
-			opts = append(opts, omron.WithUnit(a.config.FinsUnit))
-		}
+		// Always apply FINS addressing settings - even 0 is a valid value
+		// Node is typically the last octet of the PLC's IP address
+		opts = append(opts, omron.WithNetwork(a.config.FinsNetwork))
+		opts = append(opts, omron.WithNode(a.config.FinsNode))
+		opts = append(opts, omron.WithUnit(a.config.FinsUnit))
 	}
 
 	client, err := omron.Connect(a.config.Address, opts...)

@@ -329,6 +329,11 @@ type plcFormState struct {
 	pollRateMs  string // Poll rate in milliseconds (250-10000, empty = use global)
 	autoConnect bool
 	healthCheck bool // Publish health status
+
+	// Omron FINS-specific settings
+	finsNode    string // Destination node (typically last octet of PLC IP)
+	finsNetwork string // Network number (usually 0)
+	finsUnit    string // Unit number (usually 0)
 }
 
 var familyOptions = []string{"logix", "micro800", "s7", "beckhoff", "omron"}
@@ -402,10 +407,27 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			return err == nil || text == ""
 		}, nil)
 	case config.FamilyOmron:
-		form.AddDropDown("Protocol:", omronProtocolOptions, state.protocol, nil)
-		// Slot field only needed for FINS (EIP doesn't use slot)
+		form.AddDropDown("Protocol:", omronProtocolOptions, state.protocol, func(option string, index int) {
+			if !initialized {
+				return
+			}
+			// Save current values before rebuilding when protocol changes
+			t.saveAddFormState(form, state, family)
+			state.protocol = index
+			// Rebuild form with new protocol
+			t.buildAddForm(state)
+		})
+		// FINS-specific fields (not needed for EIP)
 		if state.protocol == 0 {
-			form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+			form.AddInputField("Node:", state.finsNode, 5, func(text string, lastChar rune) bool {
+				_, err := strconv.Atoi(text)
+				return err == nil || text == ""
+			}, nil)
+			form.AddInputField("Network:", state.finsNetwork, 5, func(text string, lastChar rune) bool {
+				_, err := strconv.Atoi(text)
+				return err == nil || text == ""
+			}, nil)
+			form.AddInputField("Unit:", state.finsUnit, 5, func(text string, lastChar rune) bool {
 				_, err := strconv.Atoi(text)
 				return err == nil || text == ""
 			}, nil)
@@ -455,6 +477,12 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 		if family == config.FamilyOmron {
 			protocol = omronProtocolOptions[state.protocol]
 		}
+
+		// Parse Omron FINS settings
+		finsNode, _ := strconv.Atoi(state.finsNode)
+		finsNetwork, _ := strconv.Atoi(state.finsNetwork)
+		finsUnit, _ := strconv.Atoi(state.finsUnit)
+
 		cfg := config.PLCConfig{
 			Name:               state.name,
 			Address:            state.address,
@@ -466,6 +494,10 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			PollRate:           pollRate,
 			AmsNetId:           state.amsNetId,
 			AmsPort:            uint16(amsPort),
+			// Omron FINS settings
+			FinsNode:    byte(finsNode),
+			FinsNetwork: byte(finsNetwork),
+			FinsUnit:    byte(finsUnit),
 		}
 
 		t.app.config.AddPLC(cfg)
@@ -486,8 +518,15 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 
 	// Calculate form height based on number of fields
 	formHeight := 19 // Base height for common fields + poll rate + health check + buttons
-	if family == config.FamilyBeckhoff {
-		formHeight = 21 // Extra fields for Beckhoff
+	switch family {
+	case config.FamilyBeckhoff:
+		formHeight = 21 // Extra fields for Beckhoff (AMS Net ID, AMS Port)
+	case config.FamilyOmron:
+		if state.protocol == 0 { // FINS protocol
+			formHeight = 23 // Extra fields for FINS (Protocol, Node, Network, Unit)
+		} else {
+			formHeight = 18 // EIP only needs Protocol dropdown
+		}
 	}
 
 	t.app.showFormModal(pageName, form, 55, formHeight, func() {
@@ -525,6 +564,16 @@ func (t *PLCsTab) saveAddFormState(form *tview.Form, state *plcFormState, family
 	}
 	if item := form.GetFormItemByLabel("Health check:"); item != nil {
 		state.healthCheck = item.(*tview.Checkbox).IsChecked()
+	}
+	// Omron FINS fields
+	if item := form.GetFormItemByLabel("Node:"); item != nil {
+		state.finsNode = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Network:"); item != nil {
+		state.finsNetwork = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Unit:"); item != nil {
+		state.finsUnit = item.(*tview.InputField).GetText()
 	}
 }
 
@@ -586,6 +635,10 @@ func (t *PLCsTab) showEditDialog() {
 			pollRateMs:  pollRateMs,
 			autoConnect: cfg.Enabled,
 			healthCheck: cfg.IsHealthCheckEnabled(),
+			// Omron FINS settings
+			finsNode:    strconv.Itoa(int(cfg.FinsNode)),
+			finsNetwork: strconv.Itoa(int(cfg.FinsNetwork)),
+			finsUnit:    strconv.Itoa(int(cfg.FinsUnit)),
 		},
 		originalName: cfg.Name,
 		tags:         cfg.Tags,
@@ -644,10 +697,27 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 			return err == nil || text == ""
 		}, nil)
 	case config.FamilyOmron:
-		form.AddDropDown("Protocol:", omronProtocolOptions, state.protocol, nil)
-		// Slot field only needed for FINS (EIP doesn't use slot)
+		form.AddDropDown("Protocol:", omronProtocolOptions, state.protocol, func(option string, index int) {
+			if !initialized {
+				return
+			}
+			// Save current values before rebuilding when protocol changes
+			t.saveEditFormState(form, state, family)
+			state.protocol = index
+			// Rebuild form with new protocol
+			t.buildEditForm(state)
+		})
+		// FINS-specific fields (not needed for EIP)
 		if state.protocol == 0 {
-			form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+			form.AddInputField("Node:", state.finsNode, 5, func(text string, lastChar rune) bool {
+				_, err := strconv.Atoi(text)
+				return err == nil || text == ""
+			}, nil)
+			form.AddInputField("Network:", state.finsNetwork, 5, func(text string, lastChar rune) bool {
+				_, err := strconv.Atoi(text)
+				return err == nil || text == ""
+			}, nil)
+			form.AddInputField("Unit:", state.finsUnit, 5, func(text string, lastChar rune) bool {
 				_, err := strconv.Atoi(text)
 				return err == nil || text == ""
 			}, nil)
@@ -697,6 +767,12 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		if family == config.FamilyOmron {
 			protocol = omronProtocolOptions[state.protocol]
 		}
+
+		// Parse Omron FINS settings
+		finsNode, _ := strconv.Atoi(state.finsNode)
+		finsNetwork, _ := strconv.Atoi(state.finsNetwork)
+		finsUnit, _ := strconv.Atoi(state.finsUnit)
+
 		updated := config.PLCConfig{
 			Name:               state.name,
 			Address:            state.address,
@@ -709,6 +785,10 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 			Tags:               state.tags,
 			AmsNetId:           state.amsNetId,
 			AmsPort:            uint16(amsPort),
+			// Omron FINS settings
+			FinsNode:    byte(finsNode),
+			FinsNetwork: byte(finsNetwork),
+			FinsUnit:    byte(finsUnit),
 		}
 
 		t.app.config.UpdatePLC(state.originalName, updated)
@@ -746,8 +826,15 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 
 	// Calculate form height based on number of fields
 	formHeight := 19 // Base height for common fields + poll rate + health check + buttons
-	if family == config.FamilyBeckhoff {
-		formHeight = 21 // Extra fields for Beckhoff
+	switch family {
+	case config.FamilyBeckhoff:
+		formHeight = 21 // Extra fields for Beckhoff (AMS Net ID, AMS Port)
+	case config.FamilyOmron:
+		if state.protocol == 0 { // FINS protocol
+			formHeight = 23 // Extra fields for FINS (Protocol, Node, Network, Unit)
+		} else {
+			formHeight = 18 // EIP only needs Protocol dropdown
+		}
 	}
 
 	t.app.showFormModal(pageName, form, 55, formHeight, func() {
@@ -782,6 +869,16 @@ func (t *PLCsTab) saveEditFormState(form *tview.Form, state *editFormState, fami
 	}
 	if item := form.GetFormItemByLabel("Health check:"); item != nil {
 		state.healthCheck = item.(*tview.Checkbox).IsChecked()
+	}
+	// Omron FINS fields
+	if item := form.GetFormItemByLabel("Node:"); item != nil {
+		state.finsNode = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Network:"); item != nil {
+		state.finsNetwork = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Unit:"); item != nil {
+		state.finsUnit = item.(*tview.InputField).GetText()
 	}
 }
 
@@ -871,7 +968,23 @@ func (t *PLCsTab) showInfoDialog() {
 	th := CurrentTheme
 	info := th.Label("Name", plc.Config.Name) + "\n"
 	info += th.Label("Address", plc.Config.Address) + "\n"
-	info += fmt.Sprintf("%sSlot:%s %d\n", th.TagAccent, th.TagReset, plc.Config.Slot)
+
+	// Show family-specific settings
+	switch plc.Config.Family {
+	case config.FamilyOmron:
+		info += th.Label("Protocol", plc.Config.GetProtocol()) + "\n"
+		if plc.Config.IsOmronFINS() {
+			info += fmt.Sprintf("%sNode:%s %d\n", th.TagAccent, th.TagReset, plc.Config.FinsNode)
+			info += fmt.Sprintf("%sNetwork:%s %d\n", th.TagAccent, th.TagReset, plc.Config.FinsNetwork)
+			info += fmt.Sprintf("%sUnit:%s %d\n", th.TagAccent, th.TagReset, plc.Config.FinsUnit)
+		}
+	case config.FamilyBeckhoff:
+		info += th.Label("AMS Net ID", plc.Config.AmsNetId) + "\n"
+		info += fmt.Sprintf("%sAMS Port:%s %d\n", th.TagAccent, th.TagReset, plc.Config.AmsPort)
+	default:
+		info += fmt.Sprintf("%sSlot:%s %d\n", th.TagAccent, th.TagReset, plc.Config.Slot)
+	}
+
 	info += th.Label("Status", plc.GetStatus().String()) + "\n"
 	info += th.Label("Mode", plc.GetConnectionMode()) + "\n"
 

@@ -61,9 +61,12 @@ type App struct {
 
 // NewApp creates a new TUI application.
 func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager) *App {
-	// Apply theme from config
+	// Apply UI settings from config
 	if cfg.UI.Theme != "" {
 		SetTheme(cfg.UI.Theme)
+	}
+	if cfg.UI.ASCIIMode {
+		EnableASCIIMode()
 	}
 
 	a := &App{
@@ -87,9 +90,12 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiS
 // NewAppWithScreen creates a TUI application that uses the provided tcell.Screen.
 // This is used for daemon mode where the TUI runs on a PTY.
 func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, screen tcell.Screen) *App {
-	// Apply theme from config
+	// Apply UI settings from config
 	if cfg.UI.Theme != "" {
 		SetTheme(cfg.UI.Theme)
+	}
+	if cfg.UI.ASCIIMode {
+		EnableASCIIMode()
 	}
 
 	a := &App{
@@ -114,9 +120,12 @@ func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Man
 // NewAppWithPTY creates a TUI application that uses the provided PTY file descriptors.
 // This is used for daemon mode where the TUI runs on a PTY for SSH multiplexing.
 func NewAppWithPTY(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, ptyFile *os.File) (*App, error) {
-	// Apply theme from config
+	// Apply UI settings from config
 	if cfg.UI.Theme != "" {
 		SetTheme(cfg.UI.Theme)
+	}
+	if cfg.UI.ASCIIMode {
+		EnableASCIIMode()
 	}
 
 	// Create a PTYTty wrapper that implements tcell.Tty

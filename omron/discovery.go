@@ -1,5 +1,19 @@
 // Package omron provides unified Omron PLC communication.
 // This file implements CIP-based tag discovery for EIP (NJ/NX series).
+//
+// Omron NJ/NX series PLCs use CIP (Common Industrial Protocol) over EtherNet/IP,
+// but their implementation differs from Allen-Bradley Logix:
+//
+//   - Get Instance Attribute List (0x55) is NOT supported by Omron
+//   - Must use Get Attributes All (0x01) on individual Symbol Object instances
+//   - Class 0x6A contains symbol table metadata (instance count)
+//   - Class 0x6B contains the actual symbol/tag instances
+//   - String data uses odd-byte padding (single byte when name length is odd)
+//   - System variables start with underscore ('_')
+//
+// References:
+//   - libplctag GitHub issues #317, #466
+//   - Omron NJ/NX-series CPU Unit Built-in EtherNet/IP Port User's Manual (W506)
 package omron
 
 import (
@@ -12,291 +26,284 @@ import (
 
 // CIP service codes for symbol discovery.
 const (
-	svcGetAttributesAll         byte = 0x01 // Get Attributes All
-	svcGetInstanceAttributeList byte = 0x55 // Get Instance Attribute List (efficient pagination)
+	svcGetAttributesAll byte = 0x01 // Get Attributes All - the only discovery method Omron supports
 
-	// Symbol Object class ID
-	classSymbol byte = 0x6B
+	// Symbol Object class IDs (Omron-specific)
+	classSymbolTable byte = 0x6A // Symbol table metadata (contains instance count)
+	classSymbol      byte = 0x6B // Symbol Object (tag instances)
+
+	// Note: Omron does NOT support service 0x55 (Get Instance Attribute List)
+	// which is commonly used for efficient pagination in Allen-Bradley Logix PLCs.
+	// Attempting to use 0x55 returns CIP status 0x08 ("service not supported").
 )
 
 // CIP status codes.
 const (
-	statusSuccess         byte = 0x00 // Success
-	statusPartialTransfer byte = 0x06 // More data available (pagination)
+	statusSuccess             byte = 0x00 // Success
+	statusPartialTransfer     byte = 0x06 // More data available (pagination - not used by Omron)
+	statusPathDestUnknown     byte = 0x05 // Path destination unknown
+	statusServiceNotSupported byte = 0x08 // Service not supported
+	statusAttrNotSupported    byte = 0x14 // Attribute not supported
+	statusObjectNotExists     byte = 0x16 // Object does not exist
 )
 
 // listSymbols queries the Symbol Object (class 0x6B) for tag information.
-// Uses pagination for efficient discovery of large tag databases.
+// Uses Omron-specific instance-by-instance iteration with Get Attributes All (0x01).
 // Returns all tags discovered from the PLC.
+//
+// NOTE: Unlike Allen-Bradley Logix PLCs, Omron does NOT support Get Instance
+// Attribute List (0x55) for efficient pagination. We must iterate through
+// instances one at a time using Get Attributes All (0x01).
 func (c *Client) listSymbols() ([]TagInfo, error) {
-	logging.DebugLog("EIP/Discovery", "Starting tag discovery using Get Instance Attribute List (0x55)")
+	logging.DebugLog("EIP/Discovery", "Starting Omron-specific tag discovery using Get Attributes All (0x01)")
 
-	var allTags []TagInfo
-	startInstance := uint32(0)
-
-	// Pagination loop - limit to prevent infinite loops
-	for page := 0; page < 1000; page++ {
-		logging.DebugLog("EIP/Discovery", "Fetching page %d, starting at instance %d", page, startInstance)
-
-		tags, lastInstance, hasMore, err := c.listSymbolsPage(startInstance)
-		if err != nil {
-			logging.DebugLog("EIP/Discovery", "Page %d error: %v", page, err)
-			// If we got some tags before the error, return what we have
-			if len(allTags) > 0 {
-				logging.DebugLog("EIP/Discovery", "Returning %d tags collected before error", len(allTags))
-				return allTags, nil
-			}
-			return nil, err
-		}
-
-		logging.DebugLog("EIP/Discovery", "Page %d: got %d tags, lastInstance=%d, hasMore=%v",
-			page, len(tags), lastInstance, hasMore)
-
-		allTags = append(allTags, tags...)
-
-		if !hasMore || len(tags) == 0 {
-			logging.DebugLog("EIP/Discovery", "Pagination complete after page %d", page)
-			break
-		}
-
-		// Next page starts after the last instance we received
-		startInstance = lastInstance + 1
+	// First, try to get the symbol table metadata from class 0x6A
+	// This tells us how many symbols exist
+	maxInstance := c.getSymbolTableCount()
+	if maxInstance > 0 {
+		logging.DebugLog("EIP/Discovery", "Symbol table reports %d instances", maxInstance)
+	} else {
+		// If we can't get the count, use a reasonable default limit
+		maxInstance = 10000
+		logging.DebugLog("EIP/Discovery", "Symbol table metadata unavailable, using limit of %d", maxInstance)
 	}
 
-	logging.DebugLog("EIP/Discovery", "Discovery complete: %d total tags", len(allTags))
+	var allTags []TagInfo
+	consecutiveErrors := 0
+	const maxConsecutiveErrors = 10 // Stop after 10 consecutive errors (end of table)
+
+	// Iterate through instances starting at 1 (instance 0 is class-level)
+	for instance := uint32(1); instance <= uint32(maxInstance); instance++ {
+		tag, err := c.getSymbolInstance(instance)
+		if err != nil {
+			consecutiveErrors++
+			if instance <= 10 {
+				logging.DebugLog("EIP/Discovery", "Instance %d error: %v", instance, err)
+			}
+
+			// Stop after too many consecutive errors (indicates end of symbol table)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				logging.DebugLog("EIP/Discovery", "Stopping after %d consecutive errors at instance %d",
+					consecutiveErrors, instance)
+				break
+			}
+			continue
+		}
+
+		consecutiveErrors = 0 // Reset on success
+
+		// Skip empty/invalid tags
+		if tag.Name == "" {
+			continue
+		}
+
+		// Skip system tags (start with underscore or dollar sign)
+		if len(tag.Name) > 0 && (tag.Name[0] == '_' || tag.Name[0] == '$') {
+			if instance <= 20 {
+				logging.DebugLog("EIP/Discovery", "Skipping system tag: %s", tag.Name)
+			}
+			continue
+		}
+
+		allTags = append(allTags, tag)
+
+		// Log progress periodically
+		if instance <= 10 || instance%100 == 0 {
+			logging.DebugLog("EIP/Discovery", "Instance %d: found tag %q (type=0x%04X %s)",
+				instance, tag.Name, tag.TypeCode, TypeName(tag.TypeCode))
+		}
+	}
+
+	logging.DebugLog("EIP/Discovery", "Discovery complete: %d user tags found", len(allTags))
 	return allTags, nil
 }
 
-// listSymbolsPage fetches one page of symbols using Get Instance Attribute List.
-// This is much more efficient than iterating instance-by-instance.
-// Note: This service (0x55) may not be supported by all Omron PLCs.
-// The response format is based on Allen-Bradley Logix implementation.
-func (c *Client) listSymbolsPage(startInstance uint32) (tags []TagInfo, lastInstance uint32, hasMore bool, err error) {
-	// Build the path: Symbol Object class (0x6B) with starting instance
-	path := c.buildSymbolPath(startInstance)
+// getSymbolTableCount queries class 0x6A to get the number of symbol instances.
+// This is Omron-specific - the Symbol Table class contains metadata about
+// the symbol table including the instance count.
+// Returns 0 if the query fails (caller should use a default limit).
+func (c *Client) getSymbolTableCount() uint32 {
+	logging.DebugLog("EIP/Discovery", "Querying symbol table metadata (class 0x6A)")
 
-	logging.DebugLog("EIP/Discovery", "listSymbolsPage: startInstance=%d, path=%X", startInstance, path)
+	// Build path to Symbol Table class (0x6A), instance 0 (class-level)
+	path, _ := cip.EPath().Class(classSymbolTable).Instance(0x00).Build()
 
-	// Request attributes: name (1), type (2), byte count (8)
-	// This matches the Logix pattern for getting array sizes during discovery
-	attrData := []byte{
-		0x03, 0x00, // Attribute count: 3
-		0x01, 0x00, // Attribute 1: Symbol Name
-		0x02, 0x00, // Attribute 2: Symbol Type
-		0x08, 0x00, // Attribute 8: Byte Count (for array size calculation)
-	}
-
-	// Build the CIP request
-	reqData := make([]byte, 0, 2+len(path)+len(attrData))
-	reqData = append(reqData, svcGetInstanceAttributeList) // Service 0x55
-	reqData = append(reqData, byte(len(path)/2))           // Path word length
-	reqData = append(reqData, path...)
-	reqData = append(reqData, attrData...)
-
-	logging.DebugLog("EIP/Discovery", "Request: service=0x55 path=%X attrs=[1,2,8]", path)
-
-	// Send request
-	cipReq := cip.Request{
-		Service: svcGetInstanceAttributeList,
+	req := cip.Request{
+		Service: svcGetAttributesAll,
 		Path:    path,
-		Data:    attrData,
 	}
 
-	respData, err := c.sendCIPRequest(cipReq)
+	respData, err := c.sendCIPRequest(req)
 	if err != nil {
-		logging.DebugLog("EIP/Discovery", "CIP request failed: %v", err)
-		return nil, 0, false, fmt.Errorf("listSymbolsPage: %w", err)
+		logging.DebugLog("EIP/Discovery", "Symbol table query failed: %v", err)
+		return 0
 	}
 
-	logging.DebugLog("EIP/Discovery", "Response: %d bytes", len(respData))
-	if len(respData) <= 64 {
-		logging.DebugLog("EIP/Discovery", "Response data: %X", respData)
-	} else {
-		logging.DebugLog("EIP/Discovery", "Response data (first 64 bytes): %X...", respData[:64])
-	}
-
-	// Parse response header
+	// Parse CIP response header
 	if len(respData) < 4 {
-		logging.DebugLog("EIP/Discovery", "Response too short: %d bytes (need 4 minimum)", len(respData))
-		return nil, 0, false, fmt.Errorf("response too short: %d bytes", len(respData))
+		logging.DebugLog("EIP/Discovery", "Symbol table response too short: %d bytes", len(respData))
+		return 0
+	}
+
+	status := respData[2]
+	if status != statusSuccess {
+		logging.DebugLog("EIP/Discovery", "Symbol table query status error: 0x%02X (%s)",
+			status, cipStatusMessage(status))
+		return 0
+	}
+
+	// Skip CIP header to get attribute data
+	addlStatusSize := int(respData[3]) * 2
+	dataStart := 4 + addlStatusSize
+	if dataStart >= len(respData) {
+		logging.DebugLog("EIP/Discovery", "Symbol table response has no data after header")
+		return 0
+	}
+
+	attrData := respData[dataStart:]
+	logging.DebugLog("EIP/Discovery", "Symbol table attributes (%d bytes): %X", len(attrData), attrData)
+
+	// The Symbol Table class typically returns 4 UINT values (8 bytes):
+	// - Attribute 1: Number of instances
+	// - Attribute 2: Max instance (highest instance ID)
+	// - Attribute 3: (varies)
+	// - Attribute 4: (varies)
+	// All values are often the same for a simple symbol table.
+	if len(attrData) >= 2 {
+		instanceCount := binary.LittleEndian.Uint16(attrData[0:2])
+		logging.DebugLog("EIP/Discovery", "Symbol table reports %d instances", instanceCount)
+		return uint32(instanceCount)
+	}
+
+	return 0
+}
+
+// getSymbolInstance reads a single symbol instance using Get Attributes All (0x01).
+// This is the Omron-compatible method for tag discovery.
+func (c *Client) getSymbolInstance(instance uint32) (TagInfo, error) {
+	tag := TagInfo{Instance: instance}
+
+	// Build path to Symbol Object (class 0x6B) with specific instance
+	var path cip.EPath_t
+	if instance <= 0xFF {
+		path, _ = cip.EPath().Class(classSymbol).Instance(byte(instance)).Build()
+	} else if instance <= 0xFFFF {
+		path, _ = cip.EPath().Class(classSymbol).Instance16(uint16(instance)).Build()
+	} else {
+		path, _ = cip.EPath().Class(classSymbol).Instance32(instance).Build()
+	}
+
+	req := cip.Request{
+		Service: svcGetAttributesAll,
+		Path:    path,
+	}
+
+	respData, err := c.sendCIPRequest(req)
+	if err != nil {
+		return tag, fmt.Errorf("instance %d: %w", instance, err)
+	}
+
+	// Parse CIP response header
+	if len(respData) < 4 {
+		return tag, fmt.Errorf("instance %d: response too short (%d bytes)", instance, len(respData))
 	}
 
 	replyService := respData[0]
-	reserved := respData[1]
 	status := respData[2]
-	addlStatusSize := respData[3]
+	addlStatusSize := int(respData[3]) * 2
 
-	logging.DebugLog("EIP/Discovery", "Response header: service=0x%02X reserved=0x%02X status=0x%02X addlStatusSize=%d",
-		replyService, reserved, status, addlStatusSize)
-
-	// Verify service reply
-	if replyService != (svcGetInstanceAttributeList | 0x80) {
-		logging.DebugLog("EIP/Discovery", "Unexpected reply service: 0x%02X (expected 0x%02X)",
-			replyService, svcGetInstanceAttributeList|0x80)
-		return nil, 0, false, fmt.Errorf("unexpected reply service: 0x%02X (expected 0x%02X)",
-			replyService, svcGetInstanceAttributeList|0x80)
+	// Verify it's a reply to Get Attributes All
+	if replyService != (svcGetAttributesAll | 0x80) {
+		return tag, fmt.Errorf("instance %d: unexpected service 0x%02X", instance, replyService)
 	}
 
-	// Check for "partial transfer" (more data available)
-	hasMore = (status == statusPartialTransfer)
-
-	// Check for errors (but partial transfer is OK)
-	if status != statusSuccess && status != statusPartialTransfer {
-		statusMsg := "unknown"
-		switch status {
-		case 0x05:
-			statusMsg = "path destination unknown"
-		case 0x08:
-			statusMsg = "service not supported"
-		case 0x14:
-			statusMsg = "attribute not supported"
-		case 0x16:
-			statusMsg = "object does not exist"
-		}
-		logging.DebugLog("EIP/Discovery", "CIP error: status=0x%02X (%s)", status, statusMsg)
-		return nil, 0, false, fmt.Errorf("CIP error: status 0x%02X (%s)", status, statusMsg)
+	// Check status
+	if status != statusSuccess {
+		return tag, fmt.Errorf("instance %d: CIP status 0x%02X (%s)",
+			instance, status, cipStatusMessage(status))
 	}
 
-	// Parse tag data (skip 4-byte header + additional status)
-	dataStart := 4 + int(addlStatusSize)*2
+	// Skip header to get attribute data
+	dataStart := 4 + addlStatusSize
 	if dataStart >= len(respData) {
-		logging.DebugLog("EIP/Discovery", "No tag data in response (dataStart=%d >= len=%d)", dataStart, len(respData))
-		return nil, 0, hasMore, nil // No data
+		return tag, fmt.Errorf("instance %d: no attribute data", instance)
 	}
 
-	tagData := respData[dataStart:]
-	logging.DebugLog("EIP/Discovery", "Parsing tag data: %d bytes starting at offset %d", len(tagData), dataStart)
+	attrData := respData[dataStart:]
 
-	tags, lastInstance = c.parseSymbolListResponse(tagData)
-	logging.DebugLog("EIP/Discovery", "Parsed %d tags, lastInstance=%d", len(tags), lastInstance)
+	// Parse Omron-specific symbol attributes
+	tag = c.parseOmronSymbolAttributes(attrData, instance)
 
-	return tags, lastInstance, hasMore, nil
+	return tag, nil
 }
 
-// buildSymbolPath builds the EPath for symbol listing.
-func (c *Client) buildSymbolPath(startInstance uint32) cip.EPath_t {
-	builder := cip.EPath()
-
-	// Add Symbol Object class (0x6B)
-	builder = builder.Class(classSymbol)
-
-	// Add instance (using appropriate size encoding)
-	if startInstance <= 0xFF {
-		builder = builder.Instance(byte(startInstance))
-	} else if startInstance <= 0xFFFF {
-		builder = builder.Instance16(uint16(startInstance))
-	} else {
-		builder = builder.Instance32(startInstance)
-	}
-
-	path, _ := builder.Build()
-	return path
-}
-
-// parseSymbolListResponse parses the tag list data from Get Instance Attribute List response.
-// Response format per tag (each entry is nameLen + 20 bytes):
-// - Offset 0: Instance ID (2 bytes, UINT) - used for pagination
-// - Offset 2: Unknown (2 bytes)
-// - Offset 4: Name length (2 bytes, UINT)
-// - Offset 6: Tag name (nameLen bytes)
-// - Offset 6+nameLen: Symbol type (2 bytes, UINT)
-// - Offset 8+nameLen: Array size (2 bytes, UINT) - element count for arrays
-// - Remaining bytes up to nameLen+20: additional metadata
+// parseOmronSymbolAttributes parses the attribute data from Get Attributes All
+// response for an Omron Symbol Object instance.
 //
-// NOTE: This format is based on Allen-Bradley Logix. Omron NJ/NX PLCs may use
-// a different format. If parsing fails, check the raw response bytes in the debug log.
-func (c *Client) parseSymbolListResponse(data []byte) (tags []TagInfo, lastInstance uint32) {
-	logging.DebugLog("EIP/Discovery", "parseSymbolListResponse: parsing %d bytes", len(data))
+// Omron Symbol Object attributes (based on libplctag research and Wireshark captures):
+//   - Name: STRING (1-byte length prefix + chars + optional padding byte if odd)
+//   - Type: UINT (2 bytes, little-endian) - CIP data type code
+//   - Additional attributes may follow (dimensions, byte count, etc.)
+//
+// NOTE: This format differs from Allen-Bradley Logix which uses a different
+// attribute layout. The exact format may vary between Omron firmware versions.
+func (c *Client) parseOmronSymbolAttributes(data []byte, instance uint32) TagInfo {
+	tag := TagInfo{Instance: instance}
+
+	if len(data) == 0 {
+		return tag
+	}
+
+	logging.DebugLog("EIP/Discovery", "Parsing symbol instance %d: %d bytes: %X",
+		instance, len(data), data)
 
 	i := 0
-	entryNum := 0
 
-	for i < len(data) {
-		// Need at least 8 bytes to read the header (instance + unknown + nameLen)
-		if i+8 > len(data) {
-			logging.DebugLog("EIP/Discovery", "Entry %d at offset %d: insufficient header bytes (%d remaining)",
-				entryNum, i, len(data)-i)
-			break
-		}
+	// Parse name: 1-byte length prefix followed by chars
+	if i >= len(data) {
+		return tag
+	}
+	nameLen := int(data[i])
+	i++
 
-		// Instance ID at offset 0 (UINT - 2 bytes, used for pagination)
-		instance := uint32(binary.LittleEndian.Uint16(data[i : i+2]))
-
-		// Unknown field at offset 2
-		unknown := binary.LittleEndian.Uint16(data[i+2 : i+4])
-
-		// Name length at offset 4 (UINT - 2 bytes)
-		nameLen := int(binary.LittleEndian.Uint16(data[i+4 : i+6]))
-
-		logging.DebugLog("EIP/Discovery", "Entry %d at offset %d: instance=%d unknown=0x%04X nameLen=%d",
-			entryNum, i, instance, unknown, nameLen)
-
-		// Sanity check on name length
-		if nameLen > 256 || nameLen < 0 {
-			logging.DebugLog("EIP/Discovery", "Entry %d: invalid nameLen=%d, stopping parse", entryNum, nameLen)
-			logging.DebugLog("EIP/Discovery", "Raw data at offset %d: %X", i, data[i:min(i+32, len(data))])
-			break
-		}
-
-		// Each entry is nameLen + 20 bytes total (per Logix format)
-		entrySize := nameLen + 20
-		if i+entrySize > len(data) {
-			logging.DebugLog("EIP/Discovery", "Entry %d: entrySize=%d exceeds remaining data (%d bytes)",
-				entryNum, entrySize, len(data)-i)
-			logging.DebugLog("EIP/Discovery", "Raw data at offset %d: %X", i, data[i:])
-			break
-		}
-
-		// Extract the entry
-		entry := data[i : i+entrySize]
-
-		// Tag name at offset 6
-		name := string(entry[6 : 6+nameLen])
-
-		// Symbol type at offset 6+nameLen (UINT - 2 bytes)
-		typeCode := binary.LittleEndian.Uint16(entry[6+nameLen : 8+nameLen])
-
-		// Array size at offset 8+nameLen (UINT - 2 bytes) - element count for arrays
-		arraySize := binary.LittleEndian.Uint16(entry[8+nameLen : 10+nameLen])
-
-		logging.DebugLog("EIP/Discovery", "Entry %d: name=%q type=0x%04X (%s) arraySize=%d",
-			entryNum, name, typeCode, TypeName(typeCode), arraySize)
-
-		// Move to next entry
-		i += entrySize
-		entryNum++
-
-		// Skip if this looks like a partial/invalid entry
-		if name == "" || instance == 0 {
-			logging.DebugLog("EIP/Discovery", "Skipping entry: empty name or zero instance")
-			continue
-		}
-
-		// Skip system tags (internal tags starting with underscore or special prefixes)
-		if len(name) > 0 && (name[0] == '_' || name[0] == '$') {
-			logging.DebugLog("EIP/Discovery", "Skipping system tag: %s", name)
-			continue
-		}
-
-		// Calculate dimensions from array size for array types
-		var dimensions []uint32
-		if IsArray(typeCode) && arraySize > 0 {
-			dimensions = []uint32{uint32(arraySize)}
-		}
-
-		tags = append(tags, TagInfo{
-			Name:       name,
-			TypeCode:   typeCode,
-			Instance:   instance,
-			Dimensions: dimensions,
-		})
-
-		lastInstance = instance
+	// Sanity check name length
+	if nameLen <= 0 || nameLen > 255 || i+nameLen > len(data) {
+		logging.DebugLog("EIP/Discovery", "Instance %d: invalid name length %d", instance, nameLen)
+		return tag
 	}
 
-	logging.DebugLog("EIP/Discovery", "parseSymbolListResponse complete: %d tags, lastInstance=%d",
-		len(tags), lastInstance)
-	return tags, lastInstance
+	tag.Name = string(data[i : i+nameLen])
+	i += nameLen
+
+	// Omron uses odd-byte padding: if name length is odd, skip 1 padding byte
+	if nameLen%2 == 1 && i < len(data) {
+		i++ // Skip padding byte
+	}
+
+	// Parse type code (2 bytes, little-endian)
+	if i+2 > len(data) {
+		logging.DebugLog("EIP/Discovery", "Instance %d (%s): no type code", instance, tag.Name)
+		return tag
+	}
+	tag.TypeCode = binary.LittleEndian.Uint16(data[i : i+2])
+	i += 2
+
+	// Parse dimensions if this is an array type
+	if IsArray(tag.TypeCode) && i+4 <= len(data) {
+		// Try to read dimension count or element count
+		// Format varies - try reading as element count first
+		dimOrCount := binary.LittleEndian.Uint32(data[i : i+4])
+		if dimOrCount > 0 && dimOrCount < 1000000 { // Reasonable array size
+			tag.Dimensions = []uint32{dimOrCount}
+			logging.DebugLog("EIP/Discovery", "Instance %d (%s): array with %d elements",
+				instance, tag.Name, dimOrCount)
+		}
+	}
+
+	logging.DebugLog("EIP/Discovery", "Instance %d: name=%q type=0x%04X (%s) dims=%v",
+		instance, tag.Name, tag.TypeCode, TypeName(tag.TypeCode), tag.Dimensions)
+
+	return tag
 }
 
 // min returns the minimum of two integers.
@@ -307,44 +314,31 @@ func min(a, b int) int {
 	return b
 }
 
-// allTagsEIP discovers all tags using efficient CIP pagination.
-// This replaces the old instance-by-instance approach.
+// allTagsEIP discovers all tags using the Omron-specific method.
+// Uses Get Attributes All (0x01) on individual Symbol Object instances.
 func (c *Client) allTagsEIP() ([]TagInfo, error) {
-	logging.DebugLog("EIP/Discovery", "allTagsEIP: using efficient pagination method")
+	logging.DebugLog("EIP/Discovery", "allTagsEIP: using Omron-specific instance iteration method")
 	return c.listSymbols()
 }
 
-// allTagsEIPFallback is the legacy instance-by-instance discovery.
-// Used as a fallback if the efficient method fails.
-// This method uses Get Attributes All (0x01) on each instance.
+// allTagsEIPFallback is a fallback method if the primary discovery fails.
+// It uses a simpler approach with smaller instance IDs.
 func (c *Client) allTagsEIPFallback() ([]TagInfo, error) {
-	logging.DebugLog("EIP/Discovery", "allTagsEIPFallback: using legacy instance-by-instance method")
+	logging.DebugLog("EIP/Discovery", "allTagsEIPFallback: using simplified instance iteration")
 
 	var tags []TagInfo
-	instanceID := uint32(0)
 	consecutiveErrors := 0
+	const maxConsecutiveErrors = 10
 
-	for {
-		instanceID++
-
-		path, _ := cip.EPath().Class16(0x6B).Instance32(instanceID).Build()
-		req := cip.Request{
-			Service: svcGetAttributesAll,
-			Path:    path,
-		}
-
-		if instanceID <= 10 || instanceID%100 == 0 {
-			logging.DebugLog("EIP/Discovery", "Fallback: reading instance %d, path=%X", instanceID, path)
-		}
-
-		respData, err := c.sendCIPRequest(req)
+	// Use smaller instance limit for fallback
+	for instance := uint32(1); instance <= 1000; instance++ {
+		tag, err := c.getSymbolInstance(instance)
 		if err != nil {
 			consecutiveErrors++
-			if instanceID <= 10 {
-				logging.DebugLog("EIP/Discovery", "Fallback instance %d error: %v", instanceID, err)
+			if instance <= 10 {
+				logging.DebugLog("EIP/Discovery", "Fallback instance %d error: %v", instance, err)
 			}
-			// Stop after 10 consecutive errors (end of symbol table)
-			if consecutiveErrors >= 10 {
+			if consecutiveErrors >= maxConsecutiveErrors {
 				logging.DebugLog("EIP/Discovery", "Fallback: stopping after %d consecutive errors", consecutiveErrors)
 				break
 			}
@@ -353,22 +347,17 @@ func (c *Client) allTagsEIPFallback() ([]TagInfo, error) {
 
 		consecutiveErrors = 0
 
-		if len(respData) < 4 {
-			logging.DebugLog("EIP/Discovery", "Fallback instance %d: response too short (%d bytes)", instanceID, len(respData))
-			break
+		// Skip empty/system tags
+		if tag.Name == "" {
+			continue
+		}
+		if len(tag.Name) > 0 && (tag.Name[0] == '_' || tag.Name[0] == '$') {
+			continue
 		}
 
-		tag := c.parseSymbolInstance(respData, instanceID)
-		if tag.Name != "" {
-			tags = append(tags, tag)
-			if len(tags) <= 10 {
-				logging.DebugLog("EIP/Discovery", "Fallback: found tag %q (type=0x%04X)", tag.Name, tag.TypeCode)
-			}
-		}
-
-		if instanceID > 10000 {
-			logging.DebugLog("EIP/Discovery", "Fallback: reached instance limit (10000)")
-			break
+		tags = append(tags, tag)
+		if len(tags) <= 10 {
+			logging.DebugLog("EIP/Discovery", "Fallback: found tag %q (type=0x%04X)", tag.Name, tag.TypeCode)
 		}
 	}
 

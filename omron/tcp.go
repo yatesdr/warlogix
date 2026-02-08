@@ -105,10 +105,15 @@ func (t *tcpTransport) negotiateNodeAddress() error {
 	// Error code: 0
 	binary.BigEndian.PutUint32(req[12:16], 0)
 
-	// Client node (0 = auto-assign)
-	binary.BigEndian.PutUint32(req[16:20], uint32(t.localNode))
+	// Client node: Always request 0 (auto-assign) for FINS/TCP
+	// The PLC will assign a valid node within its supported range.
+	// Unlike UDP where we use IP-based node detection, TCP negotiation
+	// should let the PLC assign the node to avoid "node out of range" errors
+	// (error 0x00000002) on PLCs with limited node ranges like CP1L-E.
+	requestedNode := uint32(0)
+	binary.BigEndian.PutUint32(req[16:20], requestedNode)
 
-	logging.DebugLog("FINS/TCP", "Node address request: clientNode=%d (0=auto-assign)", t.localNode)
+	logging.DebugLog("FINS/TCP", "Node address request: clientNode=%d (0=auto-assign)", requestedNode)
 	logging.DebugTX("FINS/TCP", req)
 
 	// Set deadline

@@ -72,18 +72,33 @@ const (
 	TypeString uint16 = 0x0C // STRING
 
 	// CIP-specific types (for EIP transport)
+	// These are standard CIP type codes used by both Rockwell and Omron
 	TypeCIPBool   uint16 = 0xC1 // CIP BOOL
-	TypeCIPSINT   uint16 = 0xC2 // CIP SINT
-	TypeCIPINT    uint16 = 0xC3 // CIP INT
-	TypeCIPDINT   uint16 = 0xC4 // CIP DINT
-	TypeCIPLINT   uint16 = 0xC5 // CIP LINT
-	TypeCIPUSINT  uint16 = 0xC6 // CIP USINT
-	TypeCIPUINT   uint16 = 0xC7 // CIP UINT
-	TypeCIPUDINT  uint16 = 0xC8 // CIP UDINT
-	TypeCIPULINT  uint16 = 0xC9 // CIP ULINT
-	TypeCIPREAL   uint16 = 0xCA // CIP REAL
-	TypeCIPLREAL  uint16 = 0xCB // CIP LREAL
-	TypeCIPSTRING uint16 = 0xD0 // CIP STRING
+	TypeCIPSINT   uint16 = 0xC2 // CIP SINT (1 byte signed)
+	TypeCIPINT    uint16 = 0xC3 // CIP INT (2 bytes signed)
+	TypeCIPDINT   uint16 = 0xC4 // CIP DINT (4 bytes signed)
+	TypeCIPLINT   uint16 = 0xC5 // CIP LINT (8 bytes signed)
+	TypeCIPUSINT  uint16 = 0xC6 // CIP USINT (1 byte unsigned)
+	TypeCIPUINT   uint16 = 0xC7 // CIP UINT (2 bytes unsigned)
+	TypeCIPUDINT  uint16 = 0xC8 // CIP UDINT (4 bytes unsigned)
+	TypeCIPULINT  uint16 = 0xC9 // CIP ULINT (8 bytes unsigned)
+	TypeCIPREAL   uint16 = 0xCA // CIP REAL (4 bytes float)
+	TypeCIPLREAL  uint16 = 0xCB // CIP LREAL (8 bytes double)
+	TypeCIPSTRING uint16 = 0xD0 // CIP STRING (Omron: 16-bit LE length prefix)
+
+	// Omron-specific type codes
+	// Based on libplctag research and Wireshark captures
+	TypeOmronByte   uint16 = 0xD1 // Omron BYTE (sometimes used instead of USINT)
+	TypeOmronWord   uint16 = 0xD2 // Omron WORD (sometimes used instead of UINT)
+	TypeOmronDWord  uint16 = 0xD3 // Omron DWORD (sometimes used instead of UDINT)
+	TypeOmronLWord  uint16 = 0xD4 // Omron LWORD (sometimes used instead of ULINT)
+	TypeOmronTime   uint16 = 0xDB // Omron TIME (4 bytes, milliseconds)
+	TypeOmronDate   uint16 = 0xDC // Omron DATE
+	TypeOmronTOD    uint16 = 0xDD // Omron TIME_OF_DAY
+	TypeOmronDT     uint16 = 0xDE // Omron DATE_AND_TIME
+
+	// Structure/UDT type indicator (high byte = 0x02 indicates struct)
+	TypeStructFlag uint16 = 0x0200
 
 	// Pseudo-types
 	TypeUnknown uint16 = 0xFFFF
@@ -95,6 +110,20 @@ const (
 // IsArray returns true if the type code represents an array.
 func IsArray(typeCode uint16) bool {
 	return (typeCode & TypeArrayFlag) != 0
+}
+
+// IsStruct returns true if the type code represents a structure/UDT.
+func IsStruct(typeCode uint16) bool {
+	return (BaseType(typeCode) & TypeStructFlag) == TypeStructFlag
+}
+
+// StructID returns the structure ID from a structure type code.
+// Returns 0 if the type is not a structure.
+func StructID(typeCode uint16) uint16 {
+	if !IsStruct(typeCode) {
+		return 0
+	}
+	return BaseType(typeCode) &^ TypeStructFlag
 }
 
 // MakeArrayType returns the array version of a base type.
@@ -112,25 +141,35 @@ func TypeName(typeCode uint16) string {
 	baseType := BaseType(typeCode)
 	isArr := IsArray(typeCode)
 
+	// Check for structure type (high byte = 0x02)
+	if (baseType & TypeStructFlag) == TypeStructFlag {
+		structID := baseType &^ TypeStructFlag
+		name := fmt.Sprintf("STRUCT_%02X", structID)
+		if isArr {
+			return name + "[]"
+		}
+		return name
+	}
+
 	var name string
 	switch baseType {
 	case TypeVoid:
 		name = "VOID"
 	case TypeBool, TypeCIPBool:
 		name = "BOOL"
-	case TypeByte, TypeCIPUSINT:
+	case TypeByte, TypeCIPUSINT, TypeOmronByte:
 		name = "BYTE"
 	case TypeSByte, TypeCIPSINT:
 		name = "SINT"
-	case TypeWord, TypeCIPUINT:
+	case TypeWord, TypeCIPUINT, TypeOmronWord:
 		name = "WORD"
 	case TypeInt16, TypeCIPINT:
 		name = "INT"
-	case TypeDWord, TypeCIPUDINT:
+	case TypeDWord, TypeCIPUDINT, TypeOmronDWord:
 		name = "DWORD"
 	case TypeInt32, TypeCIPDINT:
 		name = "DINT"
-	case TypeLWord, TypeCIPULINT:
+	case TypeLWord, TypeCIPULINT, TypeOmronLWord:
 		name = "LWORD"
 	case TypeInt64, TypeCIPLINT:
 		name = "LINT"
@@ -140,6 +179,14 @@ func TypeName(typeCode uint16) string {
 		name = "LREAL"
 	case TypeString, TypeCIPSTRING:
 		name = "STRING"
+	case TypeOmronTime:
+		name = "TIME"
+	case TypeOmronDate:
+		name = "DATE"
+	case TypeOmronTOD:
+		name = "TIME_OF_DAY"
+	case TypeOmronDT:
+		name = "DATE_AND_TIME"
 	default:
 		name = fmt.Sprintf("TYPE_%04X", baseType)
 	}
@@ -186,19 +233,28 @@ func TypeCodeFromName(name string) (uint16, bool) {
 
 // TypeSize returns the byte size for a primitive type code.
 func TypeSize(typeCode uint16) int {
-	switch BaseType(typeCode) {
+	baseType := BaseType(typeCode)
+
+	// Structures have variable size
+	if (baseType & TypeStructFlag) == TypeStructFlag {
+		return 0
+	}
+
+	switch baseType {
 	case TypeBool, TypeCIPBool:
 		return 2 // BOOL is read as a word in FINS
-	case TypeByte, TypeSByte, TypeCIPUSINT, TypeCIPSINT:
+	case TypeByte, TypeSByte, TypeCIPUSINT, TypeCIPSINT, TypeOmronByte:
 		return 1
-	case TypeWord, TypeInt16, TypeCIPUINT, TypeCIPINT:
+	case TypeWord, TypeInt16, TypeCIPUINT, TypeCIPINT, TypeOmronWord:
 		return 2
-	case TypeDWord, TypeInt32, TypeReal, TypeCIPUDINT, TypeCIPDINT, TypeCIPREAL:
+	case TypeDWord, TypeInt32, TypeReal, TypeCIPUDINT, TypeCIPDINT, TypeCIPREAL, TypeOmronDWord, TypeOmronTime:
 		return 4
-	case TypeLWord, TypeInt64, TypeLReal, TypeCIPULINT, TypeCIPLINT, TypeCIPLREAL:
+	case TypeLWord, TypeInt64, TypeLReal, TypeCIPULINT, TypeCIPLINT, TypeCIPLREAL, TypeOmronLWord, TypeOmronDT:
 		return 8
+	case TypeOmronDate, TypeOmronTOD:
+		return 4
 	default:
-		return 0 // Variable or unknown
+		return 0 // Variable or unknown (including STRING)
 	}
 }
 

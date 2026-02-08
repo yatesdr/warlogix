@@ -87,7 +87,8 @@ type TagPackMember struct {
 
 // UIConfig stores user interface preferences.
 type UIConfig struct {
-	Theme string `yaml:"theme,omitempty"` // Theme name: default, retro, mono, amber, highcontrast
+	Theme     string `yaml:"theme,omitempty"`      // Theme name: default, retro, mono, amber, highcontrast
+	ASCIIMode bool   `yaml:"ascii_mode,omitempty"` // Use ASCII characters for borders (for terminals without Unicode)
 }
 
 // PLCConfig stores configuration for a single PLC connection.
