@@ -455,14 +455,19 @@ func discoverS7(cidr string, timeout time.Duration, concurrency int) []Discovere
 
 // discoverADS scans for Beckhoff TwinCAT PLCs.
 func discoverADS(cidr string, timeout time.Duration, concurrency int) []DiscoveredDevice {
+	logging.DebugLog("tui", "discoverADS: calling ads.DiscoverSubnet")
 	devices, err := ads.DiscoverSubnet(cidr, timeout, concurrency)
+	logging.DebugLog("tui", "discoverADS: ads.DiscoverSubnet returned, err=%v, devices=%d", err, len(devices))
 	if err != nil {
 		logging.DebugLog("Discovery", "ADS scan error: %v", err)
 		return nil
 	}
 
+	logging.DebugLog("tui", "discoverADS: processing %d devices", len(devices))
 	var results []DiscoveredDevice
-	for _, dev := range devices {
+	for i, dev := range devices {
+		logging.DebugLog("tui", "discoverADS: device %d: IP=%s Connected=%v ProductName=%q",
+			i, dev.IP.String(), dev.Connected, dev.ProductName)
 		if !dev.Connected {
 			continue
 		}
