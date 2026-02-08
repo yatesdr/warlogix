@@ -208,7 +208,7 @@ func (t *PLCsTab) Refresh() {
 		row := i + 1
 
 		// Status indicator - use fixed colors (theme-independent)
-		indicatorCell := tview.NewTableCell("●").SetExpansion(0)
+		indicatorCell := tview.NewTableCell(GetStatusBullet()).SetExpansion(0)
 		switch plc.GetStatus() {
 		case plcman.StatusConnected:
 			indicatorCell.SetTextColor(IndicatorGreen)

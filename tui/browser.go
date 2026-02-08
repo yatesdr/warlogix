@@ -843,23 +843,21 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 			writeValue = v
 		}
 
-		// Capture values for goroutine before closing dialog
+		// Perform write synchronously - goroutines seem to cause issues in PTY mode
+		// The write should be quick (just network I/O)
 		plcName := t.selectedPLC
-		writeVal := writeValue
-		tagN := tagName
+		err := t.app.manager.WriteTag(plcName, tagName, writeValue)
 
-		// Close dialog synchronously (safe - we're on main UI thread)
+		// Close dialog after write completes
 		t.app.pages.RemovePage(pageName)
 		t.app.pages.SwitchToPage("main")
 		t.app.app.SetFocus(t.tree)
-		t.app.setStatus(fmt.Sprintf("Writing %v to %s...", writeVal, tagN))
 
-		// Perform write in background goroutine to not block UI
-		// Don't try to update UI from goroutine - let polling show the result
-		go func() {
-			_ = t.app.manager.WriteTag(plcName, tagN, writeVal)
-			// Status will be updated by next poll cycle showing new value
-		}()
+		if err != nil {
+			t.app.setStatus(fmt.Sprintf("Write failed: %v", err))
+		} else {
+			t.app.setStatus(fmt.Sprintf("Wrote %v to %s", writeValue, tagName))
+		}
 	})
 
 	form.AddButton("Cancel", closeDialog)

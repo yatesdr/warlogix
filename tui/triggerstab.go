@@ -278,7 +278,7 @@ func (t *TriggersTab) Refresh() {
 		status, _, count, _ := t.app.triggerMgr.GetTriggerStatus(cfg.Name)
 
 		// Status indicator - use fixed colors (theme-independent)
-		indicatorCell := tview.NewTableCell("●").SetExpansion(0)
+		indicatorCell := tview.NewTableCell(GetStatusBullet()).SetExpansion(0)
 		switch status {
 		case trigger.StatusArmed:
 			indicatorCell.SetTextColor(IndicatorGreen)

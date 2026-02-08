@@ -350,7 +350,7 @@ func (t *PacksTab) Refresh() {
 		row := i + 1
 
 		// Status indicator - use fixed colors (theme-independent)
-		indicatorCell := tview.NewTableCell("●").SetExpansion(0)
+		indicatorCell := tview.NewTableCell(GetStatusBullet()).SetExpansion(0)
 		if cfg.Enabled {
 			indicatorCell.SetTextColor(IndicatorGreen)
 		} else {
@@ -358,7 +358,7 @@ func (t *PacksTab) Refresh() {
 		}
 
 		// Service indicators: green=active, red=enabled but not connected, gray=disabled
-		mqttCell := tview.NewTableCell("●").SetExpansion(0)
+		mqttCell := tview.NewTableCell(GetStatusBullet()).SetExpansion(0)
 		if !cfg.MQTTEnabled {
 			mqttCell.SetTextColor(IndicatorGray)
 		} else if mqttConnected {
@@ -367,7 +367,7 @@ func (t *PacksTab) Refresh() {
 			mqttCell.SetTextColor(IndicatorRed)
 		}
 
-		kafkaCell := tview.NewTableCell("●").SetExpansion(0)
+		kafkaCell := tview.NewTableCell(GetStatusBullet()).SetExpansion(0)
 		if !cfg.KafkaEnabled {
 			kafkaCell.SetTextColor(IndicatorGray)
 		} else if kafkaConnected {
@@ -376,7 +376,7 @@ func (t *PacksTab) Refresh() {
 			kafkaCell.SetTextColor(IndicatorRed)
 		}
 
-		valkeyCell := tview.NewTableCell("●").SetExpansion(0)
+		valkeyCell := tview.NewTableCell(GetStatusBullet()).SetExpansion(0)
 		if !cfg.ValkeyEnabled {
 			valkeyCell.SetTextColor(IndicatorGray)
 		} else if valkeyConnected {

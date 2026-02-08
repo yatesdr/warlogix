@@ -946,6 +946,14 @@ func GetCheckboxUnchecked() string {
 	return CheckboxUnchecked
 }
 
+// GetStatusBullet returns the appropriate status bullet indicator for the current mode.
+func GetStatusBullet() string {
+	if ASCIIModeEnabled {
+		return "*"
+	}
+	return "●"
+}
+
 // Tab labels
 const (
 	TabPLCs     = "PLCs"
