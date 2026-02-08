@@ -270,19 +270,12 @@ func (t *PLCsTab) discover() {
 		return
 	}
 
-	t.app.setStatus("Discovering PLCs...")
+	t.app.setStatus("Discovering PLCs (EIP broadcast)...")
 
 	// Start discovery in background, show modal when we have initial results
 	go func() {
-		// Get local subnets for port scanning
-		subnets := driver.GetLocalSubnets()
-		scanCIDR := ""
-		if len(subnets) > 0 {
-			scanCIDR = subnets[0]
-		}
-
-		// Run discovery (blocking, with 5 second timeout for initial results)
-		devices := driver.DiscoverAll("255.255.255.255", scanCIDR, 500*time.Millisecond, 50)
+		// Use EIP-only discovery (more stable, works for Allen-Bradley and Omron NJ/NX)
+		devices := driver.DiscoverEIPOnly("255.255.255.255", 3*time.Second)
 
 		// Merge with cache
 		discoveredDevicesCacheMu.Lock()
@@ -354,6 +347,13 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 	// Track filtered indices to map selection back to original devices
 	var filteredIndices []int
 
+	// Helper to escape tview style tags (square brackets)
+	escapeText := func(s string) string {
+		s = strings.ReplaceAll(s, "[", "[[")
+		s = strings.ReplaceAll(s, "]", "]]")
+		return s
+	}
+
 	// Function to populate list based on filter
 	populateList := func() {
 		list.Clear()
@@ -362,8 +362,11 @@ func (t *PLCsTab) showDiscoveryModal(devices []driver.DiscoveredDevice) {
 
 		for i, dev := range devices {
 			ip := dev.IP.String()
-			mainText := fmt.Sprintf("%s - %s", ip, dev.ProductName)
-			secondaryText := fmt.Sprintf("  %s | %s | %s", dev.Vendor, dev.Family, dev.Protocol)
+			// Escape square brackets in product names to prevent tview style tag interpretation
+			productName := escapeText(dev.ProductName)
+			vendor := escapeText(dev.Vendor)
+			mainText := fmt.Sprintf("%s - %s", ip, productName)
+			secondaryText := fmt.Sprintf("  %s | %s | %s", vendor, dev.Family, dev.Protocol)
 
 			// Apply filter
 			if filter != "" {

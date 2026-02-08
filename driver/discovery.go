@@ -386,6 +386,12 @@ func DiscoverAll(broadcastIP string, scanCIDR string, timeout time.Duration, con
 	return deduplicateDevices(results)
 }
 
+// DiscoverEIPOnly performs EIP broadcast discovery only.
+// This is the most stable discovery method, working for Allen-Bradley and Omron NJ/NX PLCs.
+func DiscoverEIPOnly(broadcastIP string, timeout time.Duration) []DiscoveredDevice {
+	return discoverEIP(broadcastIP, timeout)
+}
+
 // discoverEIP performs EIP broadcast discovery.
 func discoverEIP(broadcastIP string, timeout time.Duration) []DiscoveredDevice {
 	if broadcastIP == "" {
