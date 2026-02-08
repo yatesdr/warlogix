@@ -13,6 +13,7 @@ import (
 
 	"warlogix/config"
 	"warlogix/driver"
+	"warlogix/logging"
 	"warlogix/plcman"
 )
 
@@ -296,8 +297,16 @@ func (t *PLCsTab) discover() {
 
 	// Run discovery in background, show modal when complete
 	go func() {
+		logging.DebugLog("tui", "Discovery: starting DiscoverAll with CIDR=%s", scanCIDR)
+
 		// Use full multi-protocol discovery
 		devices := driver.DiscoverAll("255.255.255.255", scanCIDR, 500*time.Millisecond, 50)
+
+		logging.DebugLog("tui", "Discovery: DiscoverAll returned %d devices", len(devices))
+		for i, dev := range devices {
+			logging.DebugLog("tui", "Discovery: device %d: IP=%s Protocol=%s Family=%s ProductName=%q",
+				i, dev.IP.String(), dev.Protocol, dev.Family, dev.ProductName)
+		}
 
 		// Add to cache
 		discoveredDevicesCacheMu.Lock()
@@ -330,6 +339,8 @@ func (t *PLCsTab) discover() {
 
 func (t *PLCsTab) showDiscoveryModal() {
 	const pageName = "discovery"
+
+	DebugLog("Discovery modal: showDiscoveryModal called")
 
 	th := CurrentTheme
 
@@ -388,11 +399,18 @@ func (t *PLCsTab) showDiscoveryModal() {
 		copy(devices, discoveredDevicesCache)
 		discoveredDevicesCacheMu.Unlock()
 
+		DebugLog("Discovery modal: populateTable called with %d devices", len(devices))
+
 		for i, dev := range devices {
 			ip := escapeTviewText(dev.IP.String())
 			driverName := escapeTviewText(string(dev.Family))
 			protocol := escapeTviewText(dev.Protocol)
 			deviceId := escapeTviewText(dev.ProductName)
+
+			DebugLog("Discovery modal: row %d - raw: IP=%q Protocol=%q Family=%q ProductName=%q",
+				i, dev.IP.String(), dev.Protocol, dev.Family, dev.ProductName)
+			DebugLog("Discovery modal: row %d - escaped: ip=%q driver=%q protocol=%q deviceId=%q",
+				i, ip, driverName, protocol, deviceId)
 
 			// Apply filter
 			if filter != "" {
@@ -410,6 +428,8 @@ func (t *PLCsTab) showDiscoveryModal() {
 			table.SetCell(row, 2, tview.NewTableCell(protocol).SetExpansion(1))
 			table.SetCell(row, 3, tview.NewTableCell(deviceId).SetExpansion(2))
 		}
+
+		DebugLog("Discovery modal: table populated with %d rows", len(filteredIndices))
 
 		// Update title with count
 		total := len(devices)
