@@ -2458,6 +2458,12 @@ func parseArrayValue(input string) (interface{}, error) {
 //   - "one, two, three" -> ["one", "two", "three"]
 //   - `"a,b", "c,d"` -> ["a,b", "c,d"]
 func parseQuotedParts(s string) []string {
+	// First, normalize smart quotes to regular ASCII quotes
+	s = strings.ReplaceAll(s, "\u201C", "\"") // left double quote "
+	s = strings.ReplaceAll(s, "\u201D", "\"") // right double quote "
+	s = strings.ReplaceAll(s, "\u2018", "'")  // left single quote '
+	s = strings.ReplaceAll(s, "\u2019", "'")  // right single quote '
+
 	var parts []string
 	var current strings.Builder
 	inQuote := false
