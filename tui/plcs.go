@@ -277,12 +277,19 @@ func (t *PLCsTab) discover() {
 		return
 	}
 
-	t.app.setStatus("Scanning network (EIP broadcast)...")
+	// Get local subnets for port scanning (S7, ADS, FINS)
+	subnets := driver.GetLocalSubnets()
+	scanCIDR := ""
+	if len(subnets) > 0 {
+		scanCIDR = subnets[0]
+	}
+
+	t.app.setStatus("Scanning network (EIP, S7, ADS, FINS)...")
 
 	// Run discovery in background, show modal when complete
 	go func() {
-		// Use EIP-only discovery (stable, no port scanning)
-		devices := driver.DiscoverEIPOnly("255.255.255.255", 5*time.Second)
+		// Use full multi-protocol discovery
+		devices := driver.DiscoverAll("255.255.255.255", scanCIDR, 500*time.Millisecond, 50)
 
 		// Add to cache
 		discoveredDevicesCacheMu.Lock()
