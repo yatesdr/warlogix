@@ -834,14 +834,318 @@ func (c *Client) ReadAll() ([]*TagValue, error) {
 	return c.Read(tagNames...)
 }
 
-// Write writes a value to a tag. The value type is inferred and converted appropriately.
-// Supported value types: bool, int/int8/int16/int32/int64, uint/uint8/uint16/uint32/uint64,
-// float32/float64, string.
+// Write writes a value to a tag. If the tag's type is known from discovery,
+// the value is converted to match. Otherwise, the type is inferred from the Go value type.
 func (c *Client) Write(tagName string, value interface{}) error {
 	if c == nil || c.plc == nil {
 		return fmt.Errorf("Write: nil client")
 	}
 
+	// Look up the tag's actual type if available
+	if info, ok := c.tagInfo[tagName]; ok && info.TypeCode != 0 {
+		return c.writeTyped(tagName, value, info.TypeCode)
+	}
+
+	// Fall back to inferring type from value
+	return c.writeInferred(tagName, value)
+}
+
+// writeTyped writes a value using the specified CIP type code.
+// The value is converted to match the target type.
+func (c *Client) writeTyped(tagName string, value interface{}, targetType uint16) error {
+	baseType := targetType & 0x0FFF
+	isArray := (targetType & TypeArrayMask) != 0
+
+	// Handle arrays
+	if isArray {
+		return c.writeArrayTyped(tagName, value, baseType)
+	}
+
+	// Convert value to target type
+	data, err := c.convertToType(value, baseType)
+	if err != nil {
+		return fmt.Errorf("Write %s: %w", tagName, err)
+	}
+
+	return c.plc.WriteTag(tagName, baseType, data)
+}
+
+// convertToType converts a Go value to bytes for the specified CIP type.
+func (c *Client) convertToType(value interface{}, targetType uint16) ([]byte, error) {
+	// Extract numeric value from the input
+	var intVal int64
+	var floatVal float64
+	var strVal string
+	var boolVal bool
+	var isInt, isFloat, isStr, isBool bool
+
+	switch v := value.(type) {
+	case bool:
+		boolVal = v
+		isBool = true
+		if v {
+			intVal = 1
+		}
+		isInt = true
+	case int8:
+		intVal = int64(v)
+		isInt = true
+	case int16:
+		intVal = int64(v)
+		isInt = true
+	case int32:
+		intVal = int64(v)
+		isInt = true
+	case int64:
+		intVal = v
+		isInt = true
+	case int:
+		intVal = int64(v)
+		isInt = true
+	case uint8:
+		intVal = int64(v)
+		isInt = true
+	case uint16:
+		intVal = int64(v)
+		isInt = true
+	case uint32:
+		intVal = int64(v)
+		isInt = true
+	case uint64:
+		intVal = int64(v)
+		isInt = true
+	case uint:
+		intVal = int64(v)
+		isInt = true
+	case float32:
+		floatVal = float64(v)
+		isFloat = true
+	case float64:
+		floatVal = v
+		isFloat = true
+	case string:
+		strVal = v
+		isStr = true
+	default:
+		return nil, fmt.Errorf("unsupported value type %T", value)
+	}
+
+	// Convert to target type
+	switch targetType {
+	case TypeBOOL:
+		if isBool {
+			if boolVal {
+				return []byte{1}, nil
+			}
+			return []byte{0}, nil
+		}
+		if isInt {
+			if intVal != 0 {
+				return []byte{1}, nil
+			}
+			return []byte{0}, nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to BOOL", value)
+
+	case TypeSINT:
+		if isInt {
+			return []byte{byte(int8(intVal))}, nil
+		}
+		if isFloat {
+			return []byte{byte(int8(floatVal))}, nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to SINT", value)
+
+	case TypeINT:
+		if isInt {
+			return binary.LittleEndian.AppendUint16(nil, uint16(int16(intVal))), nil
+		}
+		if isFloat {
+			return binary.LittleEndian.AppendUint16(nil, uint16(int16(floatVal))), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to INT", value)
+
+	case TypeDINT:
+		if isInt {
+			return binary.LittleEndian.AppendUint32(nil, uint32(int32(intVal))), nil
+		}
+		if isFloat {
+			return binary.LittleEndian.AppendUint32(nil, uint32(int32(floatVal))), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to DINT", value)
+
+	case TypeLINT:
+		if isInt {
+			return binary.LittleEndian.AppendUint64(nil, uint64(intVal)), nil
+		}
+		if isFloat {
+			return binary.LittleEndian.AppendUint64(nil, uint64(int64(floatVal))), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to LINT", value)
+
+	case TypeUSINT:
+		if isInt {
+			return []byte{byte(uint8(intVal))}, nil
+		}
+		if isFloat {
+			return []byte{byte(uint8(floatVal))}, nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to USINT", value)
+
+	case TypeUINT:
+		if isInt {
+			return binary.LittleEndian.AppendUint16(nil, uint16(intVal)), nil
+		}
+		if isFloat {
+			return binary.LittleEndian.AppendUint16(nil, uint16(floatVal)), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to UINT", value)
+
+	case TypeUDINT:
+		if isInt {
+			return binary.LittleEndian.AppendUint32(nil, uint32(intVal)), nil
+		}
+		if isFloat {
+			return binary.LittleEndian.AppendUint32(nil, uint32(floatVal)), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to UDINT", value)
+
+	case TypeULINT:
+		if isInt {
+			return binary.LittleEndian.AppendUint64(nil, uint64(intVal)), nil
+		}
+		if isFloat {
+			return binary.LittleEndian.AppendUint64(nil, uint64(floatVal)), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to ULINT", value)
+
+	case TypeREAL:
+		if isFloat {
+			return binary.LittleEndian.AppendUint32(nil, math.Float32bits(float32(floatVal))), nil
+		}
+		if isInt {
+			return binary.LittleEndian.AppendUint32(nil, math.Float32bits(float32(intVal))), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to REAL", value)
+
+	case TypeLREAL:
+		if isFloat {
+			return binary.LittleEndian.AppendUint64(nil, math.Float64bits(floatVal)), nil
+		}
+		if isInt {
+			return binary.LittleEndian.AppendUint64(nil, math.Float64bits(float64(intVal))), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to LREAL", value)
+
+	case TypeSTRING:
+		if isStr {
+			strBytes := []byte(strVal)
+			data := binary.LittleEndian.AppendUint32(nil, uint32(len(strBytes)))
+			data = append(data, strBytes...)
+			return data, nil
+		}
+		// Convert numbers to string
+		if isInt {
+			strBytes := []byte(fmt.Sprintf("%d", intVal))
+			data := binary.LittleEndian.AppendUint32(nil, uint32(len(strBytes)))
+			data = append(data, strBytes...)
+			return data, nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to STRING", value)
+
+	case TypeShortSTRING:
+		if isStr {
+			strBytes := []byte(strVal)
+			if len(strBytes) > 255 {
+				strBytes = strBytes[:255]
+			}
+			data := []byte{byte(len(strBytes))}
+			data = append(data, strBytes...)
+			return data, nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to SHORT_STRING", value)
+
+	default:
+		return nil, fmt.Errorf("unsupported target type 0x%04X", targetType)
+	}
+}
+
+// writeArrayTyped writes an array value with the specified element type.
+func (c *Client) writeArrayTyped(tagName string, value interface{}, elemType uint16) error {
+	var data []byte
+	var count int
+
+	switch v := value.(type) {
+	case []bool:
+		count = len(v)
+		for _, val := range v {
+			elem, _ := c.convertToType(val, elemType)
+			data = append(data, elem...)
+		}
+	case []int32:
+		count = len(v)
+		for _, val := range v {
+			elem, err := c.convertToType(val, elemType)
+			if err != nil {
+				return err
+			}
+			data = append(data, elem...)
+		}
+	case []int64:
+		count = len(v)
+		for _, val := range v {
+			elem, err := c.convertToType(val, elemType)
+			if err != nil {
+				return err
+			}
+			data = append(data, elem...)
+		}
+	case []float32:
+		count = len(v)
+		for _, val := range v {
+			elem, err := c.convertToType(val, elemType)
+			if err != nil {
+				return err
+			}
+			data = append(data, elem...)
+		}
+	case []float64:
+		count = len(v)
+		for _, val := range v {
+			elem, err := c.convertToType(val, elemType)
+			if err != nil {
+				return err
+			}
+			data = append(data, elem...)
+		}
+	case []string:
+		count = len(v)
+		for _, val := range v {
+			elem, err := c.convertToType(val, elemType)
+			if err != nil {
+				return err
+			}
+			// For STRING arrays, pad each element to 88 bytes
+			if elemType == TypeSTRING {
+				for len(elem) < 88 {
+					elem = append(elem, 0)
+				}
+			}
+			data = append(data, elem...)
+		}
+	default:
+		return fmt.Errorf("unsupported array type %T", value)
+	}
+
+	if count == 0 {
+		return fmt.Errorf("empty array")
+	}
+
+	return c.plc.WriteTagCount(tagName, elemType, data, uint16(count))
+}
+
+// writeInferred writes using type inferred from the Go value (fallback when tag type unknown).
+func (c *Client) writeInferred(tagName string, value interface{}) error {
 	var dataType uint16
 	var data []byte
 
@@ -871,7 +1175,6 @@ func (c *Client) Write(tagName string, value interface{}) error {
 		data = binary.LittleEndian.AppendUint64(nil, uint64(v))
 
 	case int:
-		// Default int to DINT (most common)
 		dataType = TypeDINT
 		data = binary.LittleEndian.AppendUint32(nil, uint32(v))
 
@@ -892,7 +1195,6 @@ func (c *Client) Write(tagName string, value interface{}) error {
 		data = binary.LittleEndian.AppendUint64(nil, v)
 
 	case uint:
-		// Default uint to UDINT
 		dataType = TypeUDINT
 		data = binary.LittleEndian.AppendUint32(nil, uint32(v))
 
@@ -905,13 +1207,11 @@ func (c *Client) Write(tagName string, value interface{}) error {
 		data = binary.LittleEndian.AppendUint64(nil, math.Float64bits(v))
 
 	case string:
-		// Write as Logix STRING (4-byte length prefix + data)
 		dataType = TypeSTRING
 		strBytes := []byte(v)
 		data = binary.LittleEndian.AppendUint32(nil, uint32(len(strBytes)))
 		data = append(data, strBytes...)
 
-	// Array types
 	case []bool:
 		if len(v) == 0 {
 			return fmt.Errorf("Write: empty array")
@@ -940,7 +1240,6 @@ func (c *Client) Write(tagName string, value interface{}) error {
 		if len(v) == 0 {
 			return fmt.Errorf("Write: empty array")
 		}
-		// Use DINT for arrays since it's more common than LINT
 		dataType = TypeDINT
 		for _, val := range v {
 			data = binary.LittleEndian.AppendUint32(data, uint32(val))
@@ -961,7 +1260,6 @@ func (c *Client) Write(tagName string, value interface{}) error {
 		if len(v) == 0 {
 			return fmt.Errorf("Write: empty array")
 		}
-		// Use REAL for arrays since it's more common than LREAL
 		dataType = TypeREAL
 		for _, val := range v {
 			data = binary.LittleEndian.AppendUint32(data, math.Float32bits(float32(val)))
@@ -972,17 +1270,14 @@ func (c *Client) Write(tagName string, value interface{}) error {
 		if len(v) == 0 {
 			return fmt.Errorf("Write: empty array")
 		}
-		// Each STRING is 4-byte length prefix + data, padded to 88 bytes total (Logix STRING)
 		dataType = TypeSTRING
 		for _, s := range v {
 			strBytes := []byte(s)
 			if len(strBytes) > 82 {
-				strBytes = strBytes[:82] // Max 82 chars for Logix STRING
+				strBytes = strBytes[:82]
 			}
-			// 4-byte length + 84 bytes data = 88 bytes per string
 			elem := binary.LittleEndian.AppendUint32(nil, uint32(len(strBytes)))
 			elem = append(elem, strBytes...)
-			// Pad to 84 bytes of character data
 			for len(elem) < 88 {
 				elem = append(elem, 0)
 			}
