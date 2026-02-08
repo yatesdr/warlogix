@@ -1065,6 +1065,42 @@ func (c *Client) convertToType(value interface{}, targetType uint16) ([]byte, er
 		}
 		return nil, fmt.Errorf("cannot convert %T to SHORT_STRING", value)
 
+	case TypeBYTE:
+		if isInt {
+			return []byte{byte(uint8(intVal))}, nil
+		}
+		if isFloat {
+			return []byte{byte(uint8(floatVal))}, nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to BYTE", value)
+
+	case TypeWORD:
+		if isInt {
+			return binary.LittleEndian.AppendUint16(nil, uint16(intVal)), nil
+		}
+		if isFloat {
+			return binary.LittleEndian.AppendUint16(nil, uint16(floatVal)), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to WORD", value)
+
+	case TypeDWORD:
+		if isInt {
+			return binary.LittleEndian.AppendUint32(nil, uint32(intVal)), nil
+		}
+		if isFloat {
+			return binary.LittleEndian.AppendUint32(nil, uint32(floatVal)), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to DWORD", value)
+
+	case TypeLWORD:
+		if isInt {
+			return binary.LittleEndian.AppendUint64(nil, uint64(intVal)), nil
+		}
+		if isFloat {
+			return binary.LittleEndian.AppendUint64(nil, uint64(floatVal)), nil
+		}
+		return nil, fmt.Errorf("cannot convert %T to LWORD", value)
+
 	default:
 		return nil, fmt.Errorf("unsupported target type 0x%04X", targetType)
 	}

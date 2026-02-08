@@ -25,10 +25,17 @@ const (
 	TypeSTRING      uint16 = 0x00D0 // Logix STRING (82 bytes: 4-byte len + 82 chars)
 	TypeShortSTRING uint16 = 0x00DA // Short string
 
-	// Bit string types (arrays of bits)
-	TypeBitString8  uint16 = 0x00D1 // 8 bits
-	TypeBitString16 uint16 = 0x00D2 // 16 bits
-	TypeBitString32 uint16 = 0x00D3 // 32 bits
+	// Bit string types (also known as BYTE/WORD/DWORD/LWORD)
+	TypeBitString8  uint16 = 0x00D1 // 8 bits (BYTE)
+	TypeBitString16 uint16 = 0x00D2 // 16 bits (WORD)
+	TypeBitString32 uint16 = 0x00D3 // 32 bits (DWORD)
+	TypeBitString64 uint16 = 0x00D4 // 64 bits (LWORD)
+
+	// Aliases for bit string types
+	TypeBYTE  = TypeBitString8
+	TypeWORD  = TypeBitString16
+	TypeDWORD = TypeBitString32
+	TypeLWORD = TypeBitString64
 
 	// Structure flag - when bit 15 is set, this is a structure/UDT.
 	// The lower bits contain the template instance ID.
@@ -49,13 +56,13 @@ func TypeSize(dataType uint16) int {
 	baseType := dataType & 0x0FFF
 
 	switch baseType {
-	case TypeBOOL, TypeSINT, TypeUSINT:
+	case TypeBOOL, TypeSINT, TypeUSINT, TypeBYTE:
 		return 1
-	case TypeINT, TypeUINT:
+	case TypeINT, TypeUINT, TypeWORD:
 		return 2
-	case TypeDINT, TypeUDINT, TypeREAL:
+	case TypeDINT, TypeUDINT, TypeREAL, TypeDWORD:
 		return 4
-	case TypeLINT, TypeULINT, TypeLREAL:
+	case TypeLINT, TypeULINT, TypeLREAL, TypeLWORD:
 		return 8
 	default:
 		return 0
@@ -122,6 +129,14 @@ func TypeName(dataType uint16) string {
 		name = "STRING"
 	case TypeShortSTRING:
 		name = "SHORT_STRING"
+	case TypeBYTE:
+		name = "BYTE"
+	case TypeWORD:
+		name = "WORD"
+	case TypeDWORD:
+		name = "DWORD"
+	case TypeLWORD:
+		name = "LWORD"
 	default:
 		name = "UNKNOWN"
 	}
@@ -160,6 +175,14 @@ func TypeCodeFromName(name string) (uint16, bool) {
 		return TypeLREAL, true
 	case "STRING":
 		return TypeSTRING, true
+	case "BYTE":
+		return TypeBYTE, true
+	case "WORD":
+		return TypeWORD, true
+	case "DWORD":
+		return TypeDWORD, true
+	case "LWORD":
+		return TypeLWORD, true
 	default:
 		return 0, false
 	}
@@ -167,7 +190,7 @@ func TypeCodeFromName(name string) (uint16, bool) {
 
 // SupportedTypeNames returns a list of supported type names for manual tag entry.
 func SupportedTypeNames() []string {
-	return []string{"BOOL", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "REAL", "LREAL", "STRING"}
+	return []string{"BOOL", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "REAL", "LREAL", "STRING", "BYTE", "WORD", "DWORD", "LWORD"}
 }
 
 // VolatileTypePatterns contains patterns that identify volatile/time-related types.
