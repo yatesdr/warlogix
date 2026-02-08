@@ -2363,19 +2363,11 @@ func parseArrayValue(input string) (interface{}, error) {
 		return nil, fmt.Errorf("empty array")
 	}
 
-	// Split by comma or space, with quote awareness for quoted strings
+	// Split by comma or space
 	var parts []string
 	if strings.Contains(s, ",") {
-		// Comma-separated
 		parts = strings.Split(s, ",")
-		for i := range parts {
-			parts[i] = strings.Trim(strings.TrimSpace(parts[i]), "\"'")
-		}
-	} else if strings.Contains(s, "\"") || strings.Contains(s, "'") {
-		// Has quotes - use quote-aware parsing
-		parts = parseQuotedParts(s)
 	} else {
-		// Simple space-separated
 		parts = strings.Fields(s)
 	}
 
