@@ -492,7 +492,7 @@ func (t *PLCsTab) showDiscoveryModal() {
 
 	// Help text
 	helpText := tview.NewTextView()
-	helpText.SetText(" [/] Filter  [c] Clear Cache  [Enter] Add  [Esc] Close")
+	helpText.SetText(" [[/]] Filter  [[c]] Clear Cache  [[Enter]] Add  [[Esc]] Close")
 	helpText.SetTextColor(th.TextDim)
 	helpText.SetBackgroundColor(th.Background)
 	helpText.SetTextAlign(tview.AlignCenter)
