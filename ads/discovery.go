@@ -138,9 +138,14 @@ func tryADSDeviceInfo(conn net.Conn, ip net.IP) *DiscoveredDevice {
 	logging.DebugLog("tui", "ADS tryADSDeviceInfo: starting for IP %s", ip.String())
 
 	// Build source AMS Net ID from IP (common convention: ip.ip.ip.ip.1.1)
-	sourceNetId := [6]byte{ip[12], ip[13], ip[14], ip[15], 1, 1}
+	var sourceNetId [6]byte
 	if len(ip) == 4 {
 		sourceNetId = [6]byte{ip[0], ip[1], ip[2], ip[3], 1, 1}
+	} else if len(ip) >= 16 {
+		sourceNetId = [6]byte{ip[12], ip[13], ip[14], ip[15], 1, 1}
+	} else {
+		logging.DebugLog("tui", "ADS tryADSDeviceInfo: unexpected IP length %d", len(ip))
+		return nil
 	}
 
 	// Target AMS Net ID - try ip.ip.ip.ip.1.1 (common TwinCAT default)
