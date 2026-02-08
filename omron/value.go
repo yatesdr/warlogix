@@ -19,6 +19,13 @@ func (tv *TagValue) GoValue() interface{} {
 	}
 
 	baseType := BaseType(tv.DataType)
+
+	// STRING is special - the "array dimension" is the string length, not multiple strings
+	// Decode entire buffer as a single null-terminated string
+	if baseType == TypeString || baseType == TypeCIPSTRING {
+		return decodeString(tv.Bytes)
+	}
+
 	elemSize := TypeSize(baseType)
 	if elemSize == 0 {
 		elemSize = 2 // Default to word size
@@ -31,6 +38,16 @@ func (tv *TagValue) GoValue() interface{} {
 
 	// Single value
 	return DecodeValue(baseType, tv.Bytes, tv.bigEndian)
+}
+
+// decodeString decodes bytes as a null-terminated string.
+func decodeString(data []byte) string {
+	for i, b := range data {
+		if b == 0 {
+			return string(data[:i])
+		}
+	}
+	return string(data)
 }
 
 // decodeArray decodes array data into a slice.
