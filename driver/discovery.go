@@ -326,6 +326,9 @@ func DiscoverAll(broadcastIP string, scanCIDR string, timeout time.Duration, con
 		concurrency = 20
 	}
 
+	logging.DebugLog("tui", "DiscoverAll: starting with broadcast=%s cidr=%s timeout=%v concurrency=%d",
+		broadcastIP, scanCIDR, timeout, concurrency)
+
 	var (
 		results []DiscoveredDevice
 		mu      sync.Mutex
@@ -338,7 +341,9 @@ func DiscoverAll(broadcastIP string, scanCIDR string, timeout time.Duration, con
 	// 1. EIP broadcast discovery (Allen-Bradley, Omron NJ/NX)
 	go func() {
 		defer wg.Done()
+		logging.DebugLog("tui", "DiscoverAll: EIP starting")
 		devices := discoverEIP(broadcastIP, timeout)
+		logging.DebugLog("tui", "DiscoverAll: EIP done, found %d devices", len(devices))
 		mu.Lock()
 		results = append(results, devices...)
 		mu.Unlock()
@@ -348,9 +353,12 @@ func DiscoverAll(broadcastIP string, scanCIDR string, timeout time.Duration, con
 	go func() {
 		defer wg.Done()
 		if scanCIDR == "" {
+			logging.DebugLog("tui", "DiscoverAll: S7 skipped (no CIDR)")
 			return
 		}
+		logging.DebugLog("tui", "DiscoverAll: S7 starting")
 		devices := discoverS7(scanCIDR, timeout, concurrency)
+		logging.DebugLog("tui", "DiscoverAll: S7 done, found %d devices", len(devices))
 		mu.Lock()
 		results = append(results, devices...)
 		mu.Unlock()
@@ -360,9 +368,12 @@ func DiscoverAll(broadcastIP string, scanCIDR string, timeout time.Duration, con
 	go func() {
 		defer wg.Done()
 		if scanCIDR == "" {
+			logging.DebugLog("tui", "DiscoverAll: ADS skipped (no CIDR)")
 			return
 		}
+		logging.DebugLog("tui", "DiscoverAll: ADS starting")
 		devices := discoverADS(scanCIDR, timeout, concurrency)
+		logging.DebugLog("tui", "DiscoverAll: ADS done, found %d devices", len(devices))
 		mu.Lock()
 		results = append(results, devices...)
 		mu.Unlock()
@@ -372,18 +383,25 @@ func DiscoverAll(broadcastIP string, scanCIDR string, timeout time.Duration, con
 	go func() {
 		defer wg.Done()
 		if scanCIDR == "" {
+			logging.DebugLog("tui", "DiscoverAll: FINS skipped (no CIDR)")
 			return
 		}
+		logging.DebugLog("tui", "DiscoverAll: FINS starting")
 		devices := discoverFINS(scanCIDR, timeout, concurrency)
+		logging.DebugLog("tui", "DiscoverAll: FINS done, found %d devices", len(devices))
 		mu.Lock()
 		results = append(results, devices...)
 		mu.Unlock()
 	}()
 
+	logging.DebugLog("tui", "DiscoverAll: waiting for all protocols to complete")
 	wg.Wait()
+	logging.DebugLog("tui", "DiscoverAll: all done, total %d devices before dedup", len(results))
 
 	// Deduplicate by IP (prefer more specific protocol match)
-	return deduplicateDevices(results)
+	deduped := deduplicateDevices(results)
+	logging.DebugLog("tui", "DiscoverAll: returning %d devices after dedup", len(deduped))
+	return deduped
 }
 
 // DiscoverEIPOnly performs EIP broadcast discovery only.
