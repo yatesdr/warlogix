@@ -813,7 +813,6 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 
 	closeDialog := func() {
 		t.app.pages.RemovePage(pageName)
-		t.app.pages.SwitchToPage("main")
 		t.app.app.SetFocus(t.tree)
 	}
 
@@ -850,7 +849,6 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 
 		// Close dialog after write completes
 		t.app.pages.RemovePage(pageName)
-		t.app.pages.SwitchToPage("main")
 		t.app.app.SetFocus(t.tree)
 
 		if err != nil {
