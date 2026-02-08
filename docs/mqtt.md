@@ -3,7 +3,8 @@
 WarLogix publishes tag values and health status to MQTT brokers and supports write-back via MQTT messages.
 
 
-<img width="914" height="541" alt="image" src="https://github.com/user-attachments/assets/9802db2d-15a0-452e-abdb-75e82cf6e7dc" />
+<img width="902" height="541" alt="image" src="https://github.com/user-attachments/assets/68c2eaeb-7797-46e6-bae9-c633385a8099" />
+
 
 
 ## Configuration
