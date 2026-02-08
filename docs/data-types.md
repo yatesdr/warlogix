@@ -31,6 +31,57 @@ Arrays of known types are published as JSON arrays:
 
 Multi-dimensional arrays are flattened to a single dimension.
 
+## Writing Values
+
+WarLogix supports writing values to PLC tags through the Browser tab. Press `W` on any writable tag to open the write dialog.
+
+### Type-Aware Writes
+
+When writing to a tag, WarLogix uses the tag's actual data type discovered from the PLC. This ensures the correct CIP type code is sent, preventing type mismatch errors.
+
+### Scalar Value Formats
+
+| Type | Format | Examples |
+|------|--------|----------|
+| BOOL | `true` or `false` (case-insensitive) | `true`, `FALSE`, `True` |
+| Integer types | Decimal number | `42`, `-100`, `65535` |
+| REAL/LREAL | Decimal with optional fraction | `3.14`, `-0.5`, `100.0` |
+| STRING | Plain text (no quotes needed) | `Hello World` |
+
+### Array Value Formats
+
+Arrays are written using bracket notation with space-separated or comma-separated values:
+
+```
+[value1 value2 value3]
+[value1, value2, value3]
+```
+
+**Examples:**
+
+| Type | Write Format |
+|------|--------------|
+| DINT[5] | `[1 2 3 4 5]` or `[1, 2, 3, 4, 5]` |
+| BOOL[4] | `[true false true false]` |
+| REAL[3] | `[1.5 2.5 3.5]` |
+| STRING[3] | `[one two three]` |
+
+### Quoted Strings in Arrays
+
+For string arrays containing spaces, use double quotes around each element:
+
+```
+["one dog" "two dogs" "three dogs"]
+```
+
+You can mix quoted and unquoted strings:
+
+```
+["hello world" simple "another phrase" test]
+```
+
+**Note:** Quotes are only needed when string elements contain spaces. Simple strings work without quotes.
+
 ## Byte Order
 
 Different PLC families use different byte orders:

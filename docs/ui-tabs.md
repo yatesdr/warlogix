@@ -127,6 +127,7 @@ For manual PLCs (S7, Omron FINS):
 |-----|--------|
 | `Space` | Toggle tag publishing (enable/disable) |
 | `w` | Toggle writable flag |
+| `W` | **Write** value to selected tag (opens write dialog) |
 | `i` | Toggle ignore for change detection (UDT members) |
 | `s` | Configure per-service publishing (REST/MQTT/Kafka/Valkey) |
 | `d` | Show detailed tag information with live value and hex dump |
@@ -159,6 +160,32 @@ By default, all services are enabled. Disable services to reduce network traffic
 When you select a UDT tag, press `Enter` to expand it and see its members. Each member can be independently enabled for publishing.
 
 **Ignore List:** Mark volatile UDT members (timestamps, counters, heartbeats) as "ignored" using `i`. Ignored members are still included in published data but don't trigger republishing when they change. This reduces message volume for frequently-changing status structures.
+
+### Write Dialog
+
+Press `W` on any tag to write a new value. The dialog shows:
+- Tag name and current data type
+- Current value (read from PLC)
+- Input field for new value
+
+**Value Formats:**
+
+| Data Type | Format | Example |
+|-----------|--------|---------|
+| BOOL | `true` or `false` | `true` |
+| Integer (SINT, INT, DINT, LINT, etc.) | Decimal number | `42` |
+| Float (REAL, LREAL) | Decimal number | `3.14159` |
+| STRING | Plain text | `Hello World` |
+| Arrays | Bracket notation | `[1 2 3 4 5]` |
+
+**Array Syntax:**
+
+- Use brackets with space or comma separation: `[1 2 3]` or `[1, 2, 3]`
+- Boolean arrays: `[true false true]`
+- String arrays: `[one two three]`
+- Strings with spaces require quotes: `["hello world" "test string"]`
+
+**Type-Aware Writes:** The write uses the tag's actual type from discovery, ensuring correct CIP type codes are sent. This prevents type mismatch errors that occur when the wrong data size is written.
 
 ---
 
