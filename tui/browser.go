@@ -2363,9 +2363,12 @@ func parseArrayValue(input string) (interface{}, error) {
 		return nil, fmt.Errorf("empty array")
 	}
 
-	// Split by comma or space
+	// Split by comma or space (quote-aware when quotes present)
 	var parts []string
-	if strings.Contains(s, ",") {
+	if strings.Contains(s, "\"") {
+		// Has quotes - parse carefully to preserve quoted strings
+		parts = parseQuotedStrings(s)
+	} else if strings.Contains(s, ",") {
 		parts = strings.Split(s, ",")
 	} else {
 		parts = strings.Fields(s)
@@ -2456,57 +2459,45 @@ func parseArrayValue(input string) (interface{}, error) {
 	return strVals, nil
 }
 
-// parseQuotedParts splits a string by commas or spaces, preserving quoted strings.
-// Examples:
-//   - "one two three" -> ["one", "two", "three"]
-//   - `"one dog" "two dog"` -> ["one dog", "two dog"]
-//   - "one, two, three" -> ["one", "two", "three"]
-//   - `"a,b", "c,d"` -> ["a,b", "c,d"]
-func parseQuotedParts(s string) []string {
-	// First, normalize smart quotes to regular ASCII quotes
-	s = strings.ReplaceAll(s, "\u201C", "\"") // left double quote "
-	s = strings.ReplaceAll(s, "\u201D", "\"") // right double quote "
-	s = strings.ReplaceAll(s, "\u2018", "'")  // left single quote '
-	s = strings.ReplaceAll(s, "\u2019", "'")  // right single quote '
-
+// parseQuotedStrings parses a string containing quoted elements.
+// Example: `"one" "two" "three dogs"` -> ["one", "two", "three dogs"]
+func parseQuotedStrings(s string) []string {
 	var parts []string
 	var current strings.Builder
 	inQuote := false
-	quoteChar := byte(0)
 
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 
-		if !inQuote {
-			if c == '"' || c == '\'' {
+		if c == '"' {
+			if inQuote {
+				// End of quoted string - add to parts
+				parts = append(parts, current.String())
+				current.Reset()
+				inQuote = false
+			} else {
 				// Start of quoted string
 				inQuote = true
-				quoteChar = c
-				continue
 			}
-			if c == ',' || c == ' ' || c == '\t' {
-				// Delimiter - end current part
-				if current.Len() > 0 {
-					parts = append(parts, strings.TrimSpace(current.String()))
-					current.Reset()
-				}
-				continue
-			}
-		} else {
-			if c == quoteChar {
-				// End of quoted string
-				inQuote = false
-				quoteChar = 0
-				continue
-			}
+			continue
 		}
 
-		current.WriteByte(c)
+		if inQuote {
+			// Inside quotes - add character
+			current.WriteByte(c)
+		} else if c != ' ' && c != '\t' && c != ',' {
+			// Outside quotes, non-whitespace - unquoted token
+			current.WriteByte(c)
+		} else if current.Len() > 0 {
+			// Delimiter after unquoted token
+			parts = append(parts, current.String())
+			current.Reset()
+		}
 	}
 
 	// Don't forget the last part
 	if current.Len() > 0 {
-		parts = append(parts, strings.TrimSpace(current.String()))
+		parts = append(parts, current.String())
 	}
 
 	return parts
