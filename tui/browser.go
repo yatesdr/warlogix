@@ -835,8 +835,14 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 			}
 			writeValue = arrayVal
 		} else {
-			// Try integer first (handles hex with 0x prefix)
-			if v, err := strconv.ParseInt(trimmed, 0, 64); err == nil {
+			// Try boolean first (true/false)
+			lower := strings.ToLower(trimmed)
+			if lower == "true" {
+				writeValue = true
+			} else if lower == "false" {
+				writeValue = false
+			} else if v, err := strconv.ParseInt(trimmed, 0, 64); err == nil {
+				// Try integer (handles hex with 0x prefix)
 				// Use int32 for values that fit, since DINT is more common than LINT
 				if v >= -2147483648 && v <= 2147483647 {
 					writeValue = int32(v)
@@ -2417,6 +2423,28 @@ func parseArrayValue(input string) (interface{}, error) {
 			float32Vals[i] = float32(v)
 		}
 		return float32Vals, nil
+	}
+
+	// Try parsing as booleans (true/false, 1/0)
+	boolVals := make([]bool, len(parts))
+	allBools := true
+	for i, p := range parts {
+		p = strings.TrimSpace(strings.ToLower(p))
+		switch p {
+		case "true", "1":
+			boolVals[i] = true
+		case "false", "0":
+			boolVals[i] = false
+		default:
+			allBools = false
+		}
+		if !allBools {
+			break
+		}
+	}
+
+	if allBools {
+		return boolVals, nil
 	}
 
 	// Fall back to string array

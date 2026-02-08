@@ -912,6 +912,20 @@ func (c *Client) Write(tagName string, value interface{}) error {
 		data = append(data, strBytes...)
 
 	// Array types
+	case []bool:
+		if len(v) == 0 {
+			return fmt.Errorf("Write: empty array")
+		}
+		dataType = TypeBOOL
+		for _, val := range v {
+			if val {
+				data = append(data, 1)
+			} else {
+				data = append(data, 0)
+			}
+		}
+		return c.plc.WriteTagCount(tagName, dataType, data, uint16(len(v)))
+
 	case []int32:
 		if len(v) == 0 {
 			return fmt.Errorf("Write: empty array")
