@@ -1,18 +1,18 @@
 # WarLogix
 
-A TUI (Text User Interface) gateway for industrial PLCs. Connect to Allen-Bradley, Siemens, Beckhoff, and Omron PLCs and republish data via REST API, MQTT, Kafka, and Redis/Valkey.
-
-> **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff and Omron support are works in progress.
-
-<img width="837" height="537" alt="image" src="https://github.com/user-attachments/assets/9a1794ae-725d-468d-820b-b80e96c09888" />
-
-## Why WarLogix?
 
 **WAR** stands for *"Whispers Across Realms"* - bridging the gap between industrial automation and modern IT infrastructure.
 
 Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwhile, your data platforms expect REST, MQTT, Kafka, and Redis. WarLogix translates between these worlds, letting you stream PLC data to dashboards, databases, and analytics pipelines without writing custom integration code.
 
 No expensive middleware. No vendor lock-in. Just a single binary that runs anywhere.
+
+A TUI (Text User Interface) gateway for industrial PLCs. Connect to Allen-Bradley, Siemens, Beckhoff, and Omron PLCs and republish data via REST API, MQTT, Kafka, and Redis/Valkey.
+
+> **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff and Omron support are works in progress.
+
+<img width="837" height="537" alt="image" src="https://github.com/user-attachments/assets/9a1794ae-725d-468d-820b-b80e96c09888" />
+
 
 ## Warnings
 
