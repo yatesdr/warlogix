@@ -1167,9 +1167,9 @@ func (c *Client) writeArrayTyped(tagName string, value interface{}, elemType uin
 					elem = append(elem, 0)
 				}
 			}
-			// For SHORT_STRING arrays, pad each element to 83 bytes (1-byte len + 82 chars)
+			// For SHORT_STRING arrays, pad each element to 84 bytes (1-byte len + 82 chars + 1 pad for alignment)
 			if elemType == TypeShortSTRING {
-				for len(elem) < 83 {
+				for len(elem) < 84 {
 					elem = append(elem, 0)
 				}
 			}
