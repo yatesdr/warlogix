@@ -911,6 +911,71 @@ func (c *Client) Write(tagName string, value interface{}) error {
 		data = binary.LittleEndian.AppendUint32(nil, uint32(len(strBytes)))
 		data = append(data, strBytes...)
 
+	// Array types
+	case []int32:
+		if len(v) == 0 {
+			return fmt.Errorf("Write: empty array")
+		}
+		dataType = TypeDINT
+		for _, val := range v {
+			data = binary.LittleEndian.AppendUint32(data, uint32(val))
+		}
+		return c.plc.WriteTagCount(tagName, dataType, data, uint16(len(v)))
+
+	case []int64:
+		if len(v) == 0 {
+			return fmt.Errorf("Write: empty array")
+		}
+		// Use DINT for arrays since it's more common than LINT
+		dataType = TypeDINT
+		for _, val := range v {
+			data = binary.LittleEndian.AppendUint32(data, uint32(val))
+		}
+		return c.plc.WriteTagCount(tagName, dataType, data, uint16(len(v)))
+
+	case []float32:
+		if len(v) == 0 {
+			return fmt.Errorf("Write: empty array")
+		}
+		dataType = TypeREAL
+		for _, val := range v {
+			data = binary.LittleEndian.AppendUint32(data, math.Float32bits(val))
+		}
+		return c.plc.WriteTagCount(tagName, dataType, data, uint16(len(v)))
+
+	case []float64:
+		if len(v) == 0 {
+			return fmt.Errorf("Write: empty array")
+		}
+		// Use REAL for arrays since it's more common than LREAL
+		dataType = TypeREAL
+		for _, val := range v {
+			data = binary.LittleEndian.AppendUint32(data, math.Float32bits(float32(val)))
+		}
+		return c.plc.WriteTagCount(tagName, dataType, data, uint16(len(v)))
+
+	case []string:
+		if len(v) == 0 {
+			return fmt.Errorf("Write: empty array")
+		}
+		// Each STRING is 4-byte length prefix + data, padded to 88 bytes total (Logix STRING)
+		dataType = TypeSTRING
+		for _, s := range v {
+			strBytes := []byte(s)
+			if len(strBytes) > 82 {
+				strBytes = strBytes[:82] // Max 82 chars for Logix STRING
+			}
+			// 4-byte length + 84 bytes data = 88 bytes per string
+			elem := binary.LittleEndian.AppendUint32(nil, uint32(len(strBytes)))
+			elem = append(elem, strBytes...)
+			// Pad to 84 bytes of character data
+			for len(elem) < 88 {
+				elem = append(elem, 0)
+			}
+			data = append(data, elem...)
+		}
+		return c.plc.WriteTagCount(tagName, dataType, data, uint16(len(v)))
+
 	default:
 		return fmt.Errorf("Write: unsupported value type %T", value)
 	}

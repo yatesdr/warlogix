@@ -2371,6 +2371,7 @@ func parseArrayValue(input string) (interface{}, error) {
 	// Try parsing as integers first
 	intVals := make([]int64, len(parts))
 	allInts := true
+	allFitIn32 := true
 	for i, p := range parts {
 		p = strings.TrimSpace(p)
 		v, err := strconv.ParseInt(p, 0, 64)
@@ -2379,9 +2380,20 @@ func parseArrayValue(input string) (interface{}, error) {
 			break
 		}
 		intVals[i] = v
+		if v < -2147483648 || v > 2147483647 {
+			allFitIn32 = false
+		}
 	}
 
 	if allInts {
+		// Use int32 slice if all values fit, since DINT is more common
+		if allFitIn32 {
+			int32Vals := make([]int32, len(intVals))
+			for i, v := range intVals {
+				int32Vals[i] = int32(v)
+			}
+			return int32Vals, nil
+		}
 		return intVals, nil
 	}
 
@@ -2399,7 +2411,12 @@ func parseArrayValue(input string) (interface{}, error) {
 	}
 
 	if allFloats {
-		return floatVals, nil
+		// Use float32 slice since REAL is more common than LREAL
+		float32Vals := make([]float32, len(floatVals))
+		for i, v := range floatVals {
+			float32Vals[i] = float32(v)
+		}
+		return float32Vals, nil
 	}
 
 	// Fall back to string array
