@@ -69,14 +69,14 @@ func (t *TriggersTab) setupUI() {
 		SetBorders(false).
 		SetSelectable(true, false)
 	ApplyTableTheme(t.dataTable)
-	t.dataTable.SetBorder(true).SetTitle(" Data Tags ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
+	t.dataTable.SetBorder(true).SetTitle(" Data Tags/Packs ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 	t.dataTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Rune() {
-		case 'x':
-			t.removeSelectedDataTag()
-			return nil
-		case 't':
+		case 'a':
 			t.showAddDataTagDialog()
+			return nil
+		case 'x':
+			t.confirmRemoveDataTag()
 			return nil
 		}
 		if event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab {
@@ -122,17 +122,11 @@ func (t *TriggersTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'a':
 		t.showAddDialog()
 		return nil
+	case 'x':
+		t.confirmRemoveTrigger()
+		return nil
 	case 'e':
 		t.showEditDialog()
-		return nil
-	case 'r':
-		t.removeSelected()
-		return nil
-	case 't':
-		t.showAddDataTagDialog()
-		return nil
-	case 'x':
-		t.removeSelectedDataTag()
 		return nil
 	case 's':
 		t.startSelected()
@@ -183,8 +177,16 @@ func (t *TriggersTab) updateDataTagsList() {
 		return
 	}
 
+	th := CurrentTheme
 	for i, tag := range cfg.Tags {
-		t.dataTable.SetCell(i, 0, tview.NewTableCell(tag).SetExpansion(1))
+		displayName := tag
+		// Check if it's a pack reference
+		if strings.HasPrefix(tag, "pack:") {
+			packName := strings.TrimPrefix(tag, "pack:")
+			displayName = th.TagAccent + "[pack] " + th.TagReset + packName
+		}
+		cell := tview.NewTableCell(displayName).SetExpansion(1)
+		t.dataTable.SetCell(i, 0, cell)
 	}
 
 	// Restore selection if valid
@@ -208,11 +210,10 @@ func (t *TriggersTab) updateInfo(name string) {
 	if cfg.AckTag != "" {
 		info += fmt.Sprintf("%sAck:%s %s (1=ok, -1=err)\n", th.TagAccent, th.TagReset, cfg.AckTag)
 	}
-	if cfg.PublishPack != "" {
-		info += fmt.Sprintf("%sPack:%s %s\n", th.TagAccent, th.TagReset, cfg.PublishPack)
-	}
 	info += th.Label("Kafka", cfg.KafkaCluster) + "\n"
-	info += th.Label("Topic", cfg.Topic) + "\n"
+	if cfg.Selector != "" {
+		info += th.Label("Selector", cfg.Selector) + "\n"
+	}
 
 	// Get runtime status
 	status, err, count, lastFire := t.app.triggerMgr.GetTriggerStatus(name)
@@ -308,7 +309,7 @@ func (t *TriggersTab) Refresh() {
 	}
 }
 
-// showTagPicker shows a filterable tag picker dialog and calls onSelect with the chosen tag.
+// showTagPicker shows a filterable tag picker dialog and calls onSelect with the chosen tag or pack.
 func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(tagName string)) {
 	const pageName = "tag-picker"
 
@@ -320,8 +321,12 @@ func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(
 	}
 
 	tags := plc.GetTags()
-	if len(tags) == 0 {
-		t.app.showError("Error", "No tags available. Connect to PLC first.")
+
+	// Get TagPacks
+	packs := t.app.config.TagPacks
+
+	if len(tags) == 0 && len(packs) == 0 {
+		t.app.showError("Error", "No tags or packs available. Connect to PLC first.")
 		return
 	}
 
@@ -334,11 +339,26 @@ func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(
 	// Create list of tags
 	list := tview.NewList().
 		SetHighlightFullLine(true)
+	ApplyListTheme(list)
 
-	// Populate list
+	// Populate list with tags and packs
 	populateList := func(filterText string) {
 		list.Clear()
 		filterLower := strings.ToLower(filterText)
+
+		// Add packs first (with [pack] prefix for display)
+		for _, pack := range packs {
+			packRef := "pack:" + pack.Name
+			displayName := "[pack] " + pack.Name
+			if filterText == "" || strings.Contains(strings.ToLower(pack.Name), filterLower) || strings.Contains("pack", filterLower) {
+				list.AddItem(displayName, "", 0, func() {
+					t.app.closeModal(pageName)
+					onSelect(packRef)
+				})
+			}
+		}
+
+		// Add tags
 		for _, tag := range tags {
 			if filterText == "" || strings.Contains(strings.ToLower(tag.Name), filterLower) {
 				tagName := tag.Name
@@ -392,14 +412,21 @@ func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(
 		return event
 	})
 
+	// Instructions
+	instructions := tview.NewTextView().
+		SetText("/ to filter, Enter to select, Esc to cancel").
+		SetTextAlign(tview.AlignCenter)
+	instructions.SetTextColor(CurrentTheme.TextDim)
+
 	// Layout
 	content := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(filter, 1, 0, true).
-		AddItem(list, 0, 1, false)
-	content.SetBorder(true).SetTitle(" " + title + " (/ to filter, Enter to select) ")
+		AddItem(list, 0, 1, false).
+		AddItem(instructions, 1, 0, false)
+	content.SetBorder(true).SetTitle(" " + title + " ")
 
-	t.app.showCenteredModal(pageName, content, 60, 20)
+	t.app.showCenteredModal(pageName, content, 60, 21)
 	t.app.app.SetFocus(filter)
 }
 
@@ -431,16 +458,10 @@ func (t *TriggersTab) showAddDialog() {
 		return
 	}
 
-	// Get list of Kafka clusters (optional)
-	kafkaNames := []string{"(None)"}
+	// Get list of Kafka clusters: "All" (default), then individual clusters
+	kafkaNames := []string{"All"}
 	for _, k := range t.app.config.Kafka {
 		kafkaNames = append(kafkaNames, k.Name)
-	}
-
-	// Get list of TagPacks (optional)
-	packNames := []string{"(None)"}
-	for _, p := range t.app.config.TagPacks {
-		packNames = append(packNames, p.Name)
 	}
 
 	form := tview.NewForm()
@@ -494,8 +515,7 @@ func (t *TriggersTab) showAddDialog() {
 	form.AddFormItem(ackTagDropdown)
 
 	form.AddDropDown("Kafka:", kafkaNames, 0, nil)
-	form.AddInputField("Topic:", "", 30, nil, nil)
-	form.AddDropDown("Publish Pack:", packNames, 0, nil)
+	form.AddInputField("Selector:", "", 30, nil, nil)
 
 	form.AddButton("Add", func() {
 		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
@@ -505,8 +525,7 @@ func (t *TriggersTab) showAddDialog() {
 		valueStr := form.GetFormItemByLabel("Value:").(*tview.InputField).GetText()
 		ackTagIdx, ackTag := ackTagDropdown.GetCurrentOption()
 		kafkaIdx, _ := form.GetFormItemByLabel("Kafka:").(*tview.DropDown).GetCurrentOption()
-		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
-		packIdx, _ := form.GetFormItemByLabel("Publish Pack:").(*tview.DropDown).GetCurrentOption()
+		selector := form.GetFormItemByLabel("Selector:").(*tview.InputField).GetText()
 
 		// Validate trigger tag
 		if name == "" || triggerTag == "(no tags configured)" {
@@ -520,16 +539,10 @@ func (t *TriggersTab) showAddDialog() {
 			ackTag = ""
 		}
 
-		// Get Kafka cluster name (empty if "(None)" selected)
-		kafkaCluster := ""
+		// Get Kafka cluster name ("all" if "All" selected, otherwise specific name)
+		kafkaCluster := "all"
 		if kafkaIdx > 0 {
 			kafkaCluster = kafkaNames[kafkaIdx]
-		}
-
-		// Get pack name (empty if "(None)" selected)
-		publishPack := ""
-		if packIdx > 0 {
-			publishPack = packNames[packIdx]
 		}
 
 		// Parse value
@@ -561,10 +574,10 @@ func (t *TriggersTab) showAddDialog() {
 			},
 			AckTag:       ackTag,
 			DebounceMS:   100,
-			Tags:         []string{}, // Data tags added separately
+			Tags:         []string{}, // Data tags/packs added separately
+			MQTTBroker:   "all",      // Publish to all MQTT brokers by default
 			KafkaCluster: kafkaCluster,
-			Topic:        topic,
-			PublishPack:  publishPack,
+			Selector:     selector,
 			Metadata:     make(map[string]string),
 		}
 
@@ -605,7 +618,7 @@ func (t *TriggersTab) showEditDialog() {
 		return
 	}
 
-	// Get lists
+	// Get PLC list
 	plcNames := make([]string, 0)
 	plcIdx := 0
 	for i, plc := range t.app.config.PLCs {
@@ -615,23 +628,34 @@ func (t *TriggersTab) showEditDialog() {
 		}
 	}
 
-	kafkaNames := []string{"(None)"}
-	kafkaIdx := 0 // Default to "(None)"
+	// Get MQTT broker list: "All", "None", individual brokers
+	mqttNames := []string{"All", "None"}
+	mqttIdx := 0 // Default to "All"
+	for i, m := range t.app.config.MQTT {
+		mqttNames = append(mqttNames, m.Name)
+		if m.Name == cfg.MQTTBroker {
+			mqttIdx = i + 2
+		}
+	}
+	if cfg.MQTTBroker == "" || strings.EqualFold(cfg.MQTTBroker, "all") {
+		mqttIdx = 0
+	} else if strings.EqualFold(cfg.MQTTBroker, "none") {
+		mqttIdx = 1
+	}
+
+	// Get Kafka cluster list: "All", "None", individual clusters
+	kafkaNames := []string{"All", "None"}
+	kafkaIdx := 0 // Default to "All"
 	for i, k := range t.app.config.Kafka {
 		kafkaNames = append(kafkaNames, k.Name)
 		if k.Name == cfg.KafkaCluster {
-			kafkaIdx = i + 1 // +1 because "(None)" is at index 0
+			kafkaIdx = i + 2
 		}
 	}
-
-	// Get list of TagPacks
-	packNames := []string{"(None)"}
-	packIdx := 0 // Default to "(None)"
-	for i, p := range t.app.config.TagPacks {
-		packNames = append(packNames, p.Name)
-		if p.Name == cfg.PublishPack {
-			packIdx = i + 1 // +1 because "(None)" is at index 0
-		}
+	if cfg.KafkaCluster == "" || strings.EqualFold(cfg.KafkaCluster, "all") {
+		kafkaIdx = 0
+	} else if strings.EqualFold(cfg.KafkaCluster, "none") {
+		kafkaIdx = 1
 	}
 
 	opIdx := 0
@@ -706,9 +730,10 @@ func (t *TriggersTab) showEditDialog() {
 	ackTagDropdown.SetCurrentOption(ackTagIdx)
 	form.AddFormItem(ackTagDropdown)
 
+	// Service configuration
+	form.AddDropDown("MQTT:", mqttNames, mqttIdx, nil)
 	form.AddDropDown("Kafka:", kafkaNames, kafkaIdx, nil)
-	form.AddInputField("Topic:", cfg.Topic, 30, nil, nil)
-	form.AddDropDown("Publish Pack:", packNames, packIdx, nil)
+	form.AddInputField("Selector:", cfg.Selector, 30, nil, nil)
 
 	originalName := cfg.Name
 
@@ -719,9 +744,9 @@ func (t *TriggersTab) showEditDialog() {
 		newOpIdx, _ := form.GetFormItemByLabel("Operator:").(*tview.DropDown).GetCurrentOption()
 		valueStr := form.GetFormItemByLabel("Value:").(*tview.InputField).GetText()
 		ackTagIdx, ackTag := ackTagDropdown.GetCurrentOption()
+		newMqttIdx, _ := form.GetFormItemByLabel("MQTT:").(*tview.DropDown).GetCurrentOption()
 		newKafkaIdx, _ := form.GetFormItemByLabel("Kafka:").(*tview.DropDown).GetCurrentOption()
-		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
-		newPackIdx, _ := form.GetFormItemByLabel("Publish Pack:").(*tview.DropDown).GetCurrentOption()
+		selector := form.GetFormItemByLabel("Selector:").(*tview.InputField).GetText()
 
 		// Validate trigger tag
 		if newName == "" || triggerTag == "(no tags configured)" {
@@ -735,16 +760,20 @@ func (t *TriggersTab) showEditDialog() {
 			ackTag = ""
 		}
 
-		// Get Kafka cluster name (empty if "(None)" selected)
-		kafkaCluster := ""
-		if newKafkaIdx > 0 {
-			kafkaCluster = kafkaNames[newKafkaIdx]
+		// Get MQTT broker name
+		mqttBroker := "all"
+		if newMqttIdx == 1 {
+			mqttBroker = "none"
+		} else if newMqttIdx > 1 {
+			mqttBroker = mqttNames[newMqttIdx]
 		}
 
-		// Get pack name (empty if "(None)" selected)
-		publishPack := ""
-		if newPackIdx > 0 {
-			publishPack = packNames[newPackIdx]
+		// Get Kafka cluster name
+		kafkaCluster := "all"
+		if newKafkaIdx == 1 {
+			kafkaCluster = "none"
+		} else if newKafkaIdx > 1 {
+			kafkaCluster = kafkaNames[newKafkaIdx]
 		}
 
 		// Parse value
@@ -776,10 +805,10 @@ func (t *TriggersTab) showEditDialog() {
 			},
 			AckTag:       ackTag,
 			DebounceMS:   cfg.DebounceMS,
-			Tags:         cfg.Tags, // Keep existing data tags
+			Tags:         cfg.Tags, // Keep existing data tags/packs
+			MQTTBroker:   mqttBroker,
 			KafkaCluster: kafkaCluster,
-			Topic:        topic,
-			PublishPack:  publishPack,
+			Selector:     selector,
 			Metadata:     cfg.Metadata,
 		}
 
@@ -805,7 +834,7 @@ func (t *TriggersTab) showEditDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 65, 24, func() {
+	t.app.showFormModal(pageName, form, 65, 26, func() {
 		t.app.closeModal(pageName)
 	})
 }
@@ -839,11 +868,11 @@ func (t *TriggersTab) showAddDataTagDialog() {
 		t.app.triggerMgr.UpdateTrigger(cfg)
 
 		t.updateDataTagsList()
-		t.app.setStatus(fmt.Sprintf("Added data tag: %s", tag))
+		t.app.setStatus(fmt.Sprintf("Added: %s", tag))
 	})
 }
 
-func (t *TriggersTab) removeSelectedDataTag() {
+func (t *TriggersTab) confirmRemoveDataTag() {
 	name := t.getSelectedName()
 	if name == "" {
 		return
@@ -860,19 +889,25 @@ func (t *TriggersTab) removeSelectedDataTag() {
 	}
 
 	tagName := cfg.Tags[idx]
+	displayName := tagName
+	if strings.HasPrefix(tagName, "pack:") {
+		displayName = "[pack] " + strings.TrimPrefix(tagName, "pack:")
+	}
 
-	// Remove from config
-	cfg.Tags = append(cfg.Tags[:idx], cfg.Tags[idx+1:]...)
-	t.app.SaveConfig()
+	t.app.showConfirm("Remove Tag", fmt.Sprintf("Remove %s?", displayName), func() {
+		// Remove from config
+		cfg.Tags = append(cfg.Tags[:idx], cfg.Tags[idx+1:]...)
+		t.app.SaveConfig()
 
-	// Update trigger manager
-	t.app.triggerMgr.UpdateTrigger(cfg)
+		// Update trigger manager
+		t.app.triggerMgr.UpdateTrigger(cfg)
 
-	t.updateDataTagsList()
-	t.app.setStatus(fmt.Sprintf("Removed data tag: %s", tagName))
+		t.updateDataTagsList()
+		t.app.setStatus(fmt.Sprintf("Removed: %s", displayName))
+	})
 }
 
-func (t *TriggersTab) removeSelected() {
+func (t *TriggersTab) confirmRemoveTrigger() {
 	name := t.getSelectedName()
 	if name == "" {
 		return
@@ -962,10 +997,8 @@ func (t *TriggersTab) testSelected() {
 func (t *TriggersTab) updateButtonBar() {
 	th := CurrentTheme
 	buttonText := " " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
+		th.TagHotkey + "x" + th.TagActionText + " remove  " +
 		th.TagHotkey + "e" + th.TagActionText + "dit  " +
-		th.TagHotkey + "r" + th.TagActionText + "emove  " +
-		th.TagHotkey + "t" + th.TagActionText + " add tag  " +
-		th.TagHotkey + "x" + th.TagActionText + " remove tag  " +
 		th.TagHotkey + "s" + th.TagActionText + "tart  " +
 		th.TagHotkey + "S" + th.TagActionText + "top  " +
 		th.TagHotkey + "T" + th.TagActionText + "est  " +

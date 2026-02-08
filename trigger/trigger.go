@@ -3,11 +3,13 @@ package trigger
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"warlogix/config"
 	"warlogix/kafka"
+	"warlogix/namespace"
 	"warlogix/tagpack"
 )
 
@@ -53,14 +55,26 @@ type TagWriter interface {
 	WriteTag(plcName, tagName string, value interface{}) error
 }
 
+// MQTTPublisher provides MQTT publishing for triggers.
+type MQTTPublisher interface {
+	// PublishRawQoS2 publishes raw bytes to a topic with QoS 2 (exactly once) on all brokers.
+	PublishRawQoS2(topic string, data []byte)
+	// PublishRawQoS2ToBroker publishes to a specific broker with QoS 2.
+	PublishRawQoS2ToBroker(broker, topic string, data []byte) bool
+	// ListBrokers returns all configured broker names.
+	ListBrokers() []string
+}
+
 // Trigger monitors a PLC tag and captures data when a condition is met.
 type Trigger struct {
 	config    *config.TriggerConfig
 	condition *Condition
 	kafka     *kafka.Manager
+	mqtt      MQTTPublisher
 	packMgr   *tagpack.Manager
 	reader    TagReader
 	writer    TagWriter
+	namespace string
 
 	status    Status
 	lastErr   error
@@ -116,6 +130,20 @@ func (t *Trigger) SetPackManager(packMgr *tagpack.Manager) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.packMgr = packMgr
+}
+
+// SetMQTTManager sets the MQTT publisher for trigger messages.
+func (t *Trigger) SetMQTTManager(mqtt MQTTPublisher) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.mqtt = mqtt
+}
+
+// SetNamespace sets the namespace for topic construction.
+func (t *Trigger) SetNamespace(ns string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.namespace = ns
 }
 
 func (t *Trigger) log(format string, args ...interface{}) {
@@ -278,7 +306,7 @@ func (t *Trigger) checkTrigger() {
 			t.mu.Unlock()
 
 			// Fire the trigger (in current goroutine for simplicity)
-			t.fire()
+			t.fire(false)
 			return
 		}
 
@@ -292,15 +320,33 @@ func (t *Trigger) checkTrigger() {
 	t.mu.Unlock()
 }
 
-// fire captures data and sends to Kafka.
-func (t *Trigger) fire() {
-	t.log("triggered, capturing %d tags", len(t.config.Tags))
+// fire captures data and sends to MQTT and Kafka.
+// If testMode is true, the trigger won't enter cooldown state.
+func (t *Trigger) fire(testMode bool) {
+	// Separate pack references from regular tags
+	var dataTags []string
+	var packRefs []string
+	for _, tag := range t.config.Tags {
+		if strings.HasPrefix(tag, "pack:") {
+			packRefs = append(packRefs, strings.TrimPrefix(tag, "pack:"))
+		} else {
+			dataTags = append(dataTags, tag)
+		}
+	}
 
-	// Read all data tags
-	data, err := t.reader.ReadTags(t.config.PLC, t.config.Tags)
-	if err != nil {
-		t.handleError(fmt.Errorf("failed to read data tags: %w", err))
-		return
+	t.log("triggered, capturing %d tags, %d packs", len(dataTags), len(packRefs))
+
+	// Read all data tags (if any)
+	var data map[string]interface{}
+	var err error
+	if len(dataTags) > 0 {
+		data, err = t.reader.ReadTags(t.config.PLC, dataTags)
+		if err != nil {
+			t.handleError(fmt.Errorf("failed to read data tags: %w", err))
+			return
+		}
+	} else {
+		data = make(map[string]interface{})
 	}
 
 	// Build message
@@ -313,31 +359,68 @@ func (t *Trigger) fire() {
 		return
 	}
 
-	// Send to Kafka if configured
-	if t.config.KafkaCluster != "" && t.config.Topic != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+	// Build namespace for topic construction
+	builder := namespace.New(t.namespace, t.config.Selector)
 
-		err = t.kafka.ProduceWithRetry(ctx, t.config.KafkaCluster, t.config.Topic, msg.Key(), jsonData)
-		if err != nil {
-			t.handleError(fmt.Errorf("failed to send to Kafka: %w", err))
+	// Send to MQTT (QoS 2 for exactly-once delivery)
+	if t.mqtt != nil && t.namespace != "" && !strings.EqualFold(t.config.MQTTBroker, "none") {
+		topic := builder.MQTTTriggerTopic(t.config.Name)
+		brokers := t.getMQTTBrokers()
+		for _, broker := range brokers {
+			if t.mqtt.PublishRawQoS2ToBroker(broker, topic, jsonData) {
+				t.log("sent to MQTT broker '%s' (QoS 2), topic=%s", broker, topic)
+			} else {
+				t.log("warning: failed to send to MQTT broker '%s'", broker)
+			}
+		}
+	}
+
+	// Send to Kafka
+	if t.kafka != nil && t.namespace != "" && !strings.EqualFold(t.config.KafkaCluster, "none") {
+		kafkaTopic := builder.KafkaTriggerTopic()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+		// Determine which clusters to publish to
+		clusters := t.getKafkaClusters()
+		var kafkaErr error
+		for _, cluster := range clusters {
+			err = t.kafka.ProduceWithRetry(ctx, cluster, kafkaTopic, msg.Key(), jsonData)
+			if err != nil {
+				t.log("warning: failed to send to Kafka cluster '%s': %v", cluster, err)
+				kafkaErr = err
+			} else {
+				t.log("sent to Kafka cluster '%s', topic=%s, sequence=%d", cluster, kafkaTopic, msg.Sequence)
+			}
+		}
+		cancel()
+
+		// Only fail if all clusters failed
+		if kafkaErr != nil && len(clusters) == 1 {
+			t.handleError(fmt.Errorf("failed to send to Kafka: %w", kafkaErr))
 			return
 		}
-		t.log("sent to Kafka, sequence=%d", msg.Sequence)
-	} else {
-		t.log("trigger fired, sequence=%d (no Kafka configured)", msg.Sequence)
 	}
 
 	// Success - write acknowledgment
 	t.mu.Lock()
 	t.fireCount++
 	t.lastFire = time.Now()
-	t.status = StatusCooldown
+	if !testMode {
+		t.status = StatusCooldown
+	}
 	t.lastErr = nil
 	packMgr := t.packMgr
 	t.mu.Unlock()
 
-	// Publish TagPack immediately if configured
+	// Publish packs from Tags list
+	if packMgr != nil {
+		for _, packName := range packRefs {
+			packMgr.PublishPackImmediate(packName)
+			t.log("published pack '%s'", packName)
+		}
+	}
+
+	// Publish legacy TagPack if configured (for backward compatibility)
 	if t.config.PublishPack != "" && packMgr != nil {
 		packMgr.PublishPackImmediate(t.config.PublishPack)
 		t.log("published pack '%s'", t.config.PublishPack)
@@ -351,6 +434,29 @@ func (t *Trigger) fire() {
 			t.log("wrote ack=1 (success) to %s", t.config.AckTag)
 		}
 	}
+}
+
+// getKafkaClusters returns the list of Kafka clusters to publish to.
+// If KafkaCluster is empty or "all", returns all configured clusters.
+// Otherwise returns just the specified cluster.
+func (t *Trigger) getKafkaClusters() []string {
+	if t.config.KafkaCluster == "" || strings.EqualFold(t.config.KafkaCluster, "all") {
+		return t.kafka.ListClusters()
+	}
+	return []string{t.config.KafkaCluster}
+}
+
+// getMQTTBrokers returns the list of MQTT brokers to publish to.
+// If MQTTBroker is empty or "all", returns all configured brokers.
+// Otherwise returns just the specified broker.
+func (t *Trigger) getMQTTBrokers() []string {
+	if t.mqtt == nil {
+		return nil
+	}
+	if t.config.MQTTBroker == "" || strings.EqualFold(t.config.MQTTBroker, "all") {
+		return t.mqtt.ListBrokers()
+	}
+	return []string{t.config.MQTTBroker}
 }
 
 // handleError handles a trigger error by writing to ack tag and logging.
@@ -391,29 +497,29 @@ func (t *Trigger) Reset() {
 
 // TestFire manually fires the trigger for testing purposes.
 // This bypasses the condition check and immediately captures and sends data.
+// Can be used even when the trigger is disabled.
 func (t *Trigger) TestFire() error {
-	t.mu.RLock()
-	status := t.status
-	t.mu.RUnlock()
-
-	// Allow test fire from Armed, Cooldown, or Error states
-	if status == StatusDisabled {
-		return fmt.Errorf("trigger is disabled, start it first")
-	}
-
-	// Pre-check Kafka connectivity if Kafka is configured
-	if t.config.KafkaCluster != "" && t.config.Topic != "" {
-		producer := t.kafka.GetProducer(t.config.KafkaCluster)
-		if producer == nil {
-			return fmt.Errorf("Kafka cluster '%s' not found", t.config.KafkaCluster)
+	// Pre-check Kafka connectivity - at least one cluster must be connected
+	clusters := t.getKafkaClusters()
+	if len(clusters) > 0 {
+		hasConnected := false
+		for _, cluster := range clusters {
+			producer := t.kafka.GetProducer(cluster)
+			if producer != nil && producer.GetStatus() == kafka.StatusConnected {
+				hasConnected = true
+				break
+			}
 		}
-		if producer.GetStatus() != kafka.StatusConnected {
-			return fmt.Errorf("Kafka cluster '%s' not connected - connect via Kafka tab first", t.config.KafkaCluster)
+		if !hasConnected {
+			if len(clusters) == 1 {
+				return fmt.Errorf("Kafka cluster '%s' not connected - connect via Kafka tab first", clusters[0])
+			}
+			return fmt.Errorf("no Kafka clusters connected - connect via Kafka tab first")
 		}
 	}
 
 	t.log("TEST FIRE triggered manually")
-	t.fire()
+	t.fire(true) // testMode=true: don't enter cooldown
 
 	// Check if fire resulted in error
 	t.mu.RLock()

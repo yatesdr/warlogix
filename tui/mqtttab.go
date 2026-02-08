@@ -90,7 +90,7 @@ func (t *MQTTTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'e':
 		t.showEditDialog()
 		return nil
-	case 'r':
+	case 'x':
 		t.removeSelected()
 		return nil
 	case 'c':
@@ -166,7 +166,7 @@ func (t *MQTTTab) refreshTable() {
 		t.table.SetCell(row, 2, tview.NewTableCell(cfg.Broker).SetExpansion(1))
 		t.table.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("%d", cfg.Port)).SetExpansion(0))
 		t.table.SetCell(row, 4, tview.NewTableCell(tlsIndicator).SetExpansion(0))
-		t.table.SetCell(row, 5, tview.NewTableCell(cfg.RootTopic).SetExpansion(1))
+		t.table.SetCell(row, 5, tview.NewTableCell(cfg.Selector).SetExpansion(1))
 		t.table.SetCell(row, 6, tview.NewTableCell(status).SetExpansion(1))
 	}
 }
@@ -181,7 +181,7 @@ func (t *MQTTTab) showAddDialog() {
 	form.AddInputField("Name:", "", 20, nil, nil)
 	form.AddInputField("Broker:", "localhost", 30, nil, nil)
 	form.AddInputField("Port:", "1883", 8, acceptDigits, nil)
-	form.AddInputField("Root Topic:", "factory", 20, nil, nil)
+	form.AddInputField("Selector:", "factory", 20, nil, nil)
 	form.AddInputField("Client ID:", "wargate", 20, nil, nil)
 	form.AddInputField("Username:", "", 20, nil, nil)
 	form.AddPasswordField("Password:", "", 20, '*', nil)
@@ -192,7 +192,7 @@ func (t *MQTTTab) showAddDialog() {
 		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
 		broker := form.GetFormItemByLabel("Broker:").(*tview.InputField).GetText()
 		portStr := form.GetFormItemByLabel("Port:").(*tview.InputField).GetText()
-		rootTopic := form.GetFormItemByLabel("Root Topic:").(*tview.InputField).GetText()
+		rootTopic := form.GetFormItemByLabel("Selector:").(*tview.InputField).GetText()
 		clientID := form.GetFormItemByLabel("Client ID:").(*tview.InputField).GetText()
 		username := form.GetFormItemByLabel("Username:").(*tview.InputField).GetText()
 		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
@@ -214,7 +214,7 @@ func (t *MQTTTab) showAddDialog() {
 			Enabled:   autoConnect,
 			Broker:    broker,
 			Port:      port,
-			RootTopic: rootTopic,
+			Selector: rootTopic,
 			ClientID:  clientID,
 			Username:  username,
 			Password:  password,
@@ -225,7 +225,7 @@ func (t *MQTTTab) showAddDialog() {
 		t.app.SaveConfig()
 
 		// Add to manager
-		pub := mqtt.NewPublisher(&t.app.config.MQTT[len(t.app.config.MQTT)-1])
+		pub := mqtt.NewPublisher(&t.app.config.MQTT[len(t.app.config.MQTT)-1], t.app.config.Namespace)
 		t.app.mqttMgr.Add(pub)
 
 		if autoConnect {
@@ -274,7 +274,7 @@ func (t *MQTTTab) showEditDialog() {
 	form.AddInputField("Name:", cfg.Name, 20, nil, nil)
 	form.AddInputField("Broker:", cfg.Broker, 30, nil, nil)
 	form.AddInputField("Port:", fmt.Sprintf("%d", cfg.Port), 8, acceptDigits, nil)
-	form.AddInputField("Root Topic:", cfg.RootTopic, 20, nil, nil)
+	form.AddInputField("Selector:", cfg.Selector, 20, nil, nil)
 	form.AddInputField("Client ID:", cfg.ClientID, 20, nil, nil)
 	form.AddInputField("Username:", cfg.Username, 20, nil, nil)
 	form.AddPasswordField("Password:", cfg.Password, 20, '*', nil)
@@ -285,7 +285,7 @@ func (t *MQTTTab) showEditDialog() {
 		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
 		broker := form.GetFormItemByLabel("Broker:").(*tview.InputField).GetText()
 		portStr := form.GetFormItemByLabel("Port:").(*tview.InputField).GetText()
-		rootTopic := form.GetFormItemByLabel("Root Topic:").(*tview.InputField).GetText()
+		rootTopic := form.GetFormItemByLabel("Selector:").(*tview.InputField).GetText()
 		clientID := form.GetFormItemByLabel("Client ID:").(*tview.InputField).GetText()
 		username := form.GetFormItemByLabel("Username:").(*tview.InputField).GetText()
 		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
@@ -307,7 +307,7 @@ func (t *MQTTTab) showEditDialog() {
 			Enabled:   autoConnect,
 			Broker:    broker,
 			Port:      port,
-			RootTopic: rootTopic,
+			Selector: rootTopic,
 			ClientID:  clientID,
 			Username:  username,
 			Password:  password,
@@ -324,7 +324,7 @@ func (t *MQTTTab) showEditDialog() {
 		// Update manager in background to avoid blocking UI
 		go func() {
 			t.app.mqttMgr.Remove(originalName)
-			newPub := mqtt.NewPublisher(t.app.config.FindMQTT(name))
+			newPub := mqtt.NewPublisher(t.app.config.FindMQTT(name), t.app.config.Namespace)
 			t.app.mqttMgr.Add(newPub)
 
 			if autoConnect {
@@ -404,7 +404,7 @@ func (t *MQTTTab) connectSelected() {
 	go func() {
 		pubName := pub.Name()
 		pubAddr := pub.Address()
-		pubTopic := pub.Config().RootTopic
+		pubTopic := pub.Config().Selector
 		err := pub.Start()
 
 		// Update UI immediately after connection attempt
@@ -493,7 +493,7 @@ func (t *MQTTTab) updateButtonBar() {
 	th := CurrentTheme
 	buttonText := " " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
 		th.TagHotkey + "e" + th.TagActionText + "dit  " +
-		th.TagHotkey + "r" + th.TagActionText + "emove  " +
+		th.TagHotkey + "x" + th.TagActionText + " remove  " +
 		th.TagHotkey + "c" + th.TagActionText + "onnect  " +
 		th.TagHotkey + "C" + th.TagActionText + " disconnect" + th.TagReset
 	t.buttonBar.SetText(buttonText)

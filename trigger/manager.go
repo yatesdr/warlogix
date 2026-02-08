@@ -12,12 +12,14 @@ import (
 
 // Manager manages all configured triggers.
 type Manager struct {
-	triggers map[string]*Trigger
-	kafka    *kafka.Manager
-	packMgr  *tagpack.Manager
-	reader   TagReader
-	writer   TagWriter
-	mu       sync.RWMutex
+	triggers  map[string]*Trigger
+	kafka     *kafka.Manager
+	mqtt      MQTTPublisher
+	packMgr   *tagpack.Manager
+	reader    TagReader
+	writer    TagWriter
+	namespace string
+	mu        sync.RWMutex
 
 	logFn func(format string, args ...interface{})
 }
@@ -38,6 +40,26 @@ func (m *Manager) SetPackManager(packMgr *tagpack.Manager) {
 	m.packMgr = packMgr
 	for _, t := range m.triggers {
 		t.SetPackManager(packMgr)
+	}
+	m.mu.Unlock()
+}
+
+// SetMQTTManager sets the MQTT publisher for trigger messages.
+func (m *Manager) SetMQTTManager(mqtt MQTTPublisher) {
+	m.mu.Lock()
+	m.mqtt = mqtt
+	for _, t := range m.triggers {
+		t.SetMQTTManager(mqtt)
+	}
+	m.mu.Unlock()
+}
+
+// SetNamespace sets the namespace for topic construction.
+func (m *Manager) SetNamespace(ns string) {
+	m.mu.Lock()
+	m.namespace = ns
+	for _, t := range m.triggers {
+		t.SetNamespace(ns)
 	}
 	m.mu.Unlock()
 }
@@ -77,6 +99,8 @@ func (m *Manager) AddTrigger(cfg *config.TriggerConfig) error {
 
 	trigger.SetLogFunc(m.logFn)
 	trigger.SetPackManager(m.packMgr)
+	trigger.SetMQTTManager(m.mqtt)
+	trigger.SetNamespace(m.namespace)
 	m.triggers[cfg.Name] = trigger
 
 	return nil
@@ -243,7 +267,7 @@ type TriggerInfo struct {
 	Name      string
 	PLC       string
 	Tag       string
-	Topic     string
+	Selector  string
 	Status    Status
 	Error     error
 	FireCount int64
@@ -265,7 +289,7 @@ func (m *Manager) GetAllTriggerInfo() []TriggerInfo {
 			Name:      name,
 			PLC:       t.config.PLC,
 			Tag:       t.config.TriggerTag,
-			Topic:     t.config.Topic,
+			Selector:  t.config.Selector,
 			Status:    status,
 			Error:     err,
 			FireCount: count,

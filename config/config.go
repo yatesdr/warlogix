@@ -2,6 +2,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -55,22 +56,22 @@ func (f PLCFamily) Driver() string {
 
 // Config holds the complete application configuration.
 type Config struct {
-	PLCs     []PLCConfig      `yaml:"plcs"`
-	REST     RESTConfig       `yaml:"rest"`
-	MQTT     []MQTTConfig     `yaml:"mqtt"`
-	Valkey   []ValkeyConfig   `yaml:"valkey,omitempty"`
-	Kafka    []KafkaConfig    `yaml:"kafka,omitempty"`
-	Triggers []TriggerConfig  `yaml:"triggers,omitempty"`
-	TagPacks []TagPackConfig  `yaml:"tag_packs,omitempty"`
-	PollRate time.Duration    `yaml:"poll_rate"`
-	UI       UIConfig         `yaml:"ui,omitempty"`
+	Namespace string           `yaml:"namespace"` // Required: instance namespace for topic/key isolation
+	PLCs      []PLCConfig      `yaml:"plcs"`
+	REST      RESTConfig       `yaml:"rest"`
+	MQTT      []MQTTConfig     `yaml:"mqtt"`
+	Valkey    []ValkeyConfig   `yaml:"valkey,omitempty"`
+	Kafka     []KafkaConfig    `yaml:"kafka,omitempty"`
+	Triggers  []TriggerConfig  `yaml:"triggers,omitempty"`
+	TagPacks  []TagPackConfig  `yaml:"tag_packs,omitempty"`
+	PollRate  time.Duration    `yaml:"poll_rate"`
+	UI        UIConfig         `yaml:"ui,omitempty"`
 }
 
 // TagPackConfig holds configuration for a Tag Pack.
 type TagPackConfig struct {
 	Name          string          `yaml:"name"`
 	Enabled       bool            `yaml:"enabled"`
-	Topic         string          `yaml:"topic"`          // e.g., "packs/production"
 	MQTTEnabled   bool            `yaml:"mqtt_enabled"`
 	KafkaEnabled  bool            `yaml:"kafka_enabled"`
 	ValkeyEnabled bool            `yaml:"valkey_enabled"`
@@ -234,32 +235,36 @@ type RESTConfig struct {
 
 // MQTTConfig holds MQTT publisher configuration.
 type MQTTConfig struct {
-	Name      string `yaml:"name"`
-	Enabled   bool   `yaml:"enabled"`
-	Broker    string `yaml:"broker"`
-	Port      int    `yaml:"port"`
-	Username  string `yaml:"username,omitempty"`
-	Password  string `yaml:"password,omitempty"`
-	ClientID  string `yaml:"client_id"`
-	RootTopic string `yaml:"root_topic"`
-	UseTLS    bool   `yaml:"use_tls,omitempty"`
+	Name     string `yaml:"name"`
+	Enabled  bool   `yaml:"enabled"`
+	Broker   string `yaml:"broker"`
+	Port     int    `yaml:"port"`
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
+	ClientID string `yaml:"client_id"`
+	Selector string `yaml:"selector,omitempty"` // Optional sub-namespace
+	UseTLS   bool   `yaml:"use_tls,omitempty"`
 }
 
 // ValkeyConfig holds Valkey/Redis publisher configuration.
 type ValkeyConfig struct {
 	Name            string        `yaml:"name"`
 	Enabled         bool          `yaml:"enabled"`
-	Address         string        `yaml:"address"`         // host:port format
+	Address         string        `yaml:"address"` // host:port format
 	Password        string        `yaml:"password,omitempty"`
-	Database        int           `yaml:"database"`        // Redis DB number (default 0)
-	Factory         string        `yaml:"factory"`         // Factory identifier (key prefix)
+	Database        int           `yaml:"database"`           // Redis DB number (default 0)
+	Selector        string        `yaml:"selector,omitempty"` // Optional sub-namespace
 	UseTLS          bool          `yaml:"use_tls,omitempty"`
 	KeyTTL          time.Duration `yaml:"key_ttl,omitempty"`          // TTL for keys (0 = no expiry)
 	PublishChanges  bool          `yaml:"publish_changes,omitempty"`  // Publish to Pub/Sub on changes
 	EnableWriteback bool          `yaml:"enable_writeback,omitempty"` // Enable write-back queue
 }
 
-// KafkaConfig holds Kafka cluster configuration.
+// KafkaConfig holds Kafka cluster configuration for YAML persistence.
+// Note: This struct uses pointer types (e.g., *bool) for optional fields to distinguish
+// between "not set" (nil = use default) and "explicitly set to false".
+// The kafka package has its own Config struct with non-pointer types for runtime use.
+// Conversion happens in main.go when loading configs into the kafka manager.
 type KafkaConfig struct {
 	Name          string        `yaml:"name"`
 	Enabled       bool          `yaml:"enabled"`
@@ -275,8 +280,13 @@ type KafkaConfig struct {
 
 	// Tag publishing settings
 	PublishChanges   bool   `yaml:"publish_changes,omitempty"`    // Publish tag changes to Kafka
-	Topic            string `yaml:"topic,omitempty"`              // Topic for tag change publishing
+	Selector         string `yaml:"selector,omitempty"`           // Optional sub-namespace
 	AutoCreateTopics *bool  `yaml:"auto_create_topics,omitempty"` // Auto-create topics if they don't exist (default true)
+
+	// Writeback settings
+	EnableWriteback bool          `yaml:"enable_writeback,omitempty"` // Enable consuming write requests from Kafka
+	ConsumerGroup   string        `yaml:"consumer_group,omitempty"`   // Consumer group ID (default: warlogix-{name}-writers)
+	WriteMaxAge     time.Duration `yaml:"write_max_age,omitempty"`    // Max age of write requests to process (default: 2s)
 }
 
 // TriggerCondition defines when a trigger fires.
@@ -289,15 +299,16 @@ type TriggerCondition struct {
 type TriggerConfig struct {
 	Name         string            `yaml:"name"`
 	Enabled      bool              `yaml:"enabled"`
-	PLC          string            `yaml:"plc"`                   // PLC name to monitor
-	TriggerTag   string            `yaml:"trigger_tag"`           // Tag to watch for condition
-	Condition    TriggerCondition  `yaml:"condition"`             // When to fire
-	AckTag       string            `yaml:"ack_tag,omitempty"`     // Tag to write status: 1=success, -1=error
-	DebounceMS   int               `yaml:"debounce_ms,omitempty"` // Debounce time in milliseconds
-	Tags         []string          `yaml:"tags"`                  // Tags to capture when triggered
-	KafkaCluster string            `yaml:"kafka_cluster"`         // Kafka cluster name
-	Topic        string            `yaml:"topic"`                 // Kafka topic
-	Metadata     map[string]string `yaml:"metadata,omitempty"`    // Static metadata to include
+	PLC          string            `yaml:"plc"`                    // PLC name to monitor
+	TriggerTag   string            `yaml:"trigger_tag"`            // Tag to watch for condition
+	Condition    TriggerCondition  `yaml:"condition"`              // When to fire
+	AckTag       string            `yaml:"ack_tag,omitempty"`      // Tag to write status: 1=success, -1=error
+	DebounceMS   int               `yaml:"debounce_ms,omitempty"`  // Debounce time in milliseconds
+	Tags         []string          `yaml:"tags"`                   // Tags to capture when triggered
+	MQTTBroker   string            `yaml:"mqtt_broker"`            // MQTT broker: "all", "none", or specific broker name
+	KafkaCluster string            `yaml:"kafka_cluster"`          // Kafka cluster: "all", "none", or specific cluster name
+	Selector     string            `yaml:"selector,omitempty"`     // Optional sub-namespace for topic
+	Metadata     map[string]string `yaml:"metadata,omitempty"`     // Static metadata to include
 	PublishPack  string            `yaml:"publish_pack,omitempty"` // TagPack name to republish on trigger
 }
 
@@ -321,12 +332,11 @@ func DefaultConfig() *Config {
 // DefaultMQTTConfig returns a default MQTT configuration.
 func DefaultMQTTConfig(name string) MQTTConfig {
 	return MQTTConfig{
-		Name:      name,
-		Enabled:   false,
-		Broker:    "localhost",
-		Port:      1883,
-		ClientID:  "warlogix-" + name,
-		RootTopic: "factory",
+		Name:     name,
+		Enabled:  false,
+		Broker:   "localhost",
+		Port:     1883,
+		ClientID: "warlogix-" + name,
 	}
 }
 
@@ -337,7 +347,6 @@ func DefaultValkeyConfig(name string) ValkeyConfig {
 		Enabled:         false,
 		Address:         "localhost:6379",
 		Database:        0,
-		Factory:         "factory",
 		KeyTTL:          0,
 		PublishChanges:  true,
 		EnableWriteback: false,
@@ -347,12 +356,14 @@ func DefaultValkeyConfig(name string) ValkeyConfig {
 // DefaultKafkaConfig returns a default Kafka configuration.
 func DefaultKafkaConfig(name string) KafkaConfig {
 	return KafkaConfig{
-		Name:         name,
-		Enabled:      false,
-		Brokers:      []string{"localhost:9092"},
-		RequiredAcks: -1, // All replicas must acknowledge
-		MaxRetries:   3,
-		RetryBackoff: 100 * time.Millisecond,
+		Name:            name,
+		Enabled:         false,
+		Brokers:         []string{"localhost:9092"},
+		RequiredAcks:    -1, // All replicas must acknowledge
+		MaxRetries:      3,
+		RetryBackoff:    100 * time.Millisecond,
+		EnableWriteback: false,
+		WriteMaxAge:     2 * time.Second, // Ignore write requests older than 2 seconds
 	}
 }
 
@@ -637,10 +648,33 @@ func DefaultTagPackConfig(name string) TagPackConfig {
 	return TagPackConfig{
 		Name:          name,
 		Enabled:       true,
-		Topic:         "packs/" + name,
 		MQTTEnabled:   true,
 		KafkaEnabled:  false,
 		ValkeyEnabled: false,
 		Members:       []TagPackMember{},
 	}
+}
+
+// Validate checks the configuration for errors.
+// Note: Empty namespace is allowed here - the TUI will prompt for it interactively.
+func (c *Config) Validate() error {
+	// Only validate namespace format if one is set
+	if c.Namespace != "" && !IsValidNamespace(c.Namespace) {
+		return fmt.Errorf("invalid namespace: must contain only alphanumeric characters, hyphens, and underscores")
+	}
+	return nil
+}
+
+// IsValidNamespace returns true if the namespace is valid.
+// Valid namespaces contain only alphanumeric characters, hyphens, underscores, and dots.
+func IsValidNamespace(ns string) bool {
+	if ns == "" {
+		return false
+	}
+	for _, r := range ns {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.') {
+			return false
+		}
+	}
+	return true
 }

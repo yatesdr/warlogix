@@ -4,28 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go"
 	"warlogix/logging"
+	"warlogix/namespace"
 )
-
-// sanitizeTopic trims leading/trailing dots from a topic name to avoid
-// issues with user-provided topic prefixes.
-func sanitizeTopic(topic string) string {
-	return strings.Trim(topic, ".")
-}
-
-// buildHealthTopic creates the health topic from a base topic.
-func buildHealthTopic(baseTopic string) string {
-	base := sanitizeTopic(baseTopic)
-	if base == "" {
-		return "health"
-	}
-	return base + ".health"
-}
 
 // TagMessage is the JSON structure published to Kafka for tag changes.
 // When a tag has an alias, Tag contains the alias and Offset contains the original address.
@@ -71,15 +56,22 @@ type topicBatch struct {
 // Manager manages multiple Kafka producer connections.
 type Manager struct {
 	producers  map[string]*Producer
+	consumers  map[string]*Consumer
+	builders   map[string]*namespace.Builder // builders per cluster
 	mu         sync.RWMutex
 	lastValues map[string]interface{} // Track last published values per cluster/plc/tag
 	lastMu     sync.RWMutex
 
 	// Batched publishing
-	batchChan    chan publishJob       // Incoming jobs for batching
-	wg           sync.WaitGroup
-	stopChan     chan struct{}
-	started      bool
+	batchChan chan publishJob // Incoming jobs for batching
+	wg        sync.WaitGroup
+	stopChan  chan struct{}
+	started   bool
+
+	// Write handling callbacks (shared across all consumers)
+	writeHandler   WriteHandler
+	writeValidator WriteValidator
+	tagTypeLookup  TagTypeLookup
 }
 
 // Batching configuration
@@ -96,6 +88,8 @@ const (
 func NewManager() *Manager {
 	m := &Manager{
 		producers:  make(map[string]*Producer),
+		consumers:  make(map[string]*Consumer),
+		builders:   make(map[string]*namespace.Builder),
 		lastValues: make(map[string]interface{}),
 		batchChan:  make(chan publishJob, MaxBatchQueueSize),
 		stopChan:   make(chan struct{}),
@@ -209,7 +203,7 @@ func (m *Manager) batchProcessor() {
 }
 
 // AddCluster adds a new Kafka cluster configuration.
-func (m *Manager) AddCluster(config *Config) {
+func (m *Manager) AddCluster(config *Config, ns string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -217,19 +211,47 @@ func (m *Manager) AddCluster(config *Config) {
 		return
 	}
 
-	m.producers[config.Name] = NewProducer(config)
+	builder := namespace.New(ns, config.Selector)
+	m.builders[config.Name] = builder
+
+	producer := NewProducer(config)
+	m.producers[config.Name] = producer
+
+	// Create consumer if writeback is enabled
+	if config.EnableWriteback {
+		consumer := NewConsumer(config, producer, builder)
+		// Apply current callbacks
+		if m.writeHandler != nil {
+			consumer.SetWriteHandler(m.writeHandler)
+		}
+		if m.writeValidator != nil {
+			consumer.SetWriteValidator(m.writeValidator)
+		}
+		if m.tagTypeLookup != nil {
+			consumer.SetTagTypeLookup(m.tagTypeLookup)
+		}
+		m.consumers[config.Name] = consumer
+	}
 }
 
 // RemoveCluster removes a Kafka cluster and disconnects.
 func (m *Manager) RemoveCluster(name string) {
 	m.mu.Lock()
-	producer, exists := m.producers[name]
-	if exists {
+	producer, producerExists := m.producers[name]
+	consumer, consumerExists := m.consumers[name]
+	if producerExists {
 		delete(m.producers, name)
 	}
+	if consumerExists {
+		delete(m.consumers, name)
+	}
+	delete(m.builders, name)
 	m.mu.Unlock()
 
-	if exists && producer != nil {
+	if consumerExists && consumer != nil {
+		consumer.Stop()
+	}
+	if producerExists && producer != nil {
 		producer.Disconnect()
 	}
 }
@@ -277,25 +299,70 @@ func (m *Manager) Disconnect(name string) {
 	}
 }
 
-// ConnectEnabled connects to all enabled Kafka clusters.
+// ConnectEnabled connects to all enabled Kafka clusters and starts consumers.
 func (m *Manager) ConnectEnabled() {
 	m.mu.RLock()
 	producers := make([]*Producer, 0)
+	consumers := make([]*Consumer, 0)
 	for _, p := range m.producers {
 		if p.config.Enabled {
 			producers = append(producers, p)
 		}
 	}
+	for _, c := range m.consumers {
+		if c.config.Enabled && c.config.EnableWriteback {
+			consumers = append(consumers, c)
+		}
+	}
 	m.mu.RUnlock()
 
+	// Connect producers first
 	for _, p := range producers {
-		go p.Connect()
+		go func(prod *Producer) {
+			if err := prod.Connect(); err != nil {
+				logKafka("Failed to connect producer %s: %v", prod.config.Name, err)
+			}
+		}(p)
+	}
+
+	// Start consumers after a short delay to allow producers to connect
+	// (consumers need the producer to send responses)
+	if len(consumers) > 0 {
+		logKafka("Scheduling %d writeback consumer(s) to start after producer connection", len(consumers))
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			for _, c := range consumers {
+				logKafka("Starting writeback consumer for cluster %s (topic: %s, group: %s)",
+					c.config.Name, c.builder.KafkaWriteTopic(), c.config.GetConsumerGroup())
+				if err := c.Start(); err != nil {
+					logKafka("Failed to start consumer %s: %v", c.config.Name, err)
+				} else {
+					logKafka("Writeback consumer %s started successfully", c.config.Name)
+				}
+			}
+		}()
 	}
 }
 
 // StopAll disconnects from all Kafka clusters and stops the batcher.
 func (m *Manager) StopAll() {
-	// Stop the batcher goroutine first
+	// Stop consumers first (they depend on producers for responses)
+	m.mu.RLock()
+	consumers := make([]*Consumer, 0, len(m.consumers))
+	for _, c := range m.consumers {
+		consumers = append(consumers, c)
+	}
+	m.mu.RUnlock()
+
+	if len(consumers) > 0 {
+		logKafka("Stopping %d writeback consumer(s)", len(consumers))
+	}
+	for _, c := range consumers {
+		logKafka("Stopping writeback consumer for cluster %s", c.config.Name)
+		c.Stop()
+	}
+
+	// Stop the batcher goroutine
 	m.mu.Lock()
 	if !m.started {
 		m.mu.Unlock()
@@ -388,9 +455,9 @@ func (m *Manager) GetClusterStatus(name string) (ConnectionStatus, error) {
 }
 
 // LoadFromConfigs loads multiple cluster configurations.
-func (m *Manager) LoadFromConfigs(configs []Config) {
+func (m *Manager) LoadFromConfigs(configs []Config, ns string) {
 	for i := range configs {
-		m.AddCluster(&configs[i])
+		m.AddCluster(&configs[i], ns)
 	}
 }
 
@@ -407,13 +474,15 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 
 	m.mu.RLock()
 	producers := make([]*Producer, 0, len(m.producers))
-	for _, p := range m.producers {
+	builders := make(map[string]*namespace.Builder, len(m.builders))
+	for name, p := range m.producers {
 		producers = append(producers, p)
+		builders[name] = m.builders[name]
 	}
 	m.mu.RUnlock()
 
 	for _, p := range producers {
-		// Skip if not connected, not enabled for publishing, or no topic configured
+		// Skip if not connected or not enabled for publishing
 		status := p.GetStatus()
 		if status != StatusConnected {
 			continue
@@ -421,7 +490,9 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 		if !p.config.PublishChanges {
 			continue
 		}
-		if p.config.Topic == "" {
+
+		builder := builders[p.config.Name]
+		if builder == nil {
 			continue
 		}
 
@@ -463,7 +534,7 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 		// Queue the publish job for batching (non-blocking with drop on overflow)
 		job := publishJob{
 			producer:  p,
-			topic:     sanitizeTopic(p.config.Topic),
+			topic:     builder.KafkaTagTopic(),
 			key:       key,
 			payload:   payload,
 			cacheKey:  cacheKey,
@@ -490,17 +561,24 @@ func (m *Manager) PublishHealth(plcName, driver string, online bool, status, err
 
 	m.mu.RLock()
 	producers := make([]*Producer, 0, len(m.producers))
-	for _, p := range m.producers {
+	builders := make(map[string]*namespace.Builder, len(m.builders))
+	for name, p := range m.producers {
 		producers = append(producers, p)
+		builders[name] = m.builders[name]
 	}
 	m.mu.RUnlock()
 
 	for _, p := range producers {
-		// Skip if not connected or no topic configured
+		// Skip if not connected or not enabled for publishing
 		if p.GetStatus() != StatusConnected {
 			continue
 		}
-		if !p.config.PublishChanges || p.config.Topic == "" {
+		if !p.config.PublishChanges {
+			continue
+		}
+
+		builder := builders[p.config.Name]
+		if builder == nil {
 			continue
 		}
 
@@ -518,8 +596,8 @@ func (m *Manager) PublishHealth(plcName, driver string, online bool, status, err
 			continue
 		}
 
-		// Use health topic: base topic with .health suffix
-		healthTopic := buildHealthTopic(p.config.Topic)
+		// Use health topic from builder
+		healthTopic := builder.KafkaHealthTopic()
 		key := []byte(plcName)
 
 		job := publishJob{
@@ -547,9 +625,9 @@ func (m *Manager) AnyPublishing() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for _, p := range m.producers {
+	for name, p := range m.producers {
 		status := p.GetStatus()
-		if status == StatusConnected && p.config.PublishChanges && p.config.Topic != "" {
+		if status == StatusConnected && p.config.PublishChanges && m.builders[name] != nil {
 			return true
 		}
 	}
@@ -561,6 +639,54 @@ func (m *Manager) ClearLastValues() {
 	m.lastMu.Lock()
 	m.lastValues = make(map[string]interface{})
 	m.lastMu.Unlock()
+}
+
+// SetWriteHandler sets the callback for processing write requests.
+// This is applied to all consumers.
+func (m *Manager) SetWriteHandler(handler WriteHandler) {
+	m.mu.Lock()
+	m.writeHandler = handler
+	consumers := make([]*Consumer, 0, len(m.consumers))
+	for _, c := range m.consumers {
+		consumers = append(consumers, c)
+	}
+	m.mu.Unlock()
+
+	for _, c := range consumers {
+		c.SetWriteHandler(handler)
+	}
+}
+
+// SetWriteValidator sets the callback for validating write requests.
+// This is applied to all consumers.
+func (m *Manager) SetWriteValidator(validator WriteValidator) {
+	m.mu.Lock()
+	m.writeValidator = validator
+	consumers := make([]*Consumer, 0, len(m.consumers))
+	for _, c := range m.consumers {
+		consumers = append(consumers, c)
+	}
+	m.mu.Unlock()
+
+	for _, c := range consumers {
+		c.SetWriteValidator(validator)
+	}
+}
+
+// SetTagTypeLookup sets the callback for looking up tag types.
+// This is applied to all consumers.
+func (m *Manager) SetTagTypeLookup(lookup TagTypeLookup) {
+	m.mu.Lock()
+	m.tagTypeLookup = lookup
+	consumers := make([]*Consumer, 0, len(m.consumers))
+	for _, c := range m.consumers {
+		consumers = append(consumers, c)
+	}
+	m.mu.Unlock()
+
+	for _, c := range consumers {
+		c.SetTagTypeLookup(lookup)
+	}
 }
 
 // PublishRaw publishes raw bytes to a topic on all connected clusters.
@@ -582,7 +708,7 @@ func (m *Manager) PublishRaw(topic string, data []byte) {
 
 		job := publishJob{
 			producer:  p,
-			topic:     sanitizeTopic(topic),
+			topic:     topic,
 			key:       []byte(topic),
 			payload:   data,
 			cacheKey:  "", // No caching for raw publishes

@@ -195,6 +195,7 @@ var ThemeDefault = func() *Theme {
 	t.TagWritable = colorToTag(t.Writable)
 	t.FormLabel = tcell.ColorWhite           // White labels in forms
 	t.ButtonText = tcell.ColorWhite          // White text on buttons
+	t.SelectedText = tcell.ColorWhite        // White text on teal selection for contrast
 	return t
 }()
 
@@ -665,6 +666,19 @@ func ApplyListTheme(list *tview.List) {
 	list.SetSelectedBackgroundColor(th.Accent)
 }
 
+// ApplyModalTheme applies the current theme to a modal dialog.
+func ApplyModalTheme(modal *tview.Modal) {
+	th := CurrentTheme
+	modal.SetBackgroundColor(th.Background)
+	modal.SetTextColor(th.Text)
+	modal.SetButtonBackgroundColor(th.FieldBackground)
+	modal.SetButtonTextColor(th.ButtonText) // Use ButtonText for proper contrast on FieldBackground
+	modal.SetButtonStyle(tcell.StyleDefault.Foreground(th.ButtonText).Background(th.FieldBackground))
+	modal.SetButtonActivatedStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
+	modal.SetBorderColor(th.Border)
+	modal.SetBorder(true)
+}
+
 // Legacy color variables - now derived from CurrentTheme for backwards compatibility
 // These are kept for any code that directly references them
 var (
@@ -746,13 +760,15 @@ func acceptDigits(text string, lastChar rune) bool {
 	return true
 }
 
-// Help text for local mode
-const HelpText = `
+// helpTextBase is the shared help text, with %s placeholder for quit action
+const helpTextBase = `
  Keyboard Shortcuts
  ──────────────────────────────────────
 
  Navigation
-   Shift+Tab    Switch program tabs
+   Shift+Tab    Cycle tabs
+   P/B/T/G      PLCs / Browser / TagPacks / triGgers
+   E/M/V/K/D    rEst / Mqtt / Valkey / Kafka / Debug
    Tab          Move between fields
    Enter        Select / Activate
    Space        Toggle checkbox
@@ -763,7 +779,7 @@ const HelpText = `
    d            Discover PLCs
    a            Add PLC
    e            Edit selected
-   r            Remove selected
+   x            Remove selected
    c            Connect
    C            Disconnect
    i            Show PLC info
@@ -777,79 +793,34 @@ const HelpText = `
    d            Show tag details
    a            Add manual tag (Micro800/S7/Omron)
    e            Edit manual tag (Micro800/S7/Omron)
-   x            Delete manual tag (Micro800/S7/Omron)
+   x            Remove manual tag (Micro800/S7/Omron)
    Escape       Return to tree
 
  MQTT / Valkey / Kafka Tabs
    a            Add broker/server/cluster
    e            Edit selected
-   r            Remove selected
+   x            Remove selected
    c            Connect
    C            Disconnect
 
  Triggers Tab
-   a            Add trigger
-   e            Edit selected
-   r            Remove selected
+   a            Add (trigger or tag, context-sensitive)
+   x            Remove (trigger or tag, context-sensitive)
+   e            Edit selected trigger
    s            Start trigger
    S            Stop trigger
    T            Test fire trigger
-   R            Reset trigger from error
 
  Application
-   Q            Quit
+   N            Configure namespace
+   F6           Cycle themes
+   Q            %s
 `
 
-// HelpTextDaemon is the help text for daemon mode
-const HelpTextDaemon = `
- Keyboard Shortcuts (Daemon Mode)
- ──────────────────────────────────────
-
- Navigation
-   Shift+Tab    Switch program tabs
-   Tab          Move between fields
-   Enter        Select / Activate
-   Space        Toggle checkbox
-   Escape       Close dialog / Back
-   ?            Show this help
-
- PLCs Tab
-   d            Discover PLCs
-   a            Add PLC
-   e            Edit selected
-   r            Remove selected
-   c            Connect
-   C            Disconnect
-   i            Show PLC info
-
- Tag Browser Tab
-   /            Focus filter
-   c            Clear filter
-   p            Focus PLC dropdown
-   Space        Toggle tag publishing
-   w            Toggle tag writable
-   d            Show tag details
-   a            Add manual tag (Micro800/S7/Omron)
-   e            Edit manual tag (Micro800/S7/Omron)
-   x            Delete manual tag (Micro800/S7/Omron)
-   Escape       Return to tree
-
- MQTT / Valkey / Kafka Tabs
-   a            Add broker/server/cluster
-   e            Edit selected
-   r            Remove selected
-   c            Connect
-   C            Disconnect
-
- Triggers Tab
-   a            Add trigger
-   e            Edit selected
-   r            Remove selected
-   s            Start trigger
-   S            Stop trigger
-   T            Test fire trigger
-   R            Reset trigger from error
-
- Session
-   Q            Disconnect from daemon
-`
+// GetHelpText returns the help text with the appropriate quit action
+func GetHelpText(daemonMode bool) string {
+	if daemonMode {
+		return fmt.Sprintf(helpTextBase, "Disconnect")
+	}
+	return fmt.Sprintf(helpTextBase, "Quit")
+}

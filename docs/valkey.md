@@ -5,28 +5,32 @@ WarLogix stores tag values in Valkey/Redis with optional Pub/Sub notifications a
 ## Configuration
 
 ```yaml
+namespace: factory                  # Required: instance namespace
+
 valkey:
   - name: LocalValkey
     enabled: true
     address: localhost:6379
     database: 0
-    factory: factory
-    password: secret            # Optional
-    use_tls: true               # Optional
-    key_ttl: 60s                # Optional key expiration
-    publish_changes: true       # Enable Pub/Sub
-    enable_writeback: true      # Enable write-back queue
+    selector: line1                 # Optional: sub-namespace
+    password: secret                # Optional
+    use_tls: true                   # Optional
+    key_ttl: 60s                    # Optional key expiration
+    publish_changes: true           # Enable Pub/Sub
+    enable_writeback: true          # Enable write-back queue
 ```
+
+The `namespace` is a required top-level setting that identifies this WarLogix instance. The optional `selector` provides additional sub-organization within the namespace.
 
 ## Key Storage
 
 ### Tag Keys
 
-Pattern: `{factory}:{plc}:tags:{tag}`
+Pattern: `{namespace}[:{selector}]:{plc}:tags:{tag}`
 
 ```json
 {
-  "factory": "factory",
+  "factory": "factory:line1",
   "plc": "MainPLC",
   "tag": "Counter",
   "value": 42,
@@ -38,13 +42,13 @@ Pattern: `{factory}:{plc}:tags:{tag}`
 
 ### Health Keys
 
-Pattern: `{factory}:{plc}:health`
+Pattern: `{namespace}[:{selector}]:{plc}:health`
 
 Updated every 10 seconds:
 
 ```json
 {
-  "factory": "factory",
+  "factory": "factory:line1",
   "plc": "MainPLC",
   "online": true,
   "status": "connected",
@@ -69,12 +73,12 @@ When `publish_changes: true`, changes are published to:
 
 | Channel | Description |
 |---------|-------------|
-| `{factory}:{plc}:changes` | Changes for specific PLC |
-| `{factory}:_all:changes` | All changes across all PLCs |
+| `{namespace}[:{selector}]:{plc}:changes` | Changes for specific PLC |
+| `{namespace}[:{selector}]:_all:changes` | All changes across all PLCs |
 
 **Subscribe example:**
 ```bash
-redis-cli SUBSCRIBE factory:MainPLC:changes factory:_all:changes
+redis-cli SUBSCRIBE factory:line1:MainPLC:changes factory:line1:_all:changes
 ```
 
 ## Write-Back Queue
@@ -83,19 +87,19 @@ When `enable_writeback: true`, write requests can be sent via a Redis LIST.
 
 ### Queue Key
 
-`{factory}:writes`
+`{namespace}[:{selector}]:writes`
 
 ### Send Write Request
 
 ```bash
-redis-cli RPUSH factory:writes '{"factory":"factory","plc":"MainPLC","tag":"Counter","value":100}'
+redis-cli RPUSH factory:line1:writes '{"factory":"factory:line1","plc":"MainPLC","tag":"Counter","value":100}'
 ```
 
 ### Request Format
 
 ```json
 {
-  "factory": "factory",
+  "factory": "factory:line1",
   "plc": "MainPLC",
   "tag": "Counter",
   "value": 100
@@ -103,21 +107,21 @@ redis-cli RPUSH factory:writes '{"factory":"factory","plc":"MainPLC","tag":"Coun
 ```
 
 **Requirements:**
-- The `factory` field must match the server's `factory` configuration
+- The `factory` field must match the server's namespace (and selector if configured)
 - Tag must be marked as `writable: true`
 
 ### Response Channel
 
-Subscribe to: `{factory}:write:responses`
+Subscribe to: `{namespace}[:{selector}]:write:responses`
 
 ```bash
-redis-cli SUBSCRIBE factory:write:responses
+redis-cli SUBSCRIBE factory:line1:write:responses
 ```
 
 **Success:**
 ```json
 {
-  "factory": "factory",
+  "factory": "factory:line1",
   "plc": "MainPLC",
   "tag": "Counter",
   "value": 100,
@@ -129,7 +133,7 @@ redis-cli SUBSCRIBE factory:write:responses
 **Error:**
 ```json
 {
-  "factory": "factory",
+  "factory": "factory:line1",
   "plc": "MainPLC",
   "tag": "Counter",
   "value": 100,
@@ -144,16 +148,18 @@ redis-cli SUBSCRIBE factory:write:responses
 Configure multiple Valkey/Redis servers:
 
 ```yaml
+namespace: factory
+
 valkey:
   - name: Primary
     enabled: true
     address: redis-primary:6379
-    factory: factory
+    selector: primary
 
   - name: Replica
     enabled: true
     address: redis-replica:6379
-    factory: factory
+    selector: replica
 ```
 
 All enabled servers receive the same updates.
@@ -162,22 +168,22 @@ All enabled servers receive the same updates.
 
 **Get tag value:**
 ```bash
-redis-cli GET factory:MainPLC:tags:Counter
+redis-cli GET factory:line1:MainPLC:tags:Counter
 ```
 
 **Get health:**
 ```bash
-redis-cli GET factory:MainPLC:health
+redis-cli GET factory:line1:MainPLC:health
 ```
 
 **List all tags for a PLC:**
 ```bash
-redis-cli KEYS "factory:MainPLC:tags:*"
+redis-cli KEYS "factory:line1:MainPLC:tags:*"
 ```
 
 **Write a value:**
 ```bash
-redis-cli RPUSH factory:writes '{"factory":"factory","plc":"MainPLC","tag":"Counter","value":100}'
+redis-cli RPUSH factory:line1:writes '{"factory":"factory:line1","plc":"MainPLC","tag":"Counter","value":100}'
 ```
 
 ## Stress Testing

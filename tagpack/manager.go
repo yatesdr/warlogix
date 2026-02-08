@@ -8,6 +8,7 @@ import (
 
 	"warlogix/config"
 	"warlogix/logging"
+	"warlogix/namespace"
 )
 
 const (
@@ -24,8 +25,17 @@ type PLCDataProvider interface {
 	GetPLCMetadata(plcName string) PLCMetadata
 }
 
+// PackPublishInfo contains all information needed to publish a pack.
+type PackPublishInfo struct {
+	Value         PackValue
+	Config        *config.TagPackConfig
+	MQTTTopic     string
+	KafkaTopic    string
+	ValkeyChannel string
+}
+
 // PublishCallback is called when a pack should be published.
-type PublishCallback func(pv PackValue, cfg *config.TagPackConfig)
+type PublishCallback func(info PackPublishInfo)
 
 // Manager manages TagPack change detection and debounced publishing.
 type Manager struct {
@@ -34,12 +44,13 @@ type Manager struct {
 	provider    PLCDataProvider
 	onPublish   PublishCallback
 	config      *config.Config // Reference to config for dynamic lookup
+	builder     *namespace.Builder
 
 	// Debounce tracking
-	pendingMu   sync.Mutex
-	pending     map[string]time.Time // pack name -> first trigger time
-	stopChan    chan struct{}
-	wg          sync.WaitGroup
+	pendingMu sync.Mutex
+	pending   map[string]time.Time // pack name -> first trigger time
+	stopChan  chan struct{}
+	wg        sync.WaitGroup
 
 	logFn func(format string, args ...interface{})
 }
@@ -51,6 +62,7 @@ func NewManager(cfg *config.Config, provider PLCDataProvider) *Manager {
 		pending:  make(map[string]time.Time),
 		provider: provider,
 		config:   cfg,
+		builder:  namespace.New(cfg.Namespace, ""),
 		stopChan: make(chan struct{}),
 	}
 
@@ -205,6 +217,7 @@ func (m *Manager) publishPack(packName string) {
 	cfg := m.packs[packName]
 	callback := m.onPublish
 	provider := m.provider
+	builder := m.builder
 	m.mu.RUnlock()
 
 	if cfg == nil || !cfg.Enabled {
@@ -275,8 +288,17 @@ func (m *Manager) publishPack(packName string) {
 
 	m.log("Publishing pack %s with %d tags", packName, len(pv.Tags))
 
+	// Build pre-computed topics using namespace builder
+	info := PackPublishInfo{
+		Value:         pv,
+		Config:        cfg,
+		MQTTTopic:     builder.MQTTPackTopic(packName),
+		KafkaTopic:    builder.KafkaPackTopic(packName),
+		ValkeyChannel: builder.ValkeyPackChannel(packName),
+	}
+
 	// Call the publish callback
-	callback(pv, cfg)
+	callback(info)
 }
 
 // GetPackValue returns the current value of a pack without publishing.
@@ -358,7 +380,6 @@ func (m *Manager) ListPacks() []PackInfo {
 		result = append(result, PackInfo{
 			Name:    cfg.Name,
 			Enabled: cfg.Enabled,
-			Topic:   cfg.Topic,
 			Members: len(cfg.Members),
 			URL:     "/tagpack/" + url.PathEscape(cfg.Name),
 		})
@@ -370,7 +391,6 @@ func (m *Manager) ListPacks() []PackInfo {
 type PackInfo struct {
 	Name    string `json:"name"`
 	Enabled bool   `json:"enabled"`
-	Topic   string `json:"topic"`
 	Members int    `json:"members"`
 	URL     string `json:"url"`
 }

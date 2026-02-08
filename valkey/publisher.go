@@ -6,27 +6,14 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"warlogix/config"
 	"warlogix/logging"
+	"warlogix/namespace"
 )
-
-// joinKey joins key segments with colons, trimming leading/trailing colons
-// from each segment to avoid empty key parts (e.g., "foo::bar" or ":foo:bar:").
-func joinKey(segments ...string) string {
-	var parts []string
-	for _, s := range segments {
-		s = strings.Trim(s, ":")
-		if s != "" {
-			parts = append(parts, s)
-		}
-	}
-	return strings.Join(parts, ":")
-}
 
 // TagMessage represents a tag value message stored in Valkey.
 // When a tag has an alias, Tag contains the alias and Offset contains the original address.
@@ -74,6 +61,7 @@ type HealthMessage struct {
 // Publisher handles publishing tag values to a Valkey server.
 type Publisher struct {
 	config  *config.ValkeyConfig
+	builder *namespace.Builder
 	client  *redis.Client
 	running bool
 	mu      sync.RWMutex
@@ -90,9 +78,10 @@ type Publisher struct {
 }
 
 // NewPublisher creates a new Valkey publisher.
-func NewPublisher(cfg *config.ValkeyConfig) *Publisher {
+func NewPublisher(cfg *config.ValkeyConfig, ns string) *Publisher {
 	return &Publisher{
 		config:   cfg,
+		builder:  namespace.New(ns, cfg.Selector),
 		stopChan: make(chan struct{}),
 	}
 }
@@ -249,11 +238,11 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 	}
 	client := p.client
 	cfg := p.config
+	builder := p.builder
 	p.mu.RUnlock()
 
-	// Build key: factory:plc:tags:tag (standard Redis convention)
-	// Note: tag names may contain : but that's OK since tag is always the last segment
-	key := joinKey(cfg.Factory, plcName, "tags", tagName)
+	// Build key using namespace builder
+	key := builder.ValkeyTagKey(plcName, tagName)
 
 	// For S7 with alias, use alias as "tag" and include address
 	displayTag := tagName
@@ -263,7 +252,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 
 	// Build message
 	msg := TagMessage{
-		Factory:   cfg.Factory,
+		Factory:   builder.ValkeyFactory(),
 		PLC:       plcName,
 		Tag:       displayTag,
 		Offset:    address, // Original tag name/address when alias is used
@@ -295,11 +284,11 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 	// Publish to Pub/Sub if enabled
 	if cfg.PublishChanges {
 		// Publish to PLC-specific channel
-		channel := joinKey(cfg.Factory, plcName, "changes")
+		channel := builder.ValkeyChangesChannel(plcName)
 		client.Publish(ctx, channel, data)
 
 		// Also publish to the all-changes channel
-		allChannel := joinKey(cfg.Factory, "_all", "changes")
+		allChannel := builder.ValkeyAllChangesChannel()
 		client.Publish(ctx, allChannel, data)
 	}
 
@@ -320,6 +309,7 @@ func (p *Publisher) PublishBatch(items []TagPublishItem) error {
 	}
 	client := p.client
 	cfg := p.config
+	builder := p.builder
 	p.mu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -329,8 +319,9 @@ func (p *Publisher) PublishBatch(items []TagPublishItem) error {
 	pipe := client.Pipeline()
 	now := time.Now().UTC()
 
+	factory := builder.ValkeyFactory()
 	for _, item := range items {
-		key := joinKey(cfg.Factory, item.PLCName, "tags", item.TagName)
+		key := builder.ValkeyTagKey(item.PLCName, item.TagName)
 
 		displayTag := item.TagName
 		if item.Alias != "" {
@@ -338,7 +329,7 @@ func (p *Publisher) PublishBatch(items []TagPublishItem) error {
 		}
 
 		msg := TagMessage{
-			Factory:   cfg.Factory,
+			Factory:   factory,
 			PLC:       item.PLCName,
 			Tag:       displayTag,
 			Offset:    item.Address, // Original tag name/address when alias is used
@@ -362,9 +353,9 @@ func (p *Publisher) PublishBatch(items []TagPublishItem) error {
 
 		// Add PUBLISH commands to same pipeline (fire-and-forget)
 		if cfg.PublishChanges {
-			channel := joinKey(cfg.Factory, item.PLCName, "changes")
+			channel := builder.ValkeyChangesChannel(item.PLCName)
 			pipe.Publish(ctx, channel, data)
-			allChannel := joinKey(cfg.Factory, "_all", "changes")
+			allChannel := builder.ValkeyAllChangesChannel()
 			pipe.Publish(ctx, allChannel, data)
 		}
 	}
@@ -388,13 +379,14 @@ func (p *Publisher) PublishHealth(plcName, driver string, online bool, status, e
 	}
 	client := p.client
 	cfg := p.config
+	builder := p.builder
 	p.mu.RUnlock()
 
-	// Build key: factory:plc:health
-	key := joinKey(cfg.Factory, plcName, "health")
+	// Build key using namespace builder
+	key := builder.ValkeyHealthKey(plcName)
 
 	msg := HealthMessage{
-		Factory:   cfg.Factory,
+		Factory:   builder.ValkeyFactory(),
 		PLC:       plcName,
 		Driver:    driver,
 		Online:    online,
@@ -423,8 +415,7 @@ func (p *Publisher) PublishHealth(plcName, driver string, online bool, status, e
 
 	// Publish to health-specific Pub/Sub channel
 	if cfg.PublishChanges {
-		channel := joinKey(cfg.Factory, plcName, "health")
-		client.Publish(ctx, channel, data)
+		client.Publish(ctx, key, data)
 	}
 
 	return nil
@@ -462,8 +453,8 @@ func (p *Publisher) SetOnConnectCallback(callback func()) {
 func (p *Publisher) writebackListener() {
 	defer p.wg.Done()
 
-	queueKey := joinKey(p.config.Factory, "writes")
-	responseChannel := joinKey(p.config.Factory, "write", "responses")
+	queueKey := p.builder.ValkeyWriteQueue()
+	responseChannel := p.builder.ValkeyWriteResponseChannel()
 
 	for {
 		select {
@@ -515,10 +506,11 @@ func (p *Publisher) processWriteRequest(client *redis.Client, req WriteRequest, 
 	p.mu.RLock()
 	handler := p.writeHandler
 	validator := p.writeValidator
+	builder := p.builder
 	p.mu.RUnlock()
 
 	response := WriteResponse{
-		Factory:   req.Factory,
+		Factory:   builder.ValkeyFactory(),
 		PLC:       req.PLC,
 		Tag:       req.Tag,
 		Value:     req.Value,

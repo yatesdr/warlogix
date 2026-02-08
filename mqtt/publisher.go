@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -14,20 +13,8 @@ import (
 
 	"warlogix/config"
 	"warlogix/logging"
+	"warlogix/namespace"
 )
-
-// joinTopic joins topic segments, trimming leading/trailing slashes from each
-// segment to avoid empty topic levels (e.g., "foo//bar" or "/foo/bar/").
-func joinTopic(segments ...string) string {
-	var parts []string
-	for _, s := range segments {
-		s = strings.Trim(s, "/")
-		if s != "" {
-			parts = append(parts, s)
-		}
-	}
-	return strings.Join(parts, "/")
-}
 
 func logMQTT(format string, args ...interface{}) {
 	logging.DebugLog("MQTT", format, args...)
@@ -36,7 +23,7 @@ func logMQTT(format string, args ...interface{}) {
 // writeJob represents a pending write operation.
 type writeJob struct {
 	client         pahomqtt.Client
-	rootTopic      string
+	builder        *namespace.Builder
 	plcName        string
 	tagName        string
 	value          interface{}
@@ -53,6 +40,7 @@ const MaxWriteQueueSize = 100
 // Publisher handles MQTT connection and publishes tag values to a single broker.
 type Publisher struct {
 	config  *config.MQTTConfig
+	builder *namespace.Builder
 	client  pahomqtt.Client
 	running bool
 	mu      sync.RWMutex
@@ -129,9 +117,10 @@ type TagTypeLookup func(plcName, tagName string) uint16
 type WriteValidator func(plcName, tagName string) bool
 
 // NewPublisher creates a new MQTT publisher for a single broker.
-func NewPublisher(cfg *config.MQTTConfig) *Publisher {
+func NewPublisher(cfg *config.MQTTConfig, ns string) *Publisher {
 	return &Publisher{
 		config:     cfg,
+		builder:    namespace.New(ns, cfg.Selector),
 		lastValues: make(map[string]interface{}),
 		writeQueue: make(chan writeJob, MaxWriteQueueSize),
 		stopChan:   make(chan struct{}),
@@ -266,7 +255,7 @@ func (p *Publisher) writeWorker() {
 			} else {
 				writeErr = fmt.Errorf("no write handler configured")
 			}
-			p.publishWriteResponse(job.client, job.rootTopic, job.plcName, job.tagName, job.value, writeErr)
+			p.publishWriteResponse(job.client, job.builder, job.plcName, job.tagName, job.value, writeErr)
 		}
 	}
 }
@@ -318,7 +307,7 @@ func (p *Publisher) Stop() {
 
 // BuildTopic constructs the full topic path.
 func (p *Publisher) BuildTopic(plcName, tagName string) string {
-	return joinTopic(p.config.RootTopic, plcName, "tags", tagName)
+	return p.builder.MQTTTagTopic(plcName, tagName)
 }
 
 // Publish sends a tag value to MQTT if it has changed.
@@ -351,7 +340,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 	}
 
 	msg := TagMessage{
-		Topic:     p.config.RootTopic,
+		Topic:     p.builder.MQTTBase(),
 		PLC:       plcName,
 		Tag:       displayTag,
 		Offset:    address, // Original tag name/address when alias is used
@@ -367,7 +356,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 	}
 
 	// Use alias for topic if available, otherwise use tagName (address)
-	topic := p.BuildTopic(plcName, displayTag)
+	topic := p.builder.MQTTTagTopic(plcName, displayTag)
 
 	// Async publish - don't block waiting for ack
 	// QoS 1 ensures the broker will retry, paho handles retries internally
@@ -411,7 +400,7 @@ func (p *Publisher) PublishSync(plcName, tagName, alias, address, typeName strin
 	}
 
 	msg := TagMessage{
-		Topic:     p.config.RootTopic,
+		Topic:     p.builder.MQTTBase(),
 		PLC:       plcName,
 		Tag:       displayTag,
 		Offset:    address, // Original tag name/address when alias is used
@@ -426,7 +415,7 @@ func (p *Publisher) PublishSync(plcName, tagName, alias, address, typeName strin
 		return false
 	}
 
-	topic := p.BuildTopic(plcName, displayTag)
+	topic := p.builder.MQTTTagTopic(plcName, displayTag)
 
 	// Synchronous publish - wait for broker ack (QoS 1)
 	// Not retained - tag values update frequently and retained causes stale data
@@ -448,10 +437,10 @@ func (p *Publisher) PublishHealth(plcName, driver string, online bool, status, e
 		return false
 	}
 
-	topic := joinTopic(p.config.RootTopic, plcName, "health")
+	topic := p.builder.MQTTHealthTopic(plcName)
 
 	msg := HealthMessage{
-		Topic:     p.config.RootTopic,
+		Topic:     p.builder.MQTTBase(),
 		PLC:       plcName,
 		Driver:    driver,
 		Online:    online,
@@ -525,7 +514,7 @@ func (p *Publisher) subscribeWriteTopics() {
 	p.mu.RLock()
 	client := p.client
 	plcNames := p.plcNames
-	rootTopic := p.config.RootTopic
+	builder := p.builder
 	p.mu.RUnlock()
 
 	if client == nil {
@@ -538,7 +527,7 @@ func (p *Publisher) subscribeWriteTopics() {
 	}
 
 	for _, plcName := range plcNames {
-		topic := joinTopic(rootTopic, plcName, "write")
+		topic := builder.MQTTWriteTopic(plcName)
 		logMQTT("Subscribing to write topic: %s", topic)
 		token := client.Subscribe(topic, 1, p.handleWriteMessage)
 		if !token.WaitTimeout(2*time.Second) || token.Error() != nil {
@@ -844,27 +833,29 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 	handler := p.writeHandler
 	validator := p.writeValidator
 	typeLookup := p.tagTypeLookup
-	rootTopic := p.config.RootTopic
+	builder := p.builder
 	p.mu.RUnlock()
+
+	baseTopic := builder.MQTTBase()
 
 	// Parse the write request
 	var req WriteRequest
 	if err := json.Unmarshal(msg.Payload(), &req); err != nil {
 		logMQTT("JSON parse error: %v", err)
-		p.queueErrorResponse(client, rootTopic, "", "", nil, fmt.Errorf("invalid JSON: %v", err))
+		p.queueErrorResponse(client, builder, "", "", nil, fmt.Errorf("invalid JSON: %v", err))
 		return
 	}
 
 	// Validate topic matches
-	if req.Topic != rootTopic {
-		p.queueErrorResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
-			fmt.Errorf("topic mismatch: expected %s, got %s", rootTopic, req.Topic))
+	if req.Topic != baseTopic {
+		p.queueErrorResponse(client, builder, req.PLC, req.Tag, req.Value,
+			fmt.Errorf("topic mismatch: expected %s, got %s", baseTopic, req.Topic))
 		return
 	}
 
 	// Check if tag is writable
 	if validator != nil && !validator(req.PLC, req.Tag) {
-		p.queueErrorResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
+		p.queueErrorResponse(client, builder, req.PLC, req.Tag, req.Value,
 			fmt.Errorf("tag not writable: %s/%s", req.PLC, req.Tag))
 		return
 	}
@@ -879,7 +870,7 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 			convertedValue, err = convertValueForType(req.Value, dataType)
 			if err != nil {
 				logMQTT("Value conversion error: %v", err)
-				p.queueErrorResponse(client, rootTopic, req.PLC, req.Tag, req.Value, err)
+				p.queueErrorResponse(client, builder, req.PLC, req.Tag, req.Value, err)
 				return
 			}
 			logMQTT("Converted value: %v (type: %T)", convertedValue, convertedValue)
@@ -891,7 +882,7 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 	// Queue the write job (non-blocking with drop on overflow)
 	job := writeJob{
 		client:         client,
-		rootTopic:      rootTopic,
+		builder:        builder,
 		plcName:        req.PLC,
 		tagName:        req.Tag,
 		value:          req.Value,
@@ -904,21 +895,21 @@ func (p *Publisher) handleWriteMessage(client pahomqtt.Client, msg pahomqtt.Mess
 	default:
 		// Queue full, respond with error
 		logMQTT("Write queue full, rejecting write for %s/%s", req.PLC, req.Tag)
-		go p.publishWriteResponse(client, rootTopic, req.PLC, req.Tag, req.Value,
+		go p.publishWriteResponse(client, builder, req.PLC, req.Tag, req.Value,
 			fmt.Errorf("write queue full, try again later"))
 	}
 }
 
 // queueErrorResponse queues an error response through the worker pool.
-func (p *Publisher) queueErrorResponse(client pahomqtt.Client, rootTopic, plcName, tagName string, value interface{}, err error) {
+func (p *Publisher) queueErrorResponse(client pahomqtt.Client, builder *namespace.Builder, plcName, tagName string, value interface{}, err error) {
 	// For error responses, we use a nil handler which will trigger the error path
 	job := writeJob{
-		client:    client,
-		rootTopic: rootTopic,
-		plcName:   plcName,
-		tagName:   tagName,
-		value:     value,
-		handler:   nil, // nil handler means we just send the error response
+		client:  client,
+		builder: builder,
+		plcName: plcName,
+		tagName: tagName,
+		value:   value,
+		handler: nil, // nil handler means we just send the error response
 	}
 	// Store the error message in convertedValue as a signal
 	job.convertedValue = err
@@ -933,9 +924,9 @@ func (p *Publisher) queueErrorResponse(client pahomqtt.Client, rootTopic, plcNam
 }
 
 // publishWriteResponse publishes a write response to MQTT.
-func (p *Publisher) publishWriteResponse(client pahomqtt.Client, rootTopic, plcName, tagName string, value interface{}, err error) {
+func (p *Publisher) publishWriteResponse(client pahomqtt.Client, builder *namespace.Builder, plcName, tagName string, value interface{}, err error) {
 	resp := WriteResponse{
-		Topic:     rootTopic,
+		Topic:     builder.MQTTBase(),
 		PLC:       plcName,
 		Tag:       tagName,
 		Value:     value,
@@ -949,7 +940,7 @@ func (p *Publisher) publishWriteResponse(client pahomqtt.Client, rootTopic, plcN
 	payload, _ := json.Marshal(resp)
 
 	// Publish to response topic
-	responseTopic := joinTopic(rootTopic, plcName, "write", "response")
+	responseTopic := builder.MQTTWriteResponseTopic(plcName)
 	token := client.Publish(responseTopic, 1, false, payload)
 	token.WaitTimeout(2 * time.Second)
 }
@@ -1138,9 +1129,9 @@ func (m *Manager) AnyRunning() bool {
 }
 
 // LoadFromConfig creates publishers from configuration.
-func (m *Manager) LoadFromConfig(cfgs []config.MQTTConfig) {
+func (m *Manager) LoadFromConfig(cfgs []config.MQTTConfig, ns string) {
 	for i := range cfgs {
-		pub := NewPublisher(&cfgs[i])
+		pub := NewPublisher(&cfgs[i], ns)
 		m.Add(pub)
 	}
 }
@@ -1241,7 +1232,48 @@ func (m *Manager) PublishRaw(topic string, data []byte) {
 	}
 }
 
-// PublishRaw publishes raw bytes to a topic.
+// PublishRawQoS2 publishes raw bytes to a topic on all running publishers with QoS 2.
+// Used for trigger messages where exactly-once delivery is important.
+func (m *Manager) PublishRawQoS2(topic string, data []byte) {
+	m.mu.RLock()
+	pubs := make([]*Publisher, 0, len(m.publishers))
+	for _, pub := range m.publishers {
+		pubs = append(pubs, pub)
+	}
+	m.mu.RUnlock()
+
+	for _, pub := range pubs {
+		if pub.IsRunning() {
+			pub.PublishRawQoS2(topic, data)
+		}
+	}
+}
+
+// PublishRawQoS2ToBroker publishes raw bytes to a specific broker with QoS 2.
+func (m *Manager) PublishRawQoS2ToBroker(broker, topic string, data []byte) bool {
+	m.mu.RLock()
+	pub, exists := m.publishers[broker]
+	m.mu.RUnlock()
+
+	if !exists || !pub.IsRunning() {
+		return false
+	}
+	return pub.PublishRawQoS2(topic, data)
+}
+
+// ListBrokers returns all configured broker names.
+func (m *Manager) ListBrokers() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	names := make([]string, 0, len(m.publishers))
+	for name := range m.publishers {
+		names = append(names, name)
+	}
+	return names
+}
+
+// PublishRaw publishes raw bytes to a topic with QoS 1.
 func (p *Publisher) PublishRaw(topic string, data []byte) bool {
 	p.mu.RLock()
 	running := p.running
@@ -1260,6 +1292,32 @@ func (p *Publisher) PublishRaw(topic string, data []byte) bool {
 			logMQTT("PublishRaw timeout for topic %s", topic)
 		} else if token.Error() != nil {
 			logMQTT("PublishRaw error for topic %s: %v", topic, token.Error())
+		}
+	}()
+
+	return true
+}
+
+// PublishRawQoS2 publishes raw bytes to a topic with QoS 2 (exactly once).
+// Used for trigger messages where exactly-once delivery is important.
+func (p *Publisher) PublishRawQoS2(topic string, data []byte) bool {
+	p.mu.RLock()
+	running := p.running
+	client := p.client
+	p.mu.RUnlock()
+
+	if !running || client == nil {
+		return false
+	}
+
+	// QoS 2 for exactly-once delivery, retained so new subscribers get the value
+	token := client.Publish(topic, 2, true, data)
+
+	go func() {
+		if !token.WaitTimeout(10 * time.Second) {
+			logMQTT("PublishRawQoS2 timeout for topic %s", topic)
+		} else if token.Error() != nil {
+			logMQTT("PublishRawQoS2 error for topic %s: %v", topic, token.Error())
 		}
 	}()
 

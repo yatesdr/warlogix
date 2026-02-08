@@ -19,11 +19,12 @@ import (
 
 // App is the main TUI application.
 type App struct {
-	app            *tview.Application
-	pages          *tview.Pages
-	tabs           *tview.TextView
-	statusBar      *tview.TextView
-	themeIndicator *tview.TextView
+	app                *tview.Application
+	pages              *tview.Pages
+	tabs               *tview.TextView
+	statusBar          *tview.TextView
+	namespaceIndicator *tview.TextView
+	themeIndicator     *tview.TextView
 
 	plcsTab     *PLCsTab
 	browserTab  *BrowserTab
@@ -176,6 +177,11 @@ func (a *App) setupUI() {
 		SetTextAlign(tview.AlignLeft).
 		SetTextColor(CurrentTheme.Text)
 
+	// Create namespace indicator (bottom center-right)
+	a.namespaceIndicator = tview.NewTextView().
+		SetTextAlign(tview.AlignRight)
+	a.updateNamespaceIndicator()
+
 	// Create theme indicator (bottom right)
 	// Dynamic colors disabled to ensure all theme names display correctly
 	a.themeIndicator = tview.NewTextView().
@@ -207,11 +213,13 @@ func (a *App) setupUI() {
 	a.pages.AddPage(TabKafka, a.kafkaTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabDebug, a.debugTab.GetPrimitive(), true, false)
 
-	// Create bottom bar with status (left) and theme indicator (right)
-	// Width 30 to accommodate "Theme (F6): highcontrast " (longest theme name)
+	// Create bottom bar with status (left), namespace (center-right), and theme indicator (right)
+	// Namespace width 40 to accommodate "Namespace (n): " + reasonable namespace length
+	// Theme width 30 to accommodate "Theme (F6): highcontrast "
 	bottomBar := tview.NewFlex().
 		SetDirection(tview.FlexColumn).
 		AddItem(a.statusBar, 0, 1, false).
+		AddItem(a.namespaceIndicator, 40, 0, false).
 		AddItem(a.themeIndicator, 30, 0, false)
 
 	// Create main layout
@@ -231,6 +239,11 @@ func (a *App) setupUI() {
 
 	// Focus on first tab's main element
 	a.focusCurrentTab()
+
+	// Check if namespace is configured - if not, show mandatory setup modal
+	if a.config.Namespace == "" {
+		a.showMandatoryNamespaceModal()
+	}
 }
 
 func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
@@ -289,6 +302,43 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	}
 
+	// 'N' (Shift+N): Open namespace configuration modal - requires intention
+	if event.Rune() == 'N' {
+		a.showNamespaceModal()
+		return nil
+	}
+
+	// Direct tab navigation with capital letters
+	switch event.Rune() {
+	case 'P': // PLCs
+		a.switchToTab(0)
+		return nil
+	case 'B': // Browser/Republisher
+		a.switchToTab(1)
+		return nil
+	case 'T': // TagPacks
+		a.switchToTab(2)
+		return nil
+	case 'G': // triGGers
+		a.switchToTab(3)
+		return nil
+	case 'E': // rEst/Endpoint
+		a.switchToTab(4)
+		return nil
+	case 'M': // MQTT
+		a.switchToTab(5)
+		return nil
+	case 'V': // Valkey
+		a.switchToTab(6)
+		return nil
+	case 'K': // Kafka
+		a.switchToTab(7)
+		return nil
+	case 'D': // Debug
+		a.switchToTab(8)
+		return nil
+	}
+
 	// Let the current tab handle the key
 	return event
 }
@@ -338,6 +388,25 @@ func (a *App) focusCurrentTab() {
 
 func (a *App) updateTabsDisplay() {
 	th := CurrentTheme
+
+	// Tab names with hotkey position: [before, hotkey, after]
+	// Hotkey letter is integrated into the tab name
+	tabParts := []struct {
+		before string
+		hotkey string
+		after  string
+	}{
+		{"", "P", "LCs"},           // PLCs
+		{"Repu", "B", "lisher"},    // Republisher
+		{"", "T", "agPacks"},       // TagPacks
+		{"Tri", "G", "gers"},       // Triggers
+		{"R", "E", "ST"},           // REST
+		{"", "M", "QTT"},           // MQTT
+		{"", "V", "alkey"},         // Valkey
+		{"", "K", "afka"},          // Kafka
+		{"", "D", "ebug"},          // Debug
+	}
+
 	text := ""
 	for i, name := range a.tabNames {
 		if i > 0 {
@@ -348,12 +417,16 @@ func (a *App) updateTabsDisplay() {
 				text += th.TagTextDim + "  │  " + th.TagReset
 			}
 		}
+
+		parts := tabParts[i]
 		if i == a.currentTab {
-			// TagAccent is "[#RRGGBB]", need to insert "::b" before the closing bracket
+			// Active tab: all in bold accent, hotkey also highlighted
 			colorTag := th.TagAccent[:len(th.TagAccent)-1] + "::b]"
-			text += colorTag + name + "[-::-]"
+			hotkeyTag := th.TagHotkey[:len(th.TagHotkey)-1] + "::b]"
+			text += colorTag + parts.before + "[-::-]" + hotkeyTag + parts.hotkey + "[-::-]" + colorTag + parts.after + "[-::-]"
 		} else {
-			text += th.TagTextDim + name + th.TagReset
+			// Inactive tab: dimmed with hotkey highlighted
+			text += th.TagTextDim + parts.before + th.TagHotkey + parts.hotkey + th.TagTextDim + parts.after + th.TagReset
 		}
 	}
 	a.tabs.SetText(text)
@@ -362,6 +435,16 @@ func (a *App) updateTabsDisplay() {
 
 func (a *App) setStatus(msg string) {
 	a.statusBar.SetText(" " + msg)
+}
+
+func (a *App) updateNamespaceIndicator() {
+	th := CurrentTheme
+	ns := a.config.Namespace
+	if ns == "" {
+		ns = "(not set)"
+	}
+	a.namespaceIndicator.SetText("Namespace: " + ns + " (N) ")
+	a.namespaceIndicator.SetTextColor(th.TextDim)
 }
 
 func (a *App) updateThemeIndicator() {
@@ -376,12 +459,8 @@ func (a *App) updateThemeIndicator() {
 func (a *App) showHelp() {
 	const pageName = "help"
 
-	helpText := HelpText
-	if a.daemonMode {
-		helpText = HelpTextDaemon
-	}
 	textView := tview.NewTextView().
-		SetText(helpText).
+		SetText(GetHelpText(a.daemonMode)).
 		SetDynamicColors(true)
 	textView.SetBorder(true).SetTitle(" Help ")
 
@@ -394,6 +473,177 @@ func (a *App) showHelp() {
 	})
 
 	a.showCenteredModal(pageName, textView, 45, 24)
+}
+
+func (a *App) showNamespaceModal() {
+	const pageName = "namespace"
+
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle(" Namespace Configuration ")
+	ApplyFormTheme(form)
+
+	currentNS := a.config.Namespace
+
+	// Input field for namespace
+	form.AddInputField("Namespace:", currentNS, 30, nil, nil)
+
+	// Status text for validation feedback
+	statusText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+
+	// Update status based on current value
+	updateStatus := func(ns string) {
+		if ns == "" {
+			statusText.SetText(CurrentTheme.TagError + "Namespace is required" + CurrentTheme.TagReset)
+		} else if !config.IsValidNamespace(ns) {
+			statusText.SetText(CurrentTheme.TagError + "Invalid: use alphanumeric, hyphen, underscore, dot" + CurrentTheme.TagReset)
+		} else if ns == currentNS {
+			statusText.SetText(CurrentTheme.TagTextDim + "Current namespace" + CurrentTheme.TagReset)
+		} else {
+			statusText.SetText(CurrentTheme.TagSuccess + "Valid namespace" + CurrentTheme.TagReset)
+		}
+	}
+	updateStatus(currentNS)
+
+	// Set changed handler for live validation
+	inputField := form.GetFormItem(0).(*tview.InputField)
+	inputField.SetChangedFunc(func(text string) {
+		updateStatus(text)
+	})
+
+	form.AddButton("Save", func() {
+		ns := form.GetFormItem(0).(*tview.InputField).GetText()
+
+		// Validate
+		if ns == "" {
+			statusText.SetText(CurrentTheme.TagError + "Namespace is required" + CurrentTheme.TagReset)
+			return
+		}
+		if !config.IsValidNamespace(ns) {
+			statusText.SetText(CurrentTheme.TagError + "Invalid: use alphanumeric, hyphen, underscore, dot" + CurrentTheme.TagReset)
+			return
+		}
+
+		// Update config and save
+		a.config.Namespace = ns
+		if err := a.SaveConfig(); err != nil {
+			statusText.SetText(CurrentTheme.TagError + "Save failed: " + err.Error() + CurrentTheme.TagReset)
+			return
+		}
+
+		a.updateNamespaceIndicator()
+		a.closeModal(pageName)
+
+		// Show restart message if namespace changed
+		if ns != currentNS {
+			a.showError("Namespace Updated", "Namespace changed to: "+ns+"\n\nRestart required for changes to take effect.")
+		}
+	})
+
+	form.AddButton("Cancel", func() {
+		a.closeModal(pageName)
+	})
+
+	// Create a flex container with form and status
+	flex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(form, 7, 0, true).
+		AddItem(statusText, 1, 0, false)
+
+	flex.SetBorder(false)
+
+	a.showCenteredModal(pageName, flex, 50, 10)
+	a.app.SetFocus(inputField)
+}
+
+// showMandatoryNamespaceModal shows a modal on startup when namespace is not configured.
+// This modal cannot be dismissed - the user must enter a valid namespace to proceed.
+func (a *App) showMandatoryNamespaceModal() {
+	const pageName = "mandatory-namespace"
+
+	form := tview.NewForm()
+	form.SetBorder(true).SetTitle(" Namespace Configuration Required ")
+	ApplyFormTheme(form)
+
+	// Explanation text
+	explanation := tview.NewTextView().
+		SetDynamicColors(true).
+		SetWordWrap(true).
+		SetText(CurrentTheme.TagText + `A namespace is required to run WarLogix.
+
+The namespace isolates this instance's data when publishing to MQTT, Kafka, or Valkey. It is often a location, factory name, or process name, but can be any unique identifier you prefer.
+
+Examples: plant-floor-1, factory-east, packaging-line` + CurrentTheme.TagReset)
+
+	// Input field for namespace
+	form.AddInputField("Namespace:", "", 30, nil, nil)
+
+	// Status text for validation feedback
+	statusText := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	statusText.SetText(CurrentTheme.TagError + "Enter a namespace to continue" + CurrentTheme.TagReset)
+
+	// Set changed handler for live validation
+	inputField := form.GetFormItem(0).(*tview.InputField)
+	inputField.SetChangedFunc(func(text string) {
+		if text == "" {
+			statusText.SetText(CurrentTheme.TagError + "Namespace is required" + CurrentTheme.TagReset)
+		} else if !config.IsValidNamespace(text) {
+			statusText.SetText(CurrentTheme.TagError + "Invalid: use alphanumeric, hyphen, underscore, dot" + CurrentTheme.TagReset)
+		} else {
+			statusText.SetText(CurrentTheme.TagSuccess + "Valid namespace" + CurrentTheme.TagReset)
+		}
+	})
+
+	form.AddButton("Continue", func() {
+		ns := form.GetFormItem(0).(*tview.InputField).GetText()
+
+		// Validate
+		if ns == "" {
+			statusText.SetText(CurrentTheme.TagError + "Namespace is required" + CurrentTheme.TagReset)
+			return
+		}
+		if !config.IsValidNamespace(ns) {
+			statusText.SetText(CurrentTheme.TagError + "Invalid: use alphanumeric, hyphen, underscore, dot" + CurrentTheme.TagReset)
+			return
+		}
+
+		// Update config and save
+		a.config.Namespace = ns
+		if err := a.SaveConfig(); err != nil {
+			statusText.SetText(CurrentTheme.TagError + "Save failed: " + err.Error() + CurrentTheme.TagReset)
+			return
+		}
+
+		a.updateNamespaceIndicator()
+		a.closeModal(pageName)
+	})
+
+	// Do NOT add a Cancel button - this modal is mandatory
+
+	// Block escape key - this modal cannot be dismissed
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			// Ignore escape key
+			return nil
+		}
+		return event
+	})
+
+	// Create a flex container with explanation, form, and status
+	flex := tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(explanation, 7, 0, false).
+		AddItem(form, 5, 0, true).
+		AddItem(statusText, 1, 0, false)
+
+	flex.SetBorder(true).SetTitle(" Namespace Configuration Required ")
+	flex.SetBorderColor(CurrentTheme.Border)
+
+	a.showCenteredModal(pageName, flex, 60, 15)
+	a.app.SetFocus(inputField)
 }
 
 func (a *App) showError(title, message string) {
@@ -414,6 +664,7 @@ func (a *App) showErrorWithFocus(title, message string, focusTarget tview.Primit
 				a.focusCurrentTab()
 			}
 		})
+	ApplyModalTheme(modal)
 
 	a.pages.AddPage("error", modal, true, true)
 }
@@ -429,6 +680,7 @@ func (a *App) showConfirm(title, message string, onConfirm func()) {
 			}
 			a.focusCurrentTab()
 		})
+	ApplyModalTheme(modal)
 
 	a.pages.AddPage("confirm", modal, true, true)
 }
@@ -768,6 +1020,7 @@ func (a *App) closeModal(pageName string) {
 
 // refreshAllThemes calls RefreshTheme on all tabs to apply theme changes.
 func (a *App) refreshAllThemes() {
+	a.updateNamespaceIndicator()
 	if a.plcsTab != nil {
 		a.plcsTab.RefreshTheme()
 	}

@@ -114,12 +114,12 @@ func (m *Manager) batchProcessor() {
 }
 
 // LoadFromConfig loads publishers from configuration.
-func (m *Manager) LoadFromConfig(configs []config.ValkeyConfig) {
+func (m *Manager) LoadFromConfig(configs []config.ValkeyConfig, ns string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for i := range configs {
-		pub := NewPublisher(&configs[i])
+		pub := NewPublisher(&configs[i], ns)
 		pub.SetWriteHandler(m.writeHandler)
 		pub.SetWriteValidator(m.writeValidator)
 		pub.SetTagTypeLookup(m.tagTypeLookup)
@@ -129,11 +129,11 @@ func (m *Manager) LoadFromConfig(configs []config.ValkeyConfig) {
 }
 
 // Add adds a new publisher.
-func (m *Manager) Add(cfg *config.ValkeyConfig) *Publisher {
+func (m *Manager) Add(cfg *config.ValkeyConfig, ns string) *Publisher {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	pub := NewPublisher(cfg)
+	pub := NewPublisher(cfg, ns)
 	pub.SetWriteHandler(m.writeHandler)
 	pub.SetWriteValidator(m.writeValidator)
 	pub.SetTagTypeLookup(m.tagTypeLookup)

@@ -283,9 +283,15 @@ func (p *Producer) getWriter(topic string) (*kafka.Writer, error) {
 
 	getWriterStart := time.Now()
 
-	// NOTE: We rely on AllowAutoTopicCreation on the Writer instead of
-	// calling ensureTopicExists(), which creates 2 TCP connections per topic.
-	// The broker will auto-create topics on first produce if configured.
+	// If auto-create is enabled, ensure the topic exists before creating the writer.
+	// We call ensureTopicExists() instead of relying solely on AllowAutoTopicCreation
+	// because the broker-side auto.create.topics.enable may be disabled.
+	if p.config.AutoCreateTopics {
+		if err := p.ensureTopicExists(topic); err != nil {
+			logging.DebugLog("Kafka", "TOPIC %s: failed to create topic '%s': %v", p.config.Name, topic, err)
+			// Don't fail - let the write attempt proceed, it may succeed if topic exists
+		}
+	}
 
 	// Create new writer for this topic with batching enabled
 	transport := p.createTransport()

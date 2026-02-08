@@ -89,7 +89,9 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 
 ### Navigation
 
-- `Shift+Tab` - Switch tabs
+- **Direct tab access**: `P`LCs, Repu`B`lisher, `T`agPacks, Tri`G`gers, R`E`ST, `M`QTT, `V`alkey, `K`afka, `D`ebug
+- `Shift+Tab` - Cycle through tabs
+- `N` - Configure namespace
 - `?` - Help
 - `Q` - Quit
 
@@ -110,11 +112,13 @@ Press `d` to discover PLCs on your network, or `a` to add manually.
 
 | Tab | Key | Action |
 |-----|-----|--------|
-| Global | `Shift+Tab` | Switch tabs |
+| Global | `P/B/T/G/E/M/V/K/D` | Jump to tab (PLCs/Browser/TagPacks/triGgers/rEst/Mqtt/Valkey/Kafka/Debug) |
+| Global | `Shift+Tab` | Cycle tabs |
+| Global | `N` | Configure namespace |
 | Global | `F6` | Cycle themes |
 | Global | `?` | Help |
 | Global | `Q` | Quit |
-| PLCs | `d/a/e/r` | Discover/Add/Edit/Remove |
+| PLCs | `d/a/e/x` | Discover/Add/Edit/Remove |
 | PLCs | `c/C/i` | Connect/Disconnect/Info |
 | Browser | `/` | Filter tags |
 | Browser | `Space` | Toggle publish |
@@ -124,11 +128,11 @@ Press `d` to discover PLCs on your network, or `a` to add manually.
 | Browser | `c` | Clear filter |
 | Browser | `d` | Show tag details |
 | Browser | `a/e/x` | Add/Edit/Delete manual tags (S7/Omron) |
-| TagPacks | `c/a/d` | Create pack/Add tag/Delete |
-| TagPacks | `Space/i/e/r` | Enable/Ignore/Edit/Rename |
-| MQTT/Valkey/Kafka | `a/e/r/c/C` | Add/Edit/Remove/Connect/Disconnect |
-| Triggers | `a/e/r/t/x` | Add/Edit/Remove/Add tag/Remove tag |
-| Triggers | `s/S/T` | Start/Stop/Test |
+| TagPacks | `a/x` | Add pack or tag / Remove (context-sensitive) |
+| TagPacks | `Space/i/e` | Enable/Ignore/Edit |
+| MQTT/Valkey/Kafka | `a/e/x/c/C` | Add/Edit/Remove/Connect/Disconnect |
+| Triggers | `a/x` | Add/Remove (context-sensitive: trigger or tag) |
+| Triggers | `e/s/S/T` | Edit/Start/Stop/Test fire |
 
 ## Command Line Options
 
@@ -155,8 +159,11 @@ ssh -p 2222 localhost
 
 ## Documentation
 
+- [Safety and Intended Use](docs/safety-and-intended-use.md) - **Important limitations and proper use of write-back**
+- [User Interface Guide](docs/ui-tabs.md) - TUI tabs and keyboard shortcuts
 - [Configuration Reference](docs/configuration.md) - Config file format and options
 - [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
+- [Multi-Instance Deployment](docs/multi-instance.md) - Namespace isolation for multiple sites
 - [Performance Guide](docs/performance.md) - Optimization and benchmarking
 - [REST API](docs/rest-api.md) - HTTP endpoints
 - [MQTT](docs/mqtt.md) - Topics and write-back
@@ -165,11 +172,14 @@ ssh -p 2222 localhost
 - [Triggers](docs/triggers.md) - Event-driven data capture
 - [TagPacks](docs/tagpacks.md) - Cross-PLC atomic publishing
 - [Data Types](docs/data-types.md) - Types, byte order, UDT support
+- [Developer Guide](docs/developer.md) - Using drivers in your own Go applications
 
 ## Warnings
 
-- This software reads/writes to industrial PLCs - use caution
-- No warranty - use at your own risk
+- **WarLogix is not a real-time control system** - See [Safety and Intended Use](docs/safety-and-intended-use.md)
+- Write-back should only be used for acknowledgments on dedicated tags
+- Never use WarLogix for safety-critical functions or machine control
+- This software is provided without warranty - use at your own risk
 
 ## License
 

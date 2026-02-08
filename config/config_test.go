@@ -98,8 +98,9 @@ func TestDefaultMQTTConfig(t *testing.T) {
 	if mqtt.Port != 1883 {
 		t.Errorf("expected port 1883, got %d", mqtt.Port)
 	}
-	if mqtt.RootTopic != "factory" {
-		t.Errorf("expected root_topic 'factory', got %s", mqtt.RootTopic)
+	// Selector is empty by default (namespace handles base path)
+	if mqtt.Selector != "" {
+		t.Errorf("expected selector '', got %s", mqtt.Selector)
 	}
 }
 

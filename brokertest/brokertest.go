@@ -37,7 +37,7 @@ func toKafkaConfig(cfg *config.KafkaConfig) *kafka.Config {
 		MaxRetries:       cfg.MaxRetries,
 		RetryBackoff:     cfg.RetryBackoff,
 		PublishChanges:   cfg.PublishChanges,
-		Topic:            cfg.Topic,
+		Selector:         cfg.Selector,
 		AutoCreateTopics: autoCreate,
 	}
 }
@@ -160,15 +160,17 @@ func (r *Runner) testKafka(cfg *kafka.Config) TestResult {
 	fmt.Printf("  Topic:   warlogix-test-stress\n")
 	fmt.Printf("─────────────────────────────────────────────────────────────────────\n")
 
-	// Create a test config with test topic
+	// Create a test config with test namespace
 	testCfg := *cfg
-	testCfg.Topic = "warlogix-test-stress"
 	testCfg.PublishChanges = true
 	testCfg.AutoCreateTopics = true
 
+	// Use a test namespace for isolation
+	testNamespace := "warlogix-test-stress"
+
 	// Use the Manager for batched publishing (matches real-world usage)
 	mgr := kafka.NewManager()
-	mgr.AddCluster(&testCfg)
+	mgr.AddCluster(&testCfg, testNamespace)
 	if err := mgr.Connect(testCfg.Name); err != nil {
 		result.Error = fmt.Errorf("connect failed: %w", err)
 		fmt.Printf("  Status: FAILED - %v\n\n", result.Error)
@@ -325,9 +327,10 @@ func (r *Runner) runKafkaStress(producer *kafka.Producer, cfg *kafka.Config, res
 					key := []byte(fmt.Sprintf("TestPLC%d.Tag%d", plcNum, tagNum))
 
 					// Use a per-message context with generous timeout
+					// Note: cfg.Topic is no longer used; the producer uses its internal topic from builder
 					msgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					msgStart := time.Now()
-					err := producer.Produce(msgCtx, cfg.Topic, key, payload)
+					err := producer.Produce(msgCtx, "warlogix-test-stress", key, payload)
 					latency := time.Since(msgStart)
 					cancel()
 
@@ -381,13 +384,15 @@ func (r *Runner) testMQTT(cfg *config.MQTTConfig) TestResult {
 	fmt.Printf("  Topic:   warlogix-test-stress/+/tags/+\n")
 	fmt.Printf("─────────────────────────────────────────────────────────────────────\n")
 
-	// Create a test config with test topic
+	// Create a test config with test namespace
 	testCfg := *cfg
-	testCfg.RootTopic = "warlogix-test-stress"
 	testCfg.ClientID = fmt.Sprintf("warlogix-stress-%d", time.Now().UnixNano())
 
+	// Use a test namespace for isolation
+	testNamespace := "warlogix-test-stress"
+
 	// Create publisher
-	pub := mqtt.NewPublisher(&testCfg)
+	pub := mqtt.NewPublisher(&testCfg, testNamespace)
 	if err := pub.Start(); err != nil {
 		result.Error = fmt.Errorf("connect failed: %w", err)
 		fmt.Printf("  Status: FAILED - %v\n\n", result.Error)
@@ -473,13 +478,15 @@ func (r *Runner) testValkey(cfg *config.ValkeyConfig) TestResult {
 	fmt.Printf("  Keys:    warlogix-test-stress:*\n")
 	fmt.Printf("─────────────────────────────────────────────────────────────────────\n")
 
-	// Create a test config with test factory prefix
+	// Create a test config
 	testCfg := *cfg
-	testCfg.Factory = "warlogix-test-stress"
 	testCfg.PublishChanges = false // Disable pub/sub for pure SET throughput
 
+	// Use a test namespace for isolation
+	testNamespace := "warlogix-test-stress"
+
 	// Create publisher directly for synchronous testing
-	pub := valkey.NewPublisher(&testCfg)
+	pub := valkey.NewPublisher(&testCfg, testNamespace)
 	if err := pub.Start(); err != nil {
 		result.Error = fmt.Errorf("connect failed: %w", err)
 		fmt.Printf("  Status: FAILED - %v\n\n", result.Error)

@@ -5,27 +5,31 @@ WarLogix publishes tag values and health status to MQTT brokers and supports wri
 ## Configuration
 
 ```yaml
+namespace: factory                  # Required: instance namespace
+
 mqtt:
   - name: LocalBroker
     enabled: true
     broker: localhost
     port: 1883
     client_id: warlogix-main
-    root_topic: factory
-    username: user          # Optional
-    password: pass          # Optional
-    use_tls: true           # Optional
+    selector: line1                 # Optional: sub-namespace
+    username: user                  # Optional
+    password: pass                  # Optional
+    use_tls: true                   # Optional
 ```
+
+The `namespace` is a required top-level setting that identifies this WarLogix instance. The optional `selector` provides additional sub-organization within the namespace.
 
 ## Topics
 
 ### Tag Values
 
-Published to: `{root_topic}/{plc}/tags/{tag}`
+Published to: `{namespace}[/{selector}]/{plc}/tags/{tag}`
 
 ```json
 {
-  "topic": "factory",
+  "topic": "factory/line1",
   "plc": "MainPLC",
   "tag": "Counter",
   "value": 42,
@@ -39,11 +43,11 @@ Tags are published on change. Arrays are published as JSON arrays.
 
 ### Health Status
 
-Published every 10 seconds to: `{root_topic}/{plc}/health`
+Published every 10 seconds to: `{namespace}[/{selector}]/{plc}/health`
 
 ```json
 {
-  "topic": "factory",
+  "topic": "factory/line1",
   "plc": "MainPLC",
   "online": true,
   "status": "connected",
@@ -58,11 +62,11 @@ Health publishing can be disabled per-PLC with `health_check_enabled: false`.
 
 ## Write Requests
 
-Send write requests to: `{root_topic}/{plc}/write`
+Send write requests to: `{namespace}[/{selector}]/{plc}/write`
 
 ```json
 {
-  "topic": "factory",
+  "topic": "factory/line1",
   "plc": "MainPLC",
   "tag": "Counter",
   "value": 100
@@ -70,17 +74,17 @@ Send write requests to: `{root_topic}/{plc}/write`
 ```
 
 **Requirements:**
-- The `topic` field must match the broker's `root_topic`
+- The `topic` field must match the broker's namespace (and selector if configured)
 - Tag must be marked as `writable: true` in configuration
 
 ### Write Response
 
-Published to: `{root_topic}/{plc}/write/response`
+Published to: `{namespace}[/{selector}]/{plc}/write/response`
 
 **Success:**
 ```json
 {
-  "topic": "factory",
+  "topic": "factory/line1",
   "plc": "MainPLC",
   "tag": "Counter",
   "value": 100,
@@ -92,7 +96,7 @@ Published to: `{root_topic}/{plc}/write/response`
 **Error:**
 ```json
 {
-  "topic": "factory",
+  "topic": "factory/line1",
   "plc": "MainPLC",
   "tag": "Counter",
   "value": 100,
@@ -111,19 +115,21 @@ Enable TLS by setting `use_tls: true`. The system CA certificates are used for v
 Configure multiple brokers for redundancy or different purposes:
 
 ```yaml
+namespace: factory
+
 mqtt:
   - name: Production
     enabled: true
     broker: mqtt.production.local
-    root_topic: factory/prod
+    selector: prod
 
   - name: Development
     enabled: true
     broker: mqtt.dev.local
-    root_topic: factory/dev
+    selector: dev
 ```
 
-All enabled brokers receive the same tag updates.
+All enabled brokers receive the same tag updates. Use different `selector` values to distinguish data streams on different brokers.
 
 ## Stress Testing
 

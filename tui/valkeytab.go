@@ -48,7 +48,7 @@ func (t *ValkeyTab) setupUI() {
 	t.table.SetSelectedFunc(t.onSelect)
 
 	// Set up headers (themed)
-	headers := []string{"", "Name", "Address", "TLS", "Factory", "Status"}
+	headers := []string{"", "Name", "Address", "TLS", "Selector", "Status"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
 			SetTextColor(CurrentTheme.Accent).
@@ -90,7 +90,7 @@ func (t *ValkeyTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'e':
 		t.showEditDialog()
 		return nil
-	case 'r':
+	case 'x':
 		t.removeSelected()
 		return nil
 	case 'c':
@@ -168,7 +168,7 @@ func (t *ValkeyTab) refreshTable() {
 		t.table.SetCell(row, 1, tview.NewTableCell(cfg.Name).SetExpansion(1))
 		t.table.SetCell(row, 2, tview.NewTableCell(cfg.Address).SetExpansion(1))
 		t.table.SetCell(row, 3, tview.NewTableCell(tlsIndicator).SetExpansion(0))
-		t.table.SetCell(row, 4, tview.NewTableCell(cfg.Factory).SetExpansion(1))
+		t.table.SetCell(row, 4, tview.NewTableCell(cfg.Selector).SetExpansion(1))
 		t.table.SetCell(row, 5, tview.NewTableCell(status).SetExpansion(1))
 	}
 }
@@ -184,7 +184,7 @@ func (t *ValkeyTab) showAddDialog() {
 	form.AddInputField("Address:", "localhost:6379", 30, nil, nil)
 	form.AddInputField("Password:", "", 20, nil, nil)
 	form.AddInputField("Database:", "0", 5, acceptDigits, nil)
-	form.AddInputField("Factory:", "factory", 20, nil, nil)
+	form.AddInputField("Selector:", "factory", 20, nil, nil)
 	form.AddInputField("Key TTL (sec):", "0", 8, acceptDigits, nil)
 	form.AddCheckbox("Use TLS:", false, nil)
 	form.AddCheckbox("Publish Changes:", true, nil)
@@ -196,7 +196,7 @@ func (t *ValkeyTab) showAddDialog() {
 		address := form.GetFormItemByLabel("Address:").(*tview.InputField).GetText()
 		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
 		dbStr := form.GetFormItemByLabel("Database:").(*tview.InputField).GetText()
-		factory := form.GetFormItemByLabel("Factory:").(*tview.InputField).GetText()
+		selector := form.GetFormItemByLabel("Selector:").(*tview.InputField).GetText()
 		ttlStr := form.GetFormItemByLabel("Key TTL (sec):").(*tview.InputField).GetText()
 		useTLS := form.GetFormItemByLabel("Use TLS:").(*tview.Checkbox).IsChecked()
 		publishChanges := form.GetFormItemByLabel("Publish Changes:").(*tview.Checkbox).IsChecked()
@@ -217,7 +217,7 @@ func (t *ValkeyTab) showAddDialog() {
 			Address:         address,
 			Password:        password,
 			Database:        db,
-			Factory:         factory,
+			Selector:         selector,
 			UseTLS:          useTLS,
 			KeyTTL:          secondsToDuration(ttl),
 			PublishChanges:  publishChanges,
@@ -228,7 +228,7 @@ func (t *ValkeyTab) showAddDialog() {
 		t.app.SaveConfig()
 
 		// Add to manager
-		pub := t.app.valkeyMgr.Add(&t.app.config.Valkey[len(t.app.config.Valkey)-1])
+		pub := t.app.valkeyMgr.Add(&t.app.config.Valkey[len(t.app.config.Valkey)-1], t.app.config.Namespace)
 
 		t.app.closeModal(pageName)
 		t.Refresh()
@@ -283,7 +283,7 @@ func (t *ValkeyTab) showEditDialog() {
 	form.AddInputField("Address:", cfg.Address, 30, nil, nil)
 	form.AddInputField("Password:", cfg.Password, 20, nil, nil)
 	form.AddInputField("Database:", fmt.Sprintf("%d", cfg.Database), 5, acceptDigits, nil)
-	form.AddInputField("Factory:", cfg.Factory, 20, nil, nil)
+	form.AddInputField("Selector:", cfg.Selector, 20, nil, nil)
 	form.AddInputField("Key TTL (sec):", fmt.Sprintf("%d", int(cfg.KeyTTL.Seconds())), 8, acceptDigits, nil)
 	form.AddCheckbox("Use TLS:", cfg.UseTLS, nil)
 	form.AddCheckbox("Publish Changes:", cfg.PublishChanges, nil)
@@ -295,7 +295,7 @@ func (t *ValkeyTab) showEditDialog() {
 		address := form.GetFormItemByLabel("Address:").(*tview.InputField).GetText()
 		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
 		dbStr := form.GetFormItemByLabel("Database:").(*tview.InputField).GetText()
-		factory := form.GetFormItemByLabel("Factory:").(*tview.InputField).GetText()
+		selector := form.GetFormItemByLabel("Selector:").(*tview.InputField).GetText()
 		ttlStr := form.GetFormItemByLabel("Key TTL (sec):").(*tview.InputField).GetText()
 		useTLS := form.GetFormItemByLabel("Use TLS:").(*tview.Checkbox).IsChecked()
 		publishChanges := form.GetFormItemByLabel("Publish Changes:").(*tview.Checkbox).IsChecked()
@@ -316,7 +316,7 @@ func (t *ValkeyTab) showEditDialog() {
 			Address:         address,
 			Password:        password,
 			Database:        db,
-			Factory:         factory,
+			Selector:         selector,
 			UseTLS:          useTLS,
 			KeyTTL:          secondsToDuration(ttl),
 			PublishChanges:  publishChanges,
@@ -329,12 +329,12 @@ func (t *ValkeyTab) showEditDialog() {
 		// Close dialog immediately
 		t.app.closeModal(pageName)
 		t.app.setStatus(fmt.Sprintf("Updating Valkey server: %s...", name))
-		DebugLogValkey("Valkey server %s updated (address: %s, factory: %s)", name, address, factory)
+		DebugLogValkey("Valkey server %s updated (address: %s, selector: %s)", name, address, selector)
 
 		// Update manager in background to avoid blocking UI
 		go func() {
 			t.app.valkeyMgr.Remove(originalName)
-			newPub := t.app.valkeyMgr.Add(t.app.config.FindValkey(name))
+			newPub := t.app.valkeyMgr.Add(t.app.config.FindValkey(name), t.app.config.Namespace)
 
 			if autoConnect {
 				err := newPub.Start()
@@ -499,7 +499,7 @@ func (t *ValkeyTab) updateButtonBar() {
 	th := CurrentTheme
 	buttonText := " " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
 		th.TagHotkey + "e" + th.TagActionText + "dit  " +
-		th.TagHotkey + "r" + th.TagActionText + "emove  " +
+		th.TagHotkey + "x" + th.TagActionText + " remove  " +
 		th.TagHotkey + "c" + th.TagActionText + "onnect  dis" +
 		th.TagHotkey + "C" + th.TagActionText + "onnect  " +
 		th.TagActionText + "│  " +

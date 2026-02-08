@@ -89,7 +89,7 @@ func (t *PLCsTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'e':
 		t.showEditDialog()
 		return nil
-	case 'r':
+	case 'x':
 		t.removeSelected()
 		return nil
 	case 'c':
@@ -164,7 +164,7 @@ func (t *PLCsTab) updateButtonBar() {
 	buttonText := " " + th.TagHotkey + "d" + th.TagActionText + "iscover  " +
 		th.TagHotkey + "a" + th.TagActionText + "dd  " +
 		th.TagHotkey + "e" + th.TagActionText + "dit  " +
-		th.TagHotkey + "r" + th.TagActionText + "emove  " +
+		th.TagHotkey + "x" + th.TagActionText + " remove  " +
 		th.TagHotkey + "c" + th.TagActionText + "onnect  dis" +
 		th.TagHotkey + "C" + th.TagActionText + "onnect  " +
 		th.TagHotkey + "i" + th.TagActionText + "nfo  " +

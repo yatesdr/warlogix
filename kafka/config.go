@@ -16,7 +16,11 @@ const (
 	SASLSCRAMSHA512 SASLMechanism = "SCRAM-SHA-512"
 )
 
-// Config holds configuration for a Kafka cluster connection.
+// Config holds runtime configuration for a Kafka cluster connection.
+// Note: This struct uses non-pointer types for simplicity at runtime.
+// The config package has a separate KafkaConfig struct with pointer types for YAML
+// serialization (to distinguish "not set" from "explicitly false").
+// Conversion from config.KafkaConfig to kafka.Config happens in main.go.
 type Config struct {
 	Name          string        `yaml:"name"`
 	Enabled       bool          `yaml:"enabled"`
@@ -34,8 +38,13 @@ type Config struct {
 
 	// Tag publishing settings
 	PublishChanges   bool   `yaml:"publish_changes,omitempty"`    // Publish tag changes to Kafka
-	Topic            string `yaml:"topic,omitempty"`              // Topic for tag change publishing
+	Selector         string `yaml:"selector,omitempty"`           // Optional sub-namespace
 	AutoCreateTopics bool   `yaml:"auto_create_topics,omitempty"` // Auto-create topics if they don't exist (default true)
+
+	// Writeback settings
+	EnableWriteback bool          `yaml:"enable_writeback,omitempty"` // Enable consuming write requests
+	ConsumerGroup   string        `yaml:"consumer_group,omitempty"`   // Consumer group ID
+	WriteMaxAge     time.Duration `yaml:"write_max_age,omitempty"`    // Max age of write requests to process
 }
 
 // DefaultConfig returns a Kafka configuration with sensible defaults.
@@ -48,6 +57,8 @@ func DefaultConfig(name string) Config {
 		MaxRetries:       3,
 		RetryBackoff:     100 * time.Millisecond,
 		AutoCreateTopics: true,
+		EnableWriteback:  false,
+		WriteMaxAge:      2 * time.Second,
 	}
 }
 
@@ -59,4 +70,22 @@ func (c *Config) GetTLSConfig() *tls.Config {
 	return &tls.Config{
 		InsecureSkipVerify: c.TLSSkipVerify,
 	}
+}
+
+// GetConsumerGroup returns the consumer group ID.
+// Defaults to warlogix-{Name}-writers if not explicitly set.
+func (c *Config) GetConsumerGroup() string {
+	if c.ConsumerGroup != "" {
+		return c.ConsumerGroup
+	}
+	return "warlogix-" + c.Name + "-writers"
+}
+
+// GetWriteMaxAge returns the maximum age of write requests to process.
+// Defaults to 2 seconds if not set.
+func (c *Config) GetWriteMaxAge() time.Duration {
+	if c.WriteMaxAge > 0 {
+		return c.WriteMaxAge
+	}
+	return 2 * time.Second
 }

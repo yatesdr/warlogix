@@ -93,7 +93,7 @@ func (t *KafkaTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'e':
 		t.showEditDialog()
 		return nil
-	case 'r':
+	case 'x':
 		t.removeSelected()
 		return nil
 	case 'c':
@@ -145,10 +145,8 @@ func (t *KafkaTab) updateInfo(name string) {
 	info += fmt.Sprintf("%sRequired Acks:%s %d\n", th.TagAccent, th.TagReset, cfg.RequiredAcks)
 	info += fmt.Sprintf("%sMax Retries:%s %d\n", th.TagAccent, th.TagReset, cfg.MaxRetries)
 
-	// Tag publishing settings
-	if cfg.PublishChanges {
-		info += fmt.Sprintf("\n%sPublish Changes:%s %s\n", th.TagAccent, th.TagSuccess, "Enabled")
-		info += th.Label("Topic", cfg.Topic) + "\n"
+	if cfg.Selector != "" {
+		info += th.Label("Selector", cfg.Selector) + "\n"
 	}
 
 	// Auto-create topics (default true if nil)
@@ -276,13 +274,12 @@ func (t *KafkaTab) showAddDialog() {
 	form.SetBorder(true).SetTitle(" Add Kafka Cluster ")
 
 	form.AddInputField("Name:", "", 30, nil, nil)
-	form.AddInputField("Brokers:", "localhost:9092", 40, nil, nil)
+	form.AddInputField("Brokers:", "localhost:9092", 30, nil, nil)
 	form.AddCheckbox("Use TLS:", false, nil)
 	form.AddDropDown("SASL:", []string{"None", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}, 0, nil)
 	form.AddInputField("Username:", "", 30, nil, nil)
 	form.AddPasswordField("Password:", "", 30, '*', nil)
-	form.AddCheckbox("Publish Changes:", false, nil)
-	form.AddInputField("Topic:", "", 30, nil, nil)
+	form.AddInputField("Selector:", "", 30, nil, nil)
 	form.AddCheckbox("Auto-create Topics:", true, nil)
 	form.AddCheckbox("Auto-connect:", false, nil)
 
@@ -293,8 +290,7 @@ func (t *KafkaTab) showAddDialog() {
 		saslIdx, _ := form.GetFormItemByLabel("SASL:").(*tview.DropDown).GetCurrentOption()
 		username := form.GetFormItemByLabel("Username:").(*tview.InputField).GetText()
 		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
-		publishChanges := form.GetFormItemByLabel("Publish Changes:").(*tview.Checkbox).IsChecked()
-		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
+		selector := form.GetFormItemByLabel("Selector:").(*tview.InputField).GetText()
 		autoCreateTopics := form.GetFormItemByLabel("Auto-create Topics:").(*tview.Checkbox).IsChecked()
 		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
 
@@ -315,8 +311,8 @@ func (t *KafkaTab) showAddDialog() {
 			Password:         password,
 			RequiredAcks:     -1,
 			MaxRetries:       3,
-			PublishChanges:   publishChanges,
-			Topic:            topic,
+			PublishChanges:   true, // Always enabled, per-tag control available
+			Selector:         selector,
 			AutoCreateTopics: &autoCreatePtr,
 		}
 
@@ -340,9 +336,9 @@ func (t *KafkaTab) showAddDialog() {
 			RequiredAcks:     cfg.RequiredAcks,
 			MaxRetries:       cfg.MaxRetries,
 			PublishChanges:   cfg.PublishChanges,
-			Topic:            cfg.Topic,
+			Selector:         cfg.Selector,
 			AutoCreateTopics: autoCreateTopics,
-		})
+		}, t.app.config.Namespace)
 
 		if autoConnect {
 			go t.app.kafkaMgr.Connect(name)
@@ -357,7 +353,7 @@ func (t *KafkaTab) showAddDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 60, 26, func() {
+	t.app.showFormModal(pageName, form, 55, 24, func() {
 		t.app.closeModal(pageName)
 	})
 }
@@ -393,13 +389,12 @@ func (t *KafkaTab) showEditDialog() {
 	currentAutoCreate := cfg.AutoCreateTopics == nil || *cfg.AutoCreateTopics
 
 	form.AddInputField("Name:", cfg.Name, 30, nil, nil)
-	form.AddInputField("Brokers:", strings.Join(cfg.Brokers, ", "), 40, nil, nil)
+	form.AddInputField("Brokers:", strings.Join(cfg.Brokers, ", "), 30, nil, nil)
 	form.AddCheckbox("Use TLS:", cfg.UseTLS, nil)
 	form.AddDropDown("SASL:", []string{"None", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}, saslIdx, nil)
 	form.AddInputField("Username:", cfg.Username, 30, nil, nil)
 	form.AddPasswordField("Password:", cfg.Password, 30, '*', nil)
-	form.AddCheckbox("Publish Changes:", cfg.PublishChanges, nil)
-	form.AddInputField("Topic:", cfg.Topic, 30, nil, nil)
+	form.AddInputField("Selector:", cfg.Selector, 30, nil, nil)
 	form.AddCheckbox("Auto-create Topics:", currentAutoCreate, nil)
 	form.AddCheckbox("Auto-connect:", cfg.Enabled, nil)
 
@@ -412,8 +407,7 @@ func (t *KafkaTab) showEditDialog() {
 		newSaslIdx, _ := form.GetFormItemByLabel("SASL:").(*tview.DropDown).GetCurrentOption()
 		username := form.GetFormItemByLabel("Username:").(*tview.InputField).GetText()
 		password := form.GetFormItemByLabel("Password:").(*tview.InputField).GetText()
-		publishChanges := form.GetFormItemByLabel("Publish Changes:").(*tview.Checkbox).IsChecked()
-		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
+		selector := form.GetFormItemByLabel("Selector:").(*tview.InputField).GetText()
 		autoCreateTopics := form.GetFormItemByLabel("Auto-create Topics:").(*tview.Checkbox).IsChecked()
 		autoConnect := form.GetFormItemByLabel("Auto-connect:").(*tview.Checkbox).IsChecked()
 
@@ -434,8 +428,8 @@ func (t *KafkaTab) showEditDialog() {
 			Password:         password,
 			RequiredAcks:     cfg.RequiredAcks,
 			MaxRetries:       cfg.MaxRetries,
-			PublishChanges:   publishChanges,
-			Topic:            topic,
+			PublishChanges:   true, // Always enabled, per-tag control available
+			Selector:         selector,
 			AutoCreateTopics: &autoCreatePtr,
 		}
 
@@ -460,9 +454,9 @@ func (t *KafkaTab) showEditDialog() {
 			RequiredAcks:     updated.RequiredAcks,
 			MaxRetries:       updated.MaxRetries,
 			PublishChanges:   updated.PublishChanges,
-			Topic:            updated.Topic,
+			Selector:         updated.Selector,
 			AutoCreateTopics: autoCreateTopics,
-		})
+		}, t.app.config.Namespace)
 
 		if autoConnect {
 			go t.app.kafkaMgr.Connect(newName)
@@ -477,7 +471,7 @@ func (t *KafkaTab) showEditDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 60, 26, func() {
+	t.app.showFormModal(pageName, form, 55, 24, func() {
 		t.app.closeModal(pageName)
 	})
 }
@@ -523,7 +517,7 @@ func (t *KafkaTab) connectSelected() {
 				t.app.setStatus(fmt.Sprintf("Connected to Kafka: %s", name))
 				DebugLog("Kafka %s connected", name)
 				// Force publish all values if PublishChanges is enabled
-				if cfg.PublishChanges && cfg.Topic != "" {
+				if cfg.PublishChanges {
 					go t.app.ForcePublishAllValuesToKafka()
 				}
 			}
@@ -553,7 +547,7 @@ func (t *KafkaTab) updateButtonBar() {
 	th := CurrentTheme
 	buttonText := " " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
 		th.TagHotkey + "e" + th.TagActionText + "dit  " +
-		th.TagHotkey + "r" + th.TagActionText + "emove  " +
+		th.TagHotkey + "x" + th.TagActionText + " remove  " +
 		th.TagHotkey + "c" + th.TagActionText + "onnect  dis" +
 		th.TagHotkey + "C" + th.TagActionText + "onnect  " +
 		th.TagActionText + "│  " +

@@ -50,7 +50,7 @@ func (t *PacksTab) setupUI() {
 	t.packTable.SetSelectionChangedFunc(t.onSelectionChanged)
 
 	// Set up headers
-	headers := []string{"", "Name", "Members", "Topic", "MQTT", "Kafka", "Valkey"}
+	headers := []string{"", "Name", "Members", "MQTT", "Kafka", "Valkey"}
 	for i, h := range headers {
 		t.packTable.SetCell(0, i, tview.NewTableCell(h).
 			SetTextColor(CurrentTheme.Accent).
@@ -133,11 +133,8 @@ func (t *PacksTab) setupUI() {
 
 func (t *PacksTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	switch event.Rune() {
-	case 'c':
-		t.showCreateDialog()
-		return nil
 	case 'a':
-		t.showAddTagDialog()
+		t.showCreateDialog()
 		return nil
 	case 'x':
 		t.removeSelected()
@@ -244,7 +241,6 @@ func (t *PacksTab) updateInfo(name string) {
 
 	th := CurrentTheme
 	info := th.Label("Name", cfg.Name) + "\n"
-	info += th.Label("Topic", cfg.Topic) + "\n"
 	info += th.Label("Enabled", fmt.Sprintf("%v", cfg.Enabled)) + "\n\n"
 
 	mqttStatus := "○"
@@ -316,10 +312,9 @@ func (t *PacksTab) Refresh() {
 		t.packTable.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
 		t.packTable.SetCell(row, 1, tview.NewTableCell(cfg.Name).SetExpansion(1))
 		t.packTable.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", len(cfg.Members))).SetExpansion(0))
-		t.packTable.SetCell(row, 3, tview.NewTableCell(cfg.Topic).SetExpansion(1))
-		t.packTable.SetCell(row, 4, tview.NewTableCell(mqttStr).SetExpansion(0))
-		t.packTable.SetCell(row, 5, tview.NewTableCell(kafkaStr).SetExpansion(0))
-		t.packTable.SetCell(row, 6, tview.NewTableCell(valkeyStr).SetExpansion(0))
+		t.packTable.SetCell(row, 3, tview.NewTableCell(mqttStr).SetExpansion(0))
+		t.packTable.SetCell(row, 4, tview.NewTableCell(kafkaStr).SetExpansion(0))
+		t.packTable.SetCell(row, 5, tview.NewTableCell(valkeyStr).SetExpansion(0))
 	}
 
 	// Update status bar
@@ -347,14 +342,12 @@ func (t *PacksTab) showCreateDialog() {
 	form.SetBorder(true).SetTitle(" Create Tag Pack ")
 
 	form.AddInputField("Name:", "", 30, nil, nil)
-	form.AddInputField("Topic:", "packs/", 30, nil, nil)
 	form.AddCheckbox("MQTT:", true, nil)
 	form.AddCheckbox("Kafka:", true, nil)
 	form.AddCheckbox("Valkey:", true, nil)
 
 	form.AddButton("Create", func() {
 		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
-		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
 		mqttEnabled := form.GetFormItemByLabel("MQTT:").(*tview.Checkbox).IsChecked()
 		kafkaEnabled := form.GetFormItemByLabel("Kafka:").(*tview.Checkbox).IsChecked()
 		valkeyEnabled := form.GetFormItemByLabel("Valkey:").(*tview.Checkbox).IsChecked()
@@ -372,7 +365,6 @@ func (t *PacksTab) showCreateDialog() {
 		cfg := config.TagPackConfig{
 			Name:          name,
 			Enabled:       true,
-			Topic:         topic,
 			MQTTEnabled:   mqttEnabled,
 			KafkaEnabled:  kafkaEnabled,
 			ValkeyEnabled: valkeyEnabled,
@@ -633,14 +625,12 @@ func (t *PacksTab) showEditDialog() {
 	form.SetBorder(true).SetTitle(" Edit Tag Pack ")
 
 	form.AddInputField("Name:", cfg.Name, 30, nil, nil)
-	form.AddInputField("Topic:", cfg.Topic, 30, nil, nil)
 	form.AddCheckbox("MQTT:", cfg.MQTTEnabled, nil)
 	form.AddCheckbox("Kafka:", cfg.KafkaEnabled, nil)
 	form.AddCheckbox("Valkey:", cfg.ValkeyEnabled, nil)
 
 	form.AddButton("Save", func() {
 		newName := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
-		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
 		mqttEnabled := form.GetFormItemByLabel("MQTT:").(*tview.Checkbox).IsChecked()
 		kafkaEnabled := form.GetFormItemByLabel("Kafka:").(*tview.Checkbox).IsChecked()
 		valkeyEnabled := form.GetFormItemByLabel("Valkey:").(*tview.Checkbox).IsChecked()
@@ -656,7 +646,6 @@ func (t *PacksTab) showEditDialog() {
 		}
 
 		cfg.Name = newName
-		cfg.Topic = topic
 		cfg.MQTTEnabled = mqttEnabled
 		cfg.KafkaEnabled = kafkaEnabled
 		cfg.ValkeyEnabled = valkeyEnabled
@@ -685,13 +674,10 @@ func (t *PacksTab) updateButtonBar() {
 	th := CurrentTheme
 	// Pack table keys | Member table keys | help
 	buttonText := " " +
-		th.TagHotkey + "c" + th.TagActionText + "reate  " +
-		th.TagHotkey + "x" + th.TagActionText + " delete  " +
+		th.TagHotkey + "a" + th.TagActionText + "dd  " +
+		th.TagHotkey + "x" + th.TagActionText + " remove  " +
 		th.TagHotkey + "Space" + th.TagActionText + " enable  " +
 		th.TagHotkey + "e" + th.TagActionText + "dit  " +
-		th.TagActionText + "│  " +
-		th.TagHotkey + "a" + th.TagActionText + "dd tag  " +
-		th.TagHotkey + "x" + th.TagActionText + " delete  " +
 		th.TagHotkey + "i" + th.TagActionText + "gnore  " +
 		th.TagHotkey + "E" + th.TagActionText + "nable tag  " +
 		th.TagActionText + "│  " +

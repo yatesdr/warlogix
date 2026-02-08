@@ -56,14 +56,15 @@ func preprocessLogDebugFlag() {
 
 // Command line flags
 var (
-	configPath  = flag.String("config", config.DefaultPath(), "Path to configuration file")
-	showVersion = flag.Bool("version", false, "Show version and exit")
-	daemonMode  = flag.Bool("d", false, "Run in daemon mode (serve TUI over SSH)")
-	sshPort     = flag.Int("p", 2222, "SSH port (daemon mode only)")
-	sshPassword = flag.String("ssh-password", "", "Password for SSH authentication (daemon mode only)")
-	sshKeys     = flag.String("ssh-keys", "", "Path to authorized_keys file or directory (daemon mode only)")
-	logFile     = flag.String("log", "", "Path to log file (optional, writes alongside debug window)")
-	logDebug    = flag.String("log-debug", "", "Enable debug logging to debug.log. Use without value for all, or specify protocol (omron,ads,logix,s7,mqtt,kafka,valkey,tui)")
+	configPath   = flag.String("config", config.DefaultPath(), "Path to configuration file")
+	showVersion  = flag.Bool("version", false, "Show version and exit")
+	daemonMode   = flag.Bool("d", false, "Run in daemon mode (serve TUI over SSH)")
+	namespace    = flag.String("namespace", "", "Set namespace (saved to config, required for daemon mode if not in config)")
+	sshPort      = flag.Int("p", 2222, "SSH port (daemon mode only)")
+	sshPassword  = flag.String("ssh-password", "", "Password for SSH authentication (daemon mode only)")
+	sshKeys      = flag.String("ssh-keys", "", "Path to authorized_keys file or directory (daemon mode only)")
+	logFile      = flag.String("log", "", "Path to log file (optional, writes alongside debug window)")
+	logDebug     = flag.String("log-debug", "", "Enable debug logging to debug.log. Use without value for all, or specify protocol (omron,ads,logix,s7,mqtt,kafka,valkey,tui)")
 	testBrokers  = flag.Bool("stress-test-republishing", false, "Run stress tests for republishing (Kafka, MQTT, Valkey) and exit")
 	testDuration = flag.Duration("test-duration", 10*time.Second, "Duration for each broker stress test")
 	testTags     = flag.Int("test-tags", 100, "Number of simulated tags for stress test")
@@ -96,6 +97,33 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Handle --namespace flag: overwrite config and save
+	if *namespace != "" {
+		if !config.IsValidNamespace(*namespace) {
+			fmt.Fprintf(os.Stderr, "Error: invalid namespace '%s' (use alphanumeric, hyphen, underscore, dot)\n", *namespace)
+			os.Exit(1)
+		}
+		cfg.Namespace = *namespace
+		if err := cfg.Save(*configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Namespace set to '%s' and saved to config\n", *namespace)
+	}
+
+	// Daemon mode requires namespace to be configured
+	if *daemonMode && cfg.Namespace == "" {
+		fmt.Fprintf(os.Stderr, "Error: daemon mode requires a namespace\n")
+		fmt.Fprintf(os.Stderr, "Provide --namespace=<name> or run in local mode first to configure\n")
+		os.Exit(1)
+	}
+
+	// Validate configuration
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Config error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -199,11 +227,11 @@ func runLocalMode(cfg *config.Config) {
 
 	// Create MQTT manager
 	mqttMgr := mqtt.NewManager()
-	mqttMgr.LoadFromConfig(cfg.MQTT)
+	mqttMgr.LoadFromConfig(cfg.MQTT, cfg.Namespace)
 
 	// Create Valkey manager
 	valkeyMgr := valkey.NewManager()
-	valkeyMgr.LoadFromConfig(cfg.Valkey)
+	valkeyMgr.LoadFromConfig(cfg.Valkey, cfg.Namespace)
 
 	// Create Kafka manager
 	kafkaMgr := kafka.NewManager()
@@ -222,29 +250,31 @@ func runLocalMode(cfg *config.Config) {
 			MaxRetries:       kc.MaxRetries,
 			RetryBackoff:     kc.RetryBackoff,
 			PublishChanges:   kc.PublishChanges,
-			Topic:            kc.Topic,
+			Selector:         kc.Selector,
 			AutoCreateTopics: kc.AutoCreateTopics == nil || *kc.AutoCreateTopics,
-		})
+			EnableWriteback:  kc.EnableWriteback,
+			ConsumerGroup:    kc.ConsumerGroup,
+			WriteMaxAge:      kc.WriteMaxAge,
+		}, cfg.Namespace)
 	}
 
 	// Create TagPack manager
 	packProvider := &plcDataProvider{manager: manager}
 	packMgr := tagpack.NewManager(cfg, packProvider)
-	packMgr.SetOnPublish(func(pv tagpack.PackValue, packCfg *config.TagPackConfig) {
-		data, err := json.Marshal(pv)
+	packMgr.SetOnPublish(func(info tagpack.PackPublishInfo) {
+		data, err := json.Marshal(info.Value)
 		if err != nil {
 			tui.DebugLog("[TagPack] JSON marshal error: %v", err)
 			return
 		}
-		topic := packCfg.Topic
-		if packCfg.MQTTEnabled {
-			mqttMgr.PublishRaw(topic, data)
+		if info.Config.MQTTEnabled {
+			mqttMgr.PublishRaw(info.MQTTTopic, data)
 		}
-		if packCfg.KafkaEnabled {
-			kafkaMgr.PublishRaw(topic, data)
+		if info.Config.KafkaEnabled {
+			kafkaMgr.PublishRaw(info.KafkaTopic, data)
 		}
-		if packCfg.ValkeyEnabled {
-			valkeyMgr.PublishRaw(topic, data)
+		if info.Config.ValkeyEnabled {
+			valkeyMgr.PublishRaw(info.ValkeyChannel, data)
 		}
 	})
 	packMgr.SetLogFunc(func(format string, args ...interface{}) {
@@ -257,12 +287,14 @@ func runLocalMode(cfg *config.Config) {
 	triggerMgr := trigger.NewManager(kafkaMgr, tagReader, tagWriter)
 	triggerMgr.LoadFromConfig(cfg.Triggers)
 	triggerMgr.SetPackManager(packMgr)
+	triggerMgr.SetMQTTManager(mqttMgr)
+	triggerMgr.SetNamespace(cfg.Namespace)
 
 	// Set up publishing on value changes
 	setupValueChangeHandlers(manager, mqttMgr, valkeyMgr, kafkaMgr, packMgr)
 
 	// Set up MQTT/Valkey write handling
-	setupWriteHandlers(cfg, manager, mqttMgr, valkeyMgr)
+	setupWriteHandlers(cfg, manager, mqttMgr, valkeyMgr, kafkaMgr)
 
 	// Set PLC names for write subscriptions
 	plcNames := make([]string, len(cfg.PLCs))
@@ -375,11 +407,11 @@ func runDaemonMode(cfg *config.Config) {
 
 	// Create MQTT manager
 	mqttMgr := mqtt.NewManager()
-	mqttMgr.LoadFromConfig(cfg.MQTT)
+	mqttMgr.LoadFromConfig(cfg.MQTT, cfg.Namespace)
 
 	// Create Valkey manager
 	valkeyMgr := valkey.NewManager()
-	valkeyMgr.LoadFromConfig(cfg.Valkey)
+	valkeyMgr.LoadFromConfig(cfg.Valkey, cfg.Namespace)
 
 	// Create Kafka manager
 	kafkaMgr := kafka.NewManager()
@@ -398,29 +430,31 @@ func runDaemonMode(cfg *config.Config) {
 			MaxRetries:       kc.MaxRetries,
 			RetryBackoff:     kc.RetryBackoff,
 			PublishChanges:   kc.PublishChanges,
-			Topic:            kc.Topic,
+			Selector:         kc.Selector,
 			AutoCreateTopics: kc.AutoCreateTopics == nil || *kc.AutoCreateTopics,
-		})
+			EnableWriteback:  kc.EnableWriteback,
+			ConsumerGroup:    kc.ConsumerGroup,
+			WriteMaxAge:      kc.WriteMaxAge,
+		}, cfg.Namespace)
 	}
 
 	// Create TagPack manager
 	packProviderDaemon := &plcDataProvider{manager: manager}
 	packMgrDaemon := tagpack.NewManager(cfg, packProviderDaemon)
-	packMgrDaemon.SetOnPublish(func(pv tagpack.PackValue, packCfg *config.TagPackConfig) {
-		data, err := json.Marshal(pv)
+	packMgrDaemon.SetOnPublish(func(info tagpack.PackPublishInfo) {
+		data, err := json.Marshal(info.Value)
 		if err != nil {
 			tui.DebugLog("[TagPack] JSON marshal error: %v", err)
 			return
 		}
-		topic := packCfg.Topic
-		if packCfg.MQTTEnabled {
-			mqttMgr.PublishRaw(topic, data)
+		if info.Config.MQTTEnabled {
+			mqttMgr.PublishRaw(info.MQTTTopic, data)
 		}
-		if packCfg.KafkaEnabled {
-			kafkaMgr.PublishRaw(topic, data)
+		if info.Config.KafkaEnabled {
+			kafkaMgr.PublishRaw(info.KafkaTopic, data)
 		}
-		if packCfg.ValkeyEnabled {
-			valkeyMgr.PublishRaw(topic, data)
+		if info.Config.ValkeyEnabled {
+			valkeyMgr.PublishRaw(info.ValkeyChannel, data)
 		}
 	})
 	packMgrDaemon.SetLogFunc(func(format string, args ...interface{}) {
@@ -433,12 +467,14 @@ func runDaemonMode(cfg *config.Config) {
 	triggerMgr := trigger.NewManager(kafkaMgr, tagReader, tagWriter)
 	triggerMgr.LoadFromConfig(cfg.Triggers)
 	triggerMgr.SetPackManager(packMgrDaemon)
+	triggerMgr.SetMQTTManager(mqttMgr)
+	triggerMgr.SetNamespace(cfg.Namespace)
 
 	// Set up publishing on value changes
 	setupValueChangeHandlers(manager, mqttMgr, valkeyMgr, kafkaMgr, packMgrDaemon)
 
 	// Set up MQTT/Valkey write handling
-	setupWriteHandlers(cfg, manager, mqttMgr, valkeyMgr)
+	setupWriteHandlers(cfg, manager, mqttMgr, valkeyMgr, kafkaMgr)
 
 	// Set PLC names for write subscriptions
 	plcNames := make([]string, len(cfg.PLCs))
@@ -674,15 +710,15 @@ func setupValueChangeHandlers(manager *plcman.Manager, mqttMgr *mqtt.Manager, va
 	})
 }
 
-// setupWriteHandlers sets up MQTT and Valkey write handling.
-func setupWriteHandlers(cfg *config.Config, manager *plcman.Manager, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager) {
-	// MQTT write handler
-	mqttMgr.SetWriteHandler(func(plcName, tagName string, value interface{}) error {
+// setupWriteHandlers sets up MQTT, Valkey, and Kafka write handling.
+func setupWriteHandlers(cfg *config.Config, manager *plcman.Manager, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager) {
+	// Shared write handler - all services use the same PLC manager
+	writeHandler := func(plcName, tagName string, value interface{}) error {
 		return manager.WriteTag(plcName, tagName, value)
-	})
+	}
 
-	// MQTT write validator
-	mqttMgr.SetWriteValidator(func(plcName, tagName string) bool {
+	// Shared write validator - checks if tag is configured as writable
+	writeValidator := func(plcName, tagName string) bool {
 		plcCfg := cfg.FindPLC(plcName)
 		if plcCfg == nil {
 			return false
@@ -693,36 +729,27 @@ func setupWriteHandlers(cfg *config.Config, manager *plcman.Manager, mqttMgr *mq
 			}
 		}
 		return false
-	})
+	}
 
-	// MQTT tag type lookup
-	mqttMgr.SetTagTypeLookup(func(plcName, tagName string) uint16 {
+	// Shared tag type lookup
+	tagTypeLookup := func(plcName, tagName string) uint16 {
 		return manager.GetTagType(plcName, tagName)
-	})
+	}
 
-	// Valkey write handler
-	valkeyMgr.SetWriteHandler(func(plcName, tagName string, value interface{}) error {
-		return manager.WriteTag(plcName, tagName, value)
-	})
+	// MQTT write handling
+	mqttMgr.SetWriteHandler(writeHandler)
+	mqttMgr.SetWriteValidator(writeValidator)
+	mqttMgr.SetTagTypeLookup(tagTypeLookup)
 
-	// Valkey write validator
-	valkeyMgr.SetWriteValidator(func(plcName, tagName string) bool {
-		plcCfg := cfg.FindPLC(plcName)
-		if plcCfg == nil {
-			return false
-		}
-		for _, tag := range plcCfg.Tags {
-			if tag.Name == tagName && tag.Writable {
-				return true
-			}
-		}
-		return false
-	})
+	// Valkey write handling
+	valkeyMgr.SetWriteHandler(writeHandler)
+	valkeyMgr.SetWriteValidator(writeValidator)
+	valkeyMgr.SetTagTypeLookup(tagTypeLookup)
 
-	// Valkey tag type lookup
-	valkeyMgr.SetTagTypeLookup(func(plcName, tagName string) uint16 {
-		return manager.GetTagType(plcName, tagName)
-	})
+	// Kafka write handling
+	kafkaMgr.SetWriteHandler(writeHandler)
+	kafkaMgr.SetWriteValidator(writeValidator)
+	kafkaMgr.SetTagTypeLookup(tagTypeLookup)
 }
 
 // plcDataProvider implements tagpack.PLCDataProvider using the PLC manager.

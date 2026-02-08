@@ -1,12 +1,14 @@
 # Event Triggers
 
-Triggers capture data snapshots when PLC conditions are met and publish to Kafka with optional acknowledgment.
+Triggers capture data snapshots when PLC conditions are met and publish to MQTT and/or Kafka with optional acknowledgment.
 
 ## How Triggers Work
 
 1. Monitor a trigger tag for a condition (e.g., `ProductReady == true`)
 2. When condition is met (rising edge), capture configured data tags
-3. Publish JSON message to Kafka with timestamp and sequence number
+3. Publish JSON message to configured brokers:
+   - **MQTT**: Published with QoS 2 (exactly-once delivery)
+   - **Kafka**: Published with configured acknowledgment level
 4. Optionally write acknowledgment to PLC (1=success, -1=error)
 
 ## Configuration
@@ -27,12 +29,25 @@ triggers:
       - BatchNumber
       - Quantity
       - Temperature
-    kafka_cluster: LocalKafka
-    topic: production-events
+      - pack:ProductionMetrics                  # Reference a TagPack with pack: prefix
+    mqtt_broker: all                            # "all", "none", or specific broker name
+    kafka_cluster: all                          # "all", "none", or specific cluster name
+    selector: events                            # Optional: sub-namespace for topics
+    publish_pack: ProductionMetrics             # Optional: legacy pack reference
     metadata:                                   # Optional static data
       line: Line1
       station: Assembly
 ```
+
+### Service Selection
+
+Triggers can publish to multiple MQTT brokers and Kafka clusters:
+
+| Value | Behavior |
+|-------|----------|
+| `all` | Publish to all configured brokers/clusters (default) |
+| `none` | Disable publishing to this service |
+| `{name}` | Publish only to the named broker/cluster |
 
 ## Condition Operators
 
@@ -45,7 +60,9 @@ triggers:
 | `>=` | Greater than or equal |
 | `<=` | Less than or equal |
 
-## Kafka Message Format
+## Message Format
+
+Trigger messages are published to both MQTT and Kafka with the same JSON format:
 
 ```json
 {
@@ -74,6 +91,37 @@ triggers:
 | `plc` | Source PLC name |
 | `metadata` | Static metadata from config |
 | `data` | Captured tag values |
+
+### Topics
+
+| Service | Topic Pattern |
+|---------|---------------|
+| MQTT | `{namespace}[/{selector}]/triggers/{trigger-name}` |
+| Kafka | `{namespace}[-{selector}]-triggers` |
+
+MQTT publishes with **QoS 2** (exactly-once delivery) for reliable event capture.
+
+## TagPack Integration
+
+Triggers can publish a TagPack immediately when they fire, bypassing the normal 250ms debounce:
+
+```yaml
+triggers:
+  - name: ProductComplete
+    plc: MainPLC
+    trigger_tag: ProductReady
+    condition: { operator: "==", value: true }
+    publish_pack: ProductionMetrics    # Publish this pack when trigger fires
+    kafka_cluster: LocalKafka
+    topic: events
+```
+
+When the trigger fires:
+1. Normal trigger data is captured and published to Kafka
+2. The specified TagPack is published immediately to its configured brokers
+3. Pack debounce timer is reset (won't double-publish)
+
+See [TagPacks](tagpacks.md) for more details on TagPack configuration.
 
 ## Acknowledgment
 
@@ -104,16 +152,25 @@ debounce_ms: 100    # Ignore triggers within 100ms of last fire
 
 ## Keyboard Shortcuts
 
+The Triggers tab uses context-sensitive hotkeys based on which pane has focus:
+
+**Trigger list (left pane):**
+
 | Key | Action |
 |-----|--------|
 | `a` | Add new trigger |
+| `x` | Remove selected trigger (with confirmation) |
 | `e` | Edit selected trigger |
-| `r` | Remove selected trigger |
-| `t` | Add data tag to trigger |
-| `x` | Remove data tag from trigger |
-| `s` | Start/enable trigger |
-| `S` | Stop/disable trigger |
-| `T` | Test trigger (fire manually) |
+| `s` | Start/arm trigger |
+| `S` | Stop/disarm trigger |
+| `T` | Test fire trigger (does not enter cooldown) |
+
+**Data tags list (right pane):**
+
+| Key | Action |
+|-----|--------|
+| `a` | Add tag or pack to capture list |
+| `x` | Remove selected tag (with confirmation) |
 
 ## Example: Production Tracking
 

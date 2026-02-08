@@ -141,6 +141,50 @@ Returns PLC connection health status.
 
 **Status values:** `connected`, `connecting`, `disconnected`, `disabled`, `error`
 
+### List TagPacks
+
+```
+GET /tagpack
+```
+
+Returns all configured TagPacks.
+
+**Response:**
+```json
+[
+  {"name": "ProductionMetrics", "enabled": true, "topic": "packs/production", "members": 4, "url": "/tagpack/ProductionMetrics"},
+  {"name": "Alarm Pack", "enabled": false, "topic": "packs/alarms", "members": 8, "url": "/tagpack/Alarm%20Pack"}
+]
+```
+
+### Get TagPack
+
+```
+GET /tagpack/{name}
+```
+
+Returns current values for all tags in a TagPack.
+
+**Response:**
+```json
+{
+  "name": "ProductionMetrics",
+  "timestamp": "2024-01-15T10:30:00.123Z",
+  "tags": {
+    "MainPLC.Counter": {
+      "value": 1234,
+      "type": "DINT",
+      "plc": "MainPLC"
+    },
+    "MainPLC.Temperature": {
+      "value": 72.5,
+      "type": "REAL",
+      "plc": "MainPLC"
+    }
+  }
+}
+```
+
 ### Write Tag
 
 ```
