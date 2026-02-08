@@ -253,8 +253,10 @@ func TypeSize(typeCode uint16) int {
 		return 8
 	case TypeOmronDate, TypeOmronTOD:
 		return 4
+	case TypeString, TypeCIPSTRING:
+		return 1 // Per-character size; count determines string length
 	default:
-		return 0 // Variable or unknown (including STRING)
+		return 0 // Variable or unknown
 	}
 }
 
