@@ -128,6 +128,7 @@ ssh -p 2222 localhost
 
 - [Configuration Reference](docs/configuration.md) - Config file format and options
 - [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
+- [Performance Guide](docs/performance.md) - Optimization and benchmarking
 - [REST API](docs/rest-api.md) - HTTP endpoints
 - [MQTT](docs/mqtt.md) - Topics and write-back
 - [Valkey/Redis](docs/valkey.md) - Keys, Pub/Sub, write-back queue
