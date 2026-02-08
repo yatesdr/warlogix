@@ -843,18 +843,31 @@ func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
 			writeValue = v
 		}
 
-		// Close dialog first to return UI to normal state
-		closeDialog()
-
-		// Perform write in background to not block UI
+		// Capture values for goroutine
 		plcName := t.selectedPLC
+		writeVal := writeValue
+		tagN := tagName
+
+		// Perform write in background goroutine to not block UI
+		// Close dialog and start write asynchronously
 		go func() {
-			err := t.app.manager.WriteTag(plcName, tagName, writeValue)
+			// Close dialog on UI thread first
+			t.app.QueueUpdateDraw(func() {
+				t.app.pages.RemovePage(pageName)
+				t.app.pages.SwitchToPage("main")
+				t.app.app.SetFocus(t.tree)
+				t.app.setStatus(fmt.Sprintf("Writing %v to %s...", writeVal, tagN))
+			})
+
+			// Perform the actual write (this may block on network I/O)
+			err := t.app.manager.WriteTag(plcName, tagN, writeVal)
+
+			// Update status on UI thread
 			t.app.QueueUpdateDraw(func() {
 				if err != nil {
 					t.app.setStatus(fmt.Sprintf("Write failed: %v", err))
 				} else {
-					t.app.setStatus(fmt.Sprintf("Wrote %v to %s", writeValue, tagName))
+					t.app.setStatus(fmt.Sprintf("Wrote %v to %s", writeVal, tagN))
 				}
 			})
 		}()
