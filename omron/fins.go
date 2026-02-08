@@ -9,11 +9,12 @@ import (
 
 // FINS command codes.
 const (
-	FINSCmdMemoryRead  uint16 = 0x0101
-	FINSCmdMemoryWrite uint16 = 0x0102
-	FINSCmdCPURead     uint16 = 0x0501
-	FINSCmdCPUStatus   uint16 = 0x0601
-	FINSCmdCycleTime   uint16 = 0x0620
+	FINSCmdMemoryRead      uint16 = 0x0101 // Memory Area Read
+	FINSCmdMemoryWrite     uint16 = 0x0102 // Memory Area Write
+	FINSCmdMultiMemoryRead uint16 = 0x0104 // Multiple Memory Area Read (batch)
+	FINSCmdCPURead         uint16 = 0x0501
+	FINSCmdCPUStatus       uint16 = 0x0601
+	FINSCmdCycleTime       uint16 = 0x0620
 )
 
 // FINS end codes.

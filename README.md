@@ -87,12 +87,13 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 
 ## Supported PLCs
 
-| Family | Models | Tag Discovery | Support Level |
-|--------|--------|---------------|---------------|
-| Allen-Bradley | ControlLogix, CompactLogix, Micro800 | Automatic | Well tested |
-| Siemens | S7-300/400/1200/1500 | Manual | Moderately tested |
-| Beckhoff | TwinCAT 2/3 | Automatic | Moderately tested |
-| Omron | CJ/CS/CP/NJ/NX Series | Manual | Experimental |
+| Family | Models | Tag Discovery | Protocol | Support Level |
+|--------|--------|---------------|----------|---------------|
+| Allen-Bradley | ControlLogix, CompactLogix, Micro800 | Automatic | EtherNet/IP | Well tested |
+| Siemens | S7-300/400/1200/1500 | Manual | S7comm | Moderately tested |
+| Beckhoff | TwinCAT 2/3 | Automatic | ADS | Moderately tested |
+| Omron (FINS) | CS1, CJ1/2, CP1 | Manual | FINS TCP/UDP | Moderately tested |
+| Omron (EIP) | NJ, NX Series | Automatic | EtherNet/IP | Moderately tested |
 
 ## Performance
 
@@ -112,10 +113,11 @@ Simulated publishing test with 50 PLCs × 100 tags (5,000 total tags) on localho
 
 | PLC Family | Batching | Typical Throughput |
 |------------|----------|-------------------|
-| Allen-Bradley Logix | Yes (scalars) | 500-2,000 tags/sec |
-| Siemens S7 | Yes (aggressive) | 300-1,500 tags/sec |
-| Beckhoff ADS | Yes (SumUp Read) | 1,000-5,000 tags/sec |
-| Omron FINS | No | 50-200 tags/sec |
+| Allen-Bradley Logix | Yes (MSP) | 500-2,000 tags/sec |
+| Siemens S7 | Yes (PDU) | 300-1,500 tags/sec |
+| Beckhoff ADS | Yes (SumUp) | 1,000-5,000 tags/sec |
+| Omron FINS | Yes (Multi-read) | 300-1,500 tags/sec |
+| Omron EIP | Yes (MSP) | 500-2,000 tags/sec |
 
 Run `warlogix --stress-test-republishing` to benchmark your system.
 

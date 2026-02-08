@@ -58,6 +58,7 @@ type Client struct {
 	// EIP transport (for NJ/NX)
 	eipClient *eip.EipClient
 	cipConn   *cip.Connection
+	connSize  uint16 // Connection size for connected messaging
 }
 
 // Option is a functional option for configuring the client.
@@ -277,6 +278,11 @@ func (c *Client) Close() error {
 
 	c.connected = false
 
+	// Close CIP connected messaging first
+	if c.cipConn != nil {
+		c.closeConnection()
+	}
+
 	if c.fins != nil {
 		err := c.fins.close()
 		c.fins = nil
@@ -293,6 +299,188 @@ func (c *Client) Close() error {
 			logging.DebugLog("Omron", "EIP disconnect error: %v", err)
 		}
 		return err
+	}
+
+	return nil
+}
+
+// OpenConnection establishes a CIP connection using Forward Open.
+// This enables more efficient connected messaging for EIP transport.
+// Optional - if not called, unconnected messaging is used (still batched).
+func (c *Client) OpenConnection() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.eipClient == nil {
+		return fmt.Errorf("OpenConnection: EIP transport not active")
+	}
+	if c.cipConn != nil {
+		return fmt.Errorf("OpenConnection: connection already open")
+	}
+
+	logging.DebugLog("Omron", "Opening CIP connection to %s", c.address)
+
+	// Try large connection size first, then fall back to small
+	sizes := []uint16{4002, 504}
+
+	var lastErr error
+	for _, size := range sizes {
+		err := c.tryForwardOpen(size)
+		if err == nil {
+			logging.DebugLog("Omron", "CIP connection established with size %d", size)
+			return nil
+		}
+		lastErr = err
+		logging.DebugLog("Omron", "Forward Open with size %d failed: %v", size, err)
+	}
+
+	return fmt.Errorf("OpenConnection: all connection sizes failed: %w", lastErr)
+}
+
+// tryForwardOpen attempts Forward Open with the specified connection size.
+func (c *Client) tryForwardOpen(connectionSize uint16) error {
+	// Build Forward Open config
+	cfg := cip.DefaultForwardOpenConfig()
+	cfg.ConnectionPath = []byte{0x01, 0x00, 0x20, 0x02, 0x24, 0x01} // Port 1, slot 0, Message Router
+	cfg.OTConnectionSize = connectionSize
+	cfg.TOConnectionSize = connectionSize
+
+	// Use standard Forward Open (0x54) for sizes ≤511, Large (0x5B) for >511
+	var reqData []byte
+	var connSerial uint16
+	var err error
+	if connectionSize <= 511 {
+		reqData, connSerial, err = cip.BuildForwardOpenRequestSmall(cfg)
+	} else {
+		reqData, connSerial, err = cip.BuildForwardOpenRequest(cfg)
+	}
+	if err != nil {
+		return fmt.Errorf("build Forward Open: %w", err)
+	}
+
+	// Send via unconnected messaging
+	cpf := &eip.EipCommonPacket{
+		Items: []eip.EipCommonPacketItem{
+			{TypeId: eip.CpfAddressNullId, Length: 0, Data: nil},
+			{TypeId: eip.CpfUnconnectedMessageId, Length: uint16(len(reqData)), Data: reqData},
+		},
+	}
+
+	resp, err := c.eipClient.SendRRData(*cpf)
+	if err != nil {
+		return fmt.Errorf("SendRRData failed: %w", err)
+	}
+
+	if len(resp.Items) < 2 {
+		return fmt.Errorf("expected 2 CPF items, got %d", len(resp.Items))
+	}
+
+	cipResp := resp.Items[1].Data
+	if len(cipResp) < 4 {
+		return fmt.Errorf("response too short")
+	}
+
+	// Check CIP response status
+	status := cipResp[2]
+	addlStatusSize := cipResp[3]
+
+	if status != 0x00 {
+		extStatus := uint16(0)
+		if addlStatusSize >= 1 && len(cipResp) >= 6 {
+			extStatus = binary.LittleEndian.Uint16(cipResp[4:6])
+		}
+		return fmt.Errorf("Forward Open failed: status=0x%02X, extStatus=0x%04X", status, extStatus)
+	}
+
+	// Parse Forward Open response
+	dataStart := 4 + int(addlStatusSize)*2
+	if dataStart >= len(cipResp) {
+		return fmt.Errorf("response missing data")
+	}
+
+	foResp, err := cip.ParseForwardOpenResponse(cipResp[dataStart:])
+	if err != nil {
+		return err
+	}
+
+	// Store the connection
+	c.cipConn = &cip.Connection{
+		OTConnID:     foResp.OTConnectionID,
+		TOConnID:     foResp.TOConnectionID,
+		SerialNumber: connSerial,
+		VendorID:     cfg.VendorID,
+		OrigSerial:   cfg.OriginatorSerial,
+	}
+	c.connSize = connectionSize
+
+	return nil
+}
+
+// CloseConnection tears down the CIP connection using Forward Close.
+func (c *Client) CloseConnection() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closeConnection()
+}
+
+// closeConnection internal method (must hold lock).
+func (c *Client) closeConnection() error {
+	if c.cipConn == nil {
+		return nil
+	}
+
+	logging.DebugLog("Omron", "Closing CIP connection")
+
+	// Build Forward Close request
+	connPath := []byte{0x01, 0x00, 0x20, 0x02, 0x24, 0x01}
+	reqData, err := cip.BuildForwardCloseRequest(c.cipConn, connPath)
+	if err != nil {
+		c.cipConn = nil
+		return err
+	}
+
+	// Send (best-effort, ignore errors)
+	cpf := &eip.EipCommonPacket{
+		Items: []eip.EipCommonPacketItem{
+			{TypeId: eip.CpfAddressNullId, Length: 0, Data: nil},
+			{TypeId: eip.CpfUnconnectedMessageId, Length: uint16(len(reqData)), Data: reqData},
+		},
+	}
+	_, _ = c.eipClient.SendRRData(*cpf)
+
+	c.cipConn = nil
+	c.connSize = 0
+	return nil
+}
+
+// Keepalive sends a NOP to keep the CIP connection alive.
+// Call periodically when using connected messaging.
+func (c *Client) Keepalive() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.cipConn == nil {
+		return nil // Not using connected messaging
+	}
+
+	// Send Identity object NOP
+	reqData := []byte{
+		0x17,       // Service code (NOP)
+		0x02,       // Path size (2 words)
+		0x20, 0x01, // Class segment: class 1 (Identity)
+		0x24, 0x01, // Instance segment: instance 1
+	}
+
+	connData := c.cipConn.WrapConnected(reqData)
+	cpf := c.buildConnectedCpf(connData)
+
+	resp, err := c.eipClient.SendUnitDataTransaction(*cpf)
+	if err != nil {
+		return fmt.Errorf("Keepalive: %w", err)
+	}
+
+	if len(resp.Items) < 2 {
+		return fmt.Errorf("Keepalive: expected 2 CPF items")
 	}
 
 	return nil
@@ -509,6 +697,7 @@ func (c *Client) getEIPDeviceInfo() (*DeviceInfo, error) {
 }
 
 // Read reads multiple tags from the PLC.
+// Uses optimized batching for high throughput.
 func (c *Client) Read(addresses ...string) ([]*TagValue, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -517,13 +706,13 @@ func (c *Client) Read(addresses ...string) ([]*TagValue, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	// EIP uses symbolic addressing
+	// EIP uses symbolic addressing with MSP batching
 	if c.eipClient != nil {
-		return c.readEIP(addresses)
+		return c.readEIPBatched(addresses)
 	}
 
-	// FINS uses memory addressing
-	return c.readFINS(addresses)
+	// FINS uses memory addressing with contiguous grouping
+	return c.readFINSBatched(addresses)
 }
 
 // readFINS reads FINS addresses.
@@ -812,6 +1001,7 @@ func (c *Client) writeEIP(tagName string, value interface{}) error {
 }
 
 // ReadWithTypes reads multiple tags using type hints.
+// Uses optimized batching for high throughput.
 func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -820,76 +1010,48 @@ func (c *Client) ReadWithTypes(requests []TagRequest) ([]*TagValue, error) {
 		return nil, fmt.Errorf("not connected")
 	}
 
-	// EIP doesn't need type hints (types are embedded)
+	// EIP doesn't need type hints (types are embedded) - use batched read
 	if c.eipClient != nil {
 		addrs := make([]string, len(requests))
 		for i, req := range requests {
 			addrs[i] = req.Address
 		}
-		return c.readEIP(addrs)
+		return c.readEIPBatched(addrs)
 	}
 
-	// FINS with type hints
-	results := make([]*TagValue, len(requests))
+	// FINS with type hints - use batched read with type application
+	return c.readFINSWithTypesBatched(requests)
+}
 
+// readFINSWithTypesBatched reads FINS addresses with type hints using batching.
+func (c *Client) readFINSWithTypesBatched(requests []TagRequest) ([]*TagValue, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
+
+	// Convert to addresses for batched read
+	addresses := make([]string, len(requests))
 	for i, req := range requests {
-		tv := &TagValue{
-			Name:      req.Address,
-			Count:     1,
-			bigEndian: true,
-		}
+		addresses[i] = req.Address
+	}
 
-		parsed, err := ParseAddressWithType(req.Address, req.TypeHint)
-		if err != nil {
-			tv.Error = err
-			results[i] = tv
+	// Use batched read
+	results, err := c.readFINSBatched(addresses)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply type hints to results
+	for i, req := range requests {
+		if results[i] == nil || results[i].Error != nil {
 			continue
 		}
 
-		tv.DataType = parsed.TypeCode
-		tv.Count = parsed.Count
-
-		if parsed.TypeCode == TypeBool {
-			bits, err := c.fins.readBits(BitAreaFromWordArea(parsed.MemoryArea), parsed.Address, parsed.BitOffset, uint16(parsed.Count))
-			if err != nil {
-				tv.Error = err
-				results[i] = tv
-				continue
+		if req.TypeHint != "" {
+			if tc, ok := TypeCodeFromName(req.TypeHint); ok {
+				results[i].DataType = tc
 			}
-			data := make([]byte, len(bits)*2)
-			for j, b := range bits {
-				if b {
-					data[j*2+1] = 1
-				}
-			}
-			tv.Bytes = data
-		} else {
-			elemSize := TypeSize(parsed.TypeCode)
-			if elemSize == 0 {
-				elemSize = 2
-			}
-			wordCount := (elemSize*parsed.Count + 1) / 2
-			if wordCount < 1 {
-				wordCount = 1
-			}
-
-			words, err := c.fins.readWords(parsed.MemoryArea, parsed.Address, uint16(wordCount))
-			if err != nil {
-				tv.Error = err
-				results[i] = tv
-				continue
-			}
-			data := make([]byte, len(words)*2)
-			for j, w := range words {
-				binary.BigEndian.PutUint16(data[j*2:j*2+2], w)
-			}
-			tv.Bytes = data
 		}
-
-		if parsed.Count > 1 {
-			tv.DataType = MakeArrayType(parsed.TypeCode)
-		}
-		results[i] = tv
 	}
 
 	return results, nil

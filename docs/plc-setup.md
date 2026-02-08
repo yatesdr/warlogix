@@ -4,13 +4,13 @@ This guide covers PLC-specific configuration, capabilities, and troubleshooting 
 
 ## Supported PLCs Overview
 
-| Family | Models | Tag Discovery | Protocol |
-|--------|--------|---------------|----------|
-| **Allen-Bradley** | ControlLogix (1756), CompactLogix (1769), Micro800 | Automatic | EtherNet/IP |
-| **Siemens** | S7-300/400/1200/1500 | Manual | S7comm |
-| **Beckhoff** | TwinCAT 2/3 | Automatic | ADS |
-| **Omron FINS** | CJ/CS/CP Series | Manual | FINS/TCP or FINS/UDP |
-| **Omron EIP** | NJ/NX Series | Automatic | EtherNet/IP (CIP) |
+| Family | Models | Tag Discovery | Protocol | Batching |
+|--------|--------|---------------|----------|----------|
+| **Allen-Bradley** | ControlLogix (1756), CompactLogix (1769), Micro800 | Automatic | EtherNet/IP (CIP) | Yes (MSP) |
+| **Siemens** | S7-300/400/1200/1500 | Manual | S7comm | Yes (PDU) |
+| **Beckhoff** | TwinCAT 2/3 | Automatic | ADS | Yes (SumUp) |
+| **Omron FINS** | CS1, CJ1/2, CP1, CV | Manual | FINS/TCP, FINS/UDP | Yes (Multi-read) |
+| **Omron EIP** | NJ, NX1/102/502/702 | Automatic | EtherNet/IP (CIP) | Yes (MSP) |
 
 ---
 
@@ -232,14 +232,27 @@ Tags are discovered automatically from the symbol table.
 
 ---
 
-## Omron FINS
+## Omron FINS (CS/CJ/CP Series)
+
+### Overview
+
+FINS (Factory Interface Network Service) is Omron's proprietary protocol for older PLC series. WarLogix supports both FINS/TCP and FINS/UDP transports with automatic fallback and optimized batching.
+
+**Supported PLC Series:**
+| Series | Models | Transport | Notes |
+|--------|--------|-----------|-------|
+| **CS1** | CS1G, CS1H, CS1D | TCP, UDP | Duplex models supported |
+| **CJ1** | CJ1G, CJ1H, CJ1M | TCP, UDP | Most common series |
+| **CJ2** | CJ2H, CJ2M | TCP, UDP | Enhanced performance |
+| **CP1** | CP1E, CP1H, CP1L | UDP | Compact series |
+| **CV** | CV500, CV1000, CV2000 | UDP | Legacy series |
 
 ### PLC-Side Setup
 
-1. **Configure IP address** via CX-Programmer, Sysmac Studio, or rotary switches
-2. **FINS port** is typically UDP 9600 (default)
-3. **Note the node address** (often matches last IP octet)
-4. **Open firewall** for UDP port 9600
+1. **Configure IP address** via CX-Programmer, rotary switches, or web interface
+2. **FINS port** is typically 9600 (default for both TCP and UDP)
+3. **Note the node address** (often matches last IP octet, or set via rotary switches)
+4. **Open firewall** for TCP and UDP port 9600
 
 ### WarLogix Configuration
 
@@ -247,21 +260,37 @@ Tags are discovered automatically from the symbol table.
 - name: OmronPLC
   address: 192.168.1.105
   family: omron
-  fins_port: 9600         # UDP port (default: 9600)
-  fins_node: 0            # FINS node number
-  fins_network: 0         # FINS network number (0 = local)
-  fins_unit: 0            # CPU unit number
+  # protocol: fins         # Default - uses FINS (auto TCP/UDP)
+  fins_port: 9600          # Port (default: 9600)
+  fins_node: 0             # FINS destination node number
+  fins_network: 0          # FINS network number (0 = local)
+  fins_unit: 0             # CPU unit number
   enabled: true
   tags:
     - name: DM100
       alias: MotorSpeed
       data_type: DINT
       enabled: true
+    - name: DM104
+      alias: Temperature
+      data_type: REAL
+      enabled: true
     - name: CIO50
       alias: OutputStatus
       data_type: WORD
       enabled: true
 ```
+
+### Transport Selection
+
+WarLogix automatically selects the optimal transport:
+
+| Transport | When Used | Advantages |
+|-----------|-----------|------------|
+| **FINS/TCP** | Tried first (default) | Reliable, better error handling, persistent connection |
+| **FINS/UDP** | Fallback if TCP fails | Works with older PLCs, lower overhead |
+
+To force a specific transport, set `protocol: fins-tcp` or `protocol: fins-udp`.
 
 ### Tag Addressing
 
@@ -274,32 +303,55 @@ Tags must be configured manually with memory area and address:
 | WR | `WR<addr>` | `WR10` | Work Area |
 | HR | `HR<addr>` | `HR0` | Holding Area |
 | AR | `AR<addr>` | `AR0` | Auxiliary Area |
+| EM | `EM<bank>:<addr>` | `EM0:100` | Extended Memory |
 
 **Bit access:** `DM100.5` (bit 5 of DM100)
-**Arrays:** `DM100[10]` (10 consecutive words)
+**Arrays:** `DM100[10]` (10 consecutive words starting at DM100)
 
-**Important:** Always specify `data_type` for Omron tags.
+**Important:** Always specify `data_type` for FINS tags.
+
+### Performance Optimization
+
+WarLogix implements several FINS optimizations:
+
+1. **Contiguous Address Grouping** - Sequential addresses in the same memory area are read in a single bulk request (up to 998 words per request)
+
+2. **Multi-Memory Area Read** - Non-contiguous addresses are batched using FINS command 0x0104, reading up to 64 memory areas per request
+
+3. **Automatic TCP/UDP Selection** - TCP is preferred for reliability; UDP is used as fallback
+
+**Example optimization:** Reading `DM100, DM101, DM102, DM103, DM200, CIO50`:
+- **Old behavior:** 6 individual requests
+- **New behavior:** 2 requests (DM100-103 as bulk, DM200+CIO50 via multi-read)
 
 ### Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
 | Timeout | Check IP, port, and PLC power |
-| Wrong node | Verify FINS node matches PLC configuration |
-| No response | Ensure UDP 9600 not blocked by firewall |
-| Wrong values | Check memory area and address |
+| Wrong node | Verify FINS node matches PLC rotary switch or config |
+| No response | Ensure port 9600 not blocked (check both TCP and UDP) |
+| TCP refused, UDP works | Some older PLCs only support UDP |
+| Wrong values | Check memory area and address; verify data_type |
+| Parameter error (0x1103) | Address out of range for memory area |
 
 ---
 
-## Omron EIP (NJ/NX Series)
+## Omron EIP/CIP (NJ/NX Series)
 
 ### Overview
 
-Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Protocol), providing symbolic tag addressing and automatic tag discovery—similar to Allen-Bradley Logix PLCs.
+Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Protocol), providing symbolic tag addressing and automatic tag discovery—similar to Allen-Bradley Logix PLCs. WarLogix implements high-performance batching and connected messaging for optimal throughput.
 
-**Supported Models:**
-- **NJ Series:** NJ101, NJ301, NJ501
-- **NX Series:** NX1, NX102, NX502, NX702
+**Supported PLC Series:**
+| Series | Models | Features |
+|--------|--------|----------|
+| **NJ** | NJ101, NJ301, NJ501 | Motion + logic, EtherNet/IP built-in |
+| **NX1** | NX1P2 | Compact all-in-one |
+| **NX102** | NX102 | Mid-range CPU |
+| **NX502** | NX502 | High-performance CPU |
+| **NX702** | NX702 | High-end CPU with safety |
+| **NA** | NA5 (HMI) | HMI with tag server |
 
 ### PLC-Side Setup
 
@@ -327,12 +379,14 @@ Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Prot
 
 ### Key Differences from FINS
 
-| Feature | FINS (CS/CJ) | EIP (NJ/NX) |
-|---------|--------------|-------------|
+| Feature | FINS (CS/CJ/CP) | EIP (NJ/NX) |
+|---------|-----------------|-------------|
 | **Tag Addressing** | Memory addresses (DM100, CIO50) | Symbolic names (ProductCount) |
 | **Tag Discovery** | Manual configuration | Automatic discovery |
 | **Data Types** | Explicit `data_type` required | Embedded in tag metadata |
-| **Port** | UDP 9600 | TCP 44818 |
+| **Port** | TCP/UDP 9600 | TCP 44818 |
+| **Byte Order** | Big-endian | Little-endian |
+| **Batching** | Multi-memory read (0x0104) | Multiple Service Packet (MSP) |
 
 ### Tag Addressing
 
@@ -350,6 +404,38 @@ tags:
 
 **Note:** Tag names are case-sensitive and must match exactly as defined in Sysmac Studio.
 
+### Performance Optimization
+
+WarLogix implements several EIP/CIP optimizations for NJ/NX series:
+
+1. **Multiple Service Packet (MSP) Batching** - Multiple tag reads are combined into single CIP requests using service 0x0A, reading up to 50 tags per request in connected mode (20 in unconnected mode)
+
+2. **Connected Messaging (Forward Open)** - Establishes a CIP connection for efficient persistent communication with larger payload sizes (up to 4002 bytes vs 504 bytes unconnected)
+
+3. **Automatic Fallback** - If batched reads fail, individual tag reads are used automatically
+
+**Example optimization:** Reading 50 tags:
+- **Old behavior:** 50 individual CIP requests
+- **New behavior:** 1 Multiple Service Packet request
+
+### Connected Messaging
+
+For maximum performance, WarLogix can establish a CIP Forward Open connection:
+
+```yaml
+- name: OmronNJ
+  address: 192.168.1.110
+  family: omron
+  protocol: eip
+  use_connected: true     # Enable Forward Open (optional)
+  enabled: true
+```
+
+| Mode | Batch Size | Payload Size | Throughput |
+|------|------------|--------------|------------|
+| Unconnected | 20 tags | 504 bytes | 200-500 tags/sec |
+| Connected | 50 tags | 4002 bytes | 500-2,000 tags/sec |
+
 ### Troubleshooting
 
 | Issue | Solution |
@@ -357,7 +443,9 @@ tags:
 | Connection refused | Ensure port 44818 is open and EtherNet/IP is enabled |
 | Tag not found | Verify tag name matches exactly (case-sensitive) |
 | Discovery empty | Check that tags are published/exposed in Sysmac Studio |
+| Forward Open rejected | PLC may not support large connections; falls back to unconnected |
 | Timeout | Check network connectivity and PLC power |
+| MSP partial failure | Some tags in batch failed; check individual tag names |
 
 ---
 

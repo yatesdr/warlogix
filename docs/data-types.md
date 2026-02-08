@@ -35,12 +35,15 @@ Multi-dimensional arrays are flattened to a single dimension.
 
 Different PLC families use different byte orders:
 
-| PLC Family | Byte Order |
-|------------|------------|
-| Siemens S7 | Big-endian |
-| Omron FINS | Big-endian |
-| Allen-Bradley Logix | Little-endian |
-| Beckhoff TwinCAT | Little-endian |
+| PLC Family | Protocol | Byte Order |
+|------------|----------|------------|
+| Siemens S7 | S7comm | Big-endian |
+| Omron FINS | FINS TCP/UDP | Big-endian |
+| Omron EIP | EtherNet/IP (CIP) | Little-endian |
+| Allen-Bradley Logix | EtherNet/IP (CIP) | Little-endian |
+| Beckhoff TwinCAT | ADS | Little-endian |
+
+**Note:** Omron NJ/NX series using EtherNet/IP (CIP) are little-endian, matching Allen-Bradley. Older Omron PLCs using FINS are big-endian.
 
 **Known types** are automatically converted - you'll see the same numeric value regardless of PLC family.
 
