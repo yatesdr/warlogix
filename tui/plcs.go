@@ -279,6 +279,10 @@ func escapeTviewText(s string) string {
 var discoveredDevicesCache []driver.DiscoveredDevice
 var discoveredDevicesCacheMu sync.Mutex
 
+// discoveryInProgress tracks whether discovery is currently running
+var discoveryInProgress bool
+var discoveryInProgressMu sync.Mutex
+
 func (t *PLCsTab) discover() {
 	// Don't start new discovery if modal is already open
 	if t.app.isModalOpen() {
@@ -291,67 +295,73 @@ func (t *PLCsTab) discover() {
 
 	t.app.setStatus("Scanning network (EIP, S7, ADS, FINS)...")
 
-	// Run discovery in background, show modal when complete
+	// Mark discovery as in progress
+	discoveryInProgressMu.Lock()
+	discoveryInProgress = true
+	discoveryInProgressMu.Unlock()
+
+	// Show modal immediately
+	t.showDiscoveryModal()
+
+	// Run discovery in background, updating cache as devices are found
 	go func() {
+		defer func() {
+			discoveryInProgressMu.Lock()
+			discoveryInProgress = false
+			discoveryInProgressMu.Unlock()
+		}()
+
 		logging.DebugLog("tui", "Discovery: found %d local subnets: %v", len(subnets), subnets)
 
-		// Scan all subnets and combine results
-		var allDevices []driver.DiscoveredDevice
-		seen := make(map[string]bool)
+		// Scan all subnets in parallel
+		var wg sync.WaitGroup
 
-		for _, cidr := range subnets {
-			logging.DebugLog("tui", "Discovery: scanning subnet %s", cidr)
-			devices := driver.DiscoverAll("255.255.255.255", cidr, 500*time.Millisecond, 50)
-			logging.DebugLog("tui", "Discovery: subnet %s returned %d devices", cidr, len(devices))
-
+		addToCache := func(devices []driver.DiscoveredDevice) {
+			discoveredDevicesCacheMu.Lock()
 			for _, dev := range devices {
 				key := dev.Key()
-				if !seen[key] {
-					seen[key] = true
-					allDevices = append(allDevices, dev)
+				found := false
+				for _, cached := range discoveredDevicesCache {
+					if cached.Key() == key {
+						found = true
+						break
+					}
+				}
+				if !found {
+					discoveredDevicesCache = append(discoveredDevicesCache, dev)
 				}
 			}
+			discoveredDevicesCacheMu.Unlock()
+		}
+
+		for _, cidr := range subnets {
+			wg.Add(1)
+			go func(cidr string) {
+				defer wg.Done()
+				logging.DebugLog("tui", "Discovery: scanning subnet %s", cidr)
+				devices := driver.DiscoverAll("255.255.255.255", cidr, 500*time.Millisecond, 50)
+				logging.DebugLog("tui", "Discovery: subnet %s returned %d devices", cidr, len(devices))
+				addToCache(devices)
+			}(cidr)
 		}
 
 		// If no subnets found, still do EIP broadcast
 		if len(subnets) == 0 {
 			logging.DebugLog("tui", "Discovery: no subnets, doing EIP-only")
-			allDevices = driver.DiscoverEIPOnly("255.255.255.255", 3*time.Second)
+			devices := driver.DiscoverEIPOnly("255.255.255.255", 3*time.Second)
+			addToCache(devices)
 		}
 
-		devices := allDevices
+		wg.Wait()
 
-		logging.DebugLog("tui", "Discovery: DiscoverAll returned %d devices", len(devices))
-		for i, dev := range devices {
-			logging.DebugLog("tui", "Discovery: device %d: IP=%s Protocol=%s Family=%s ProductName=%q",
-				i, dev.IP.String(), dev.Protocol, dev.Family, dev.ProductName)
-		}
-
-		// Add to cache
 		discoveredDevicesCacheMu.Lock()
-		for _, dev := range devices {
-			key := dev.Key()
-			found := false
-			for _, cached := range discoveredDevicesCache {
-				if cached.Key() == key {
-					found = true
-					break
-				}
-			}
-			if !found {
-				discoveredDevicesCache = append(discoveredDevicesCache, dev)
-			}
-		}
+		count := len(discoveredDevicesCache)
 		discoveredDevicesCacheMu.Unlock()
 
-		// Show modal on UI thread
-		t.app.QueueUpdateDraw(func() {
-			discoveredDevicesCacheMu.Lock()
-			count := len(discoveredDevicesCache)
-			discoveredDevicesCacheMu.Unlock()
+		logging.DebugLog("tui", "Discovery: complete, total %d devices", count)
 
-			t.app.setStatus(fmt.Sprintf("Found %d device(s)", count))
-			t.showDiscoveryModal()
+		t.app.QueueUpdateDraw(func() {
+			t.app.setStatus(fmt.Sprintf("Discovery complete - %d device(s) found", count))
 		})
 	}()
 }
@@ -448,14 +458,24 @@ func (t *PLCsTab) showDiscoveryModal() {
 			table.SetCell(row, 3, tview.NewTableCell(deviceId).SetExpansion(2))
 		}
 
-		DebugLog("Discovery modal: table populated with %d rows", len(filteredIndices))
-
-		// Update title with count
+		// Update title with count and scanning status
 		total := len(devices)
+		discoveryInProgressMu.Lock()
+		scanning := discoveryInProgress
+		discoveryInProgressMu.Unlock()
+
 		if filter != "" {
-			flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d/%d) ", len(filteredIndices), total))
-		} else if total == 0 {
-			flex.SetTitle(" Discovering Devices... ")
+			if scanning {
+				flex.SetTitle(fmt.Sprintf(" Scanning... (%d/%d) ", len(filteredIndices), total))
+			} else {
+				flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d/%d) ", len(filteredIndices), total))
+			}
+		} else if scanning {
+			if total == 0 {
+				flex.SetTitle(" Scanning... ")
+			} else {
+				flex.SetTitle(fmt.Sprintf(" Scanning... (%d found) ", total))
+			}
 		} else {
 			flex.SetTitle(fmt.Sprintf(" Discovered Devices (%d) ", total))
 		}
@@ -463,6 +483,32 @@ func (t *PLCsTab) showDiscoveryModal() {
 
 	// Initial population from cache
 	populateTable()
+
+	// Set up periodic refresh while discovery is running
+	stopRefresh := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopRefresh:
+				return
+			case <-ticker.C:
+				discoveryInProgressMu.Lock()
+				scanning := discoveryInProgress
+				discoveryInProgressMu.Unlock()
+
+				t.app.QueueUpdateDraw(func() {
+					populateTable()
+				})
+
+				// Stop refreshing once discovery is complete
+				if !scanning {
+					return
+				}
+			}
+		}
+	}()
 
 	// Filter input change handler
 	filterInput.SetChangedFunc(func(text string) {
@@ -479,6 +525,7 @@ func (t *PLCsTab) showDiscoveryModal() {
 	ApplyButtonTheme(clearBtn)
 
 	closeModal := func() {
+		close(stopRefresh)
 		t.app.closeModal(pageName)
 	}
 
