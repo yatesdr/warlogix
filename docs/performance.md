@@ -20,6 +20,16 @@ Test conditions: 50 PLCs × 100 tags = 5,000 total tags, 10-second duration, loc
 | MQTT | 32,521 msg/s | 325,210 | 30µs | PASS |
 | Valkey | 44,912 msg/s | 449,127 | 22µs | PASS |
 
+**Important:** These throughput differences reflect WarLogix's publishing implementation, not inherent broker capabilities:
+
+| Broker | WarLogix Implementation | Why Different |
+|--------|------------------------|---------------|
+| **Kafka** | Batched async (100 msgs or 20ms) | Batching amortizes network overhead |
+| **MQTT** | Synchronous QoS 1 per message | Waits for broker ACK each message |
+| **Valkey** | Synchronous SET per message | Waits for Redis response each message |
+
+All three technologies can handle much higher throughput with different client implementations. These numbers represent WarLogix's confirmed-delivery publishing rate for each broker type, ensuring no messages are lost.
+
 **Detailed Results:**
 
 ```
@@ -46,7 +56,7 @@ Valkey/ValkeyServer1:
 
 ### Real-World Capacity
 
-With change filtering (only publishing when values change), real-world message rates are typically much lower:
+With change filtering (only publishing when values change), real-world message rates are typically much lower than stress test maximums:
 
 | Scenario | Tag Changes/sec | Kafka | MQTT | Valkey |
 |----------|----------------|-------|------|--------|
@@ -54,7 +64,7 @@ With change filtering (only publishing when values change), real-world message r
 | 50 PLCs @ 10Hz, 10% change rate | 5,000 | 58x headroom | 6x | 9x |
 | 100 PLCs @ 10Hz, 20% change rate | 20,000 | 14x headroom | 1.6x | 2.2x |
 
-For high-volume deployments, Kafka provides the most headroom due to its batched publishing model.
+All three brokers provide sufficient capacity for typical industrial deployments. Choose based on your infrastructure requirements, not raw throughput numbers.
 
 ## PLC Read Performance
 
@@ -183,13 +193,15 @@ Faster poll rates increase:
 
 ### Broker Selection
 
-| Broker | Strengths | Weaknesses |
-|--------|-----------|------------|
-| **Kafka** | Highest throughput, durable, scalable | More complex setup |
-| **MQTT** | Simple, lightweight, bidirectional | Lower throughput |
-| **Valkey/Redis** | Key-value access, Pub/Sub, write-back | Memory-bound |
+Choose based on your use case, not throughput numbers (all have sufficient capacity for typical deployments):
 
-For maximum throughput, use Kafka. For simplicity, use MQTT. For real-time key-value access with write-back, use Valkey.
+| Broker | Best For | Key Features |
+|--------|----------|--------------|
+| **Kafka** | Event streaming, audit trails, multi-consumer | Durable, replayable, horizontally scalable |
+| **MQTT** | IoT integration, simple pub/sub, bidirectional | Lightweight, write-back support, widely supported |
+| **Valkey/Redis** | Real-time dashboards, caching, key-value lookup | Instant access by tag, Pub/Sub, write-back queue |
+
+You can enable multiple brokers simultaneously - WarLogix publishes to all configured brokers in parallel.
 
 ### Change Filtering
 
