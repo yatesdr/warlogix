@@ -271,33 +271,18 @@ func parseDiscoveryResponse(data []byte, sourceIP net.IP) *DiscoveredDevice {
 		HasRoute:  true, // Device responded to UDP discovery
 	}
 
-	// Try to find AMS Net ID at various offsets
-	// The AMS Net ID is 6 bytes and typically looks like: A.B.C.D.1.1 where A.B.C.D is IP-like
-	amsOffsets := []int{4, 8, 12, 16, 20, 24}
-	for _, offset := range amsOffsets {
-		if offset+6 > len(data) {
-			continue
-		}
-		amsBytes := data[offset : offset+6]
+	// AMS Net ID is at offset 12 in the response (6 bytes)
+	// Response format: 03 66 14 71 [4 bytes] [4 bytes] [AMS Net ID 6 bytes] ...
+	if len(data) >= 18 {
+		amsBytes := data[12:18]
+		device.AmsNetId = fmt.Sprintf("%d.%d.%d.%d.%d.%d",
+			amsBytes[0], amsBytes[1], amsBytes[2], amsBytes[3], amsBytes[4], amsBytes[5])
+		logging.DebugLog("tui", "ADS parseDiscoveryResponse: AMS Net ID at offset 12: %s", device.AmsNetId)
 
-		// Check if this looks like a valid AMS Net ID
-		// Valid: non-zero first 4 bytes (like an IP), last 2 bytes usually 1.1
-		if isValidAmsNetIdBytes(amsBytes) {
-			candidate := fmt.Sprintf("%d.%d.%d.%d.%d.%d",
-				amsBytes[0], amsBytes[1], amsBytes[2], amsBytes[3], amsBytes[4], amsBytes[5])
-			logging.DebugLog("tui", "ADS parseDiscoveryResponse: found candidate AMS Net ID at offset %d: %s", offset, candidate)
-
-			// Prefer AMS Net IDs that look like they're based on an IP address
-			// (first octet in common private ranges: 10.x, 172.16-31, 192.168)
-			firstOctet := amsBytes[0]
-			if firstOctet == 10 || firstOctet == 172 || firstOctet == 192 {
-				device.AmsNetId = candidate
-				logging.DebugLog("tui", "ADS parseDiscoveryResponse: using AMS Net ID: %s", device.AmsNetId)
-				break
-			} else if device.AmsNetId == "" {
-				// Use first valid candidate if we don't find an IP-like one
-				device.AmsNetId = candidate
-			}
+		// Validate - if it's all zeros, clear it
+		if !isValidAmsNetIdBytes(amsBytes) {
+			logging.DebugLog("tui", "ADS parseDiscoveryResponse: AMS Net ID invalid (all zeros)")
+			device.AmsNetId = ""
 		}
 	}
 
