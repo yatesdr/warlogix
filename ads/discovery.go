@@ -109,15 +109,20 @@ func probeADS(ip net.IP, timeout time.Duration) *DiscoveredDevice {
 	}
 	defer conn.Close()
 
+	logging.DebugLog("tui", "ADS probeADS: connected to %s, trying device info", addr)
+
 	conn.SetDeadline(time.Now().Add(timeout))
 
 	// Build a minimal ADS ReadDeviceInfo request
 	// This is the simplest way to verify it's an ADS device
 	device := tryADSDeviceInfo(conn, ip)
 	if device != nil {
+		logging.DebugLog("tui", "ADS probeADS: %s returned device: ProductName=%q AmsNetId=%s",
+			addr, device.ProductName, device.AmsNetId)
 		return device
 	}
 
+	logging.DebugLog("tui", "ADS probeADS: %s connected but no valid response", addr)
 	// If ReadDeviceInfo failed, but we connected, it might still be ADS
 	// Just mark it as potentially ADS based on port response
 	return &DiscoveredDevice{
