@@ -29,7 +29,6 @@ type Manager struct {
 	writeValidator    func(plcName, tagName string) bool
 	tagTypeLookup     func(plcName, tagName string) uint16
 	onConnectCallback func()
-	plcNames          []string
 
 	// Batching
 	batchChan chan valkeyJob
@@ -57,9 +56,9 @@ func (m *Manager) startBatcher() {
 		return
 	}
 	m.started = true
+	m.wg.Add(1) // Must be inside lock to prevent race with StopAll()
 	m.mu.Unlock()
 
-	m.wg.Add(1)
 	go m.batchProcessor()
 }
 
@@ -353,13 +352,6 @@ func (m *Manager) SetTagTypeLookup(lookup func(plcName, tagName string) uint16) 
 	for _, pub := range m.publishers {
 		pub.SetTagTypeLookup(lookup)
 	}
-}
-
-// SetPLCNames sets the PLC names for write subscriptions.
-func (m *Manager) SetPLCNames(names []string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.plcNames = names
 }
 
 // SetOnConnectCallback sets the callback invoked after connection is established.

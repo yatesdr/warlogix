@@ -1,7 +1,6 @@
 package tagpack
 
 import (
-	"encoding/json"
 	"net/url"
 	"sync"
 	"time"
@@ -403,9 +402,4 @@ type PackInfo struct {
 	Enabled bool   `json:"enabled"`
 	Members int    `json:"members"`
 	URL     string `json:"url"`
-}
-
-// MarshalPackValue serializes a PackValue to JSON.
-func MarshalPackValue(pv PackValue) ([]byte, error) {
-	return json.Marshal(pv)
 }

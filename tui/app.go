@@ -349,14 +349,6 @@ func (a *App) nextTab() {
 	a.switchToTab(a.currentTab)
 }
 
-func (a *App) prevTab() {
-	a.currentTab--
-	if a.currentTab < 0 {
-		a.currentTab = len(a.tabNames) - 1
-	}
-	a.switchToTab(a.currentTab)
-}
-
 func (a *App) switchToTab(index int) {
 	a.currentTab = index
 	a.pages.SwitchToPage(a.tabNames[index])

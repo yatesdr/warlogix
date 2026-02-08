@@ -261,6 +261,7 @@ func runLocalMode(cfg *config.Config) {
 	// Create TagPack manager
 	packProvider := &plcDataProvider{manager: manager}
 	packMgr := tagpack.NewManager(cfg, packProvider)
+	defer packMgr.Stop()
 	packMgr.SetOnPublish(func(info tagpack.PackPublishInfo) {
 		data, err := json.Marshal(info.Value)
 		if err != nil {
@@ -299,13 +300,12 @@ func runLocalMode(cfg *config.Config) {
 	// Set up MQTT/Valkey write handling
 	setupWriteHandlers(cfg, manager, mqttMgr, valkeyMgr, kafkaMgr)
 
-	// Set PLC names for write subscriptions
+	// Set PLC names for MQTT write subscriptions
 	plcNames := make([]string, len(cfg.PLCs))
 	for i, plc := range cfg.PLCs {
 		plcNames[i] = plc.Name
 	}
 	mqttMgr.SetPLCNames(plcNames)
-	valkeyMgr.SetPLCNames(plcNames)
 
 	// Create TUI app first (this sets up the debug logger)
 	app := tui.NewApp(cfg, *configPath, manager, apiServer, mqttMgr, valkeyMgr, kafkaMgr, triggerMgr)
@@ -444,6 +444,7 @@ func runDaemonMode(cfg *config.Config) {
 	// Create TagPack manager
 	packProviderDaemon := &plcDataProvider{manager: manager}
 	packMgrDaemon := tagpack.NewManager(cfg, packProviderDaemon)
+	defer packMgrDaemon.Stop()
 	packMgrDaemon.SetOnPublish(func(info tagpack.PackPublishInfo) {
 		data, err := json.Marshal(info.Value)
 		if err != nil {
@@ -482,13 +483,12 @@ func runDaemonMode(cfg *config.Config) {
 	// Set up MQTT/Valkey write handling
 	setupWriteHandlers(cfg, manager, mqttMgr, valkeyMgr, kafkaMgr)
 
-	// Set PLC names for write subscriptions
+	// Set PLC names for MQTT write subscriptions
 	plcNames := make([]string, len(cfg.PLCs))
 	for i, plc := range cfg.PLCs {
 		plcNames[i] = plc.Name
 	}
 	mqttMgr.SetPLCNames(plcNames)
-	valkeyMgr.SetPLCNames(plcNames)
 
 	// Create SSH server
 	sshServer := ssh.NewServer(&ssh.Config{

@@ -145,11 +145,11 @@ func (t *PacksTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	}
 	if event.Key() == tcell.KeyTab {
+		t.app.app.SetFocus(t.memberTable)
 		if t.memberTable.GetRowCount() > 1 {
-			t.app.app.SetFocus(t.memberTable)
 			t.memberTable.Select(1, 0)
-			return nil
 		}
+		return nil
 	}
 	return event
 }
@@ -310,11 +310,13 @@ func (t *PacksTab) Refresh() {
 		t.packTable.RemoveRow(1)
 	}
 
-	// Sort packs by name
-	packs := make([]config.TagPackConfig, len(t.app.config.TagPacks))
-	copy(packs, t.app.config.TagPacks)
-	sort.Slice(packs, func(i, j int) bool {
-		return packs[i].Name < packs[j].Name
+	// Build sorted index into config slice (avoids copying structs)
+	indices := make([]int, len(t.app.config.TagPacks))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.Slice(indices, func(i, j int) bool {
+		return t.app.config.TagPacks[indices[i]].Name < t.app.config.TagPacks[indices[j]].Name
 	})
 
 	// Check service connectivity once for all packs
@@ -343,7 +345,8 @@ func (t *PacksTab) Refresh() {
 	}
 
 	// Add packs to table
-	for i, cfg := range packs {
+	for i, idx := range indices {
+		cfg := &t.app.config.TagPacks[idx]
 		row := i + 1
 
 		// Status indicator - use fixed colors (theme-independent)
@@ -392,12 +395,12 @@ func (t *PacksTab) Refresh() {
 
 	// Update status bar
 	enabled := 0
-	for _, cfg := range packs {
-		if cfg.Enabled {
+	for i := range t.app.config.TagPacks {
+		if t.app.config.TagPacks[i].Enabled {
 			enabled++
 		}
 	}
-	t.statusBar.SetText(fmt.Sprintf(" %d packs, %d enabled | Tab to switch to members, 'i' to toggle ignore", len(packs), enabled))
+	t.statusBar.SetText(fmt.Sprintf(" %d packs, %d enabled | Tab to switch to members, 'i' to toggle ignore", len(t.app.config.TagPacks), enabled))
 
 	// Update member list and info for selected
 	if name := t.getSelectedName(); name != "" {

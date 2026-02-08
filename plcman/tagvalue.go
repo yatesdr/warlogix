@@ -2,7 +2,6 @@ package plcman
 
 import (
 	"warlogix/ads"
-	"warlogix/config"
 	"warlogix/driver"
 	"warlogix/logix"
 	"warlogix/omron"
@@ -44,25 +43,6 @@ func (v *TagValue) TypeName() string {
 		return omron.TypeName(v.DataType)
 	default:
 		return logix.TypeName(v.DataType)
-	}
-}
-
-// FromLogixTagValue creates a unified TagValue from a logix.TagValue.
-// For UDT decoding with member names, use FromLogixTagValueDecoded instead.
-func FromLogixTagValue(lv *logix.TagValue) *TagValue {
-	if lv == nil {
-		return nil
-	}
-	value := lv.GoValue()
-	return &TagValue{
-		Name:        lv.Name,
-		DataType:    lv.DataType,
-		Family:      "logix",
-		Value:       value,
-		StableValue: value,
-		Bytes:       lv.Bytes,
-		Count:       lv.Count,
-		Error:       lv.Error,
 	}
 }
 
@@ -134,45 +114,6 @@ func (v *TagValue) SetIgnoreList(ignoreList []string) {
 	v.StableValue = ComputeStableValue(v.Value, ignoreList)
 }
 
-// FromS7TagValue creates a unified TagValue from an s7.TagValue.
-// This calls s7.TagValue.GoValue() which uses big-endian parsing.
-func FromS7TagValue(sv *s7.TagValue, family config.PLCFamily) *TagValue {
-	if sv == nil {
-		return nil
-	}
-	dataType := sv.DataType
-	if sv.Count > 1 {
-		dataType = s7.MakeArrayType(dataType)
-	}
-	value := sv.GoValue() // Uses big-endian (native S7 format)
-	return &TagValue{
-		Name:        sv.Name,
-		DataType:    dataType,
-		Family:      "s7",
-		Value:       value,
-		StableValue: value,
-		Bytes:       sv.Bytes,
-		Count:       sv.Count,
-		Error:       sv.Error,
-	}
-}
-
-// ToLogixTagValue converts the unified TagValue back to a logix.TagValue.
-// This is needed for compatibility with existing code that expects logix.TagValue.
-// Note: The bytes are stored in their original native byte order.
-func (v *TagValue) ToLogixTagValue() *logix.TagValue {
-	if v == nil {
-		return nil
-	}
-	return &logix.TagValue{
-		Name:     v.Name,
-		DataType: v.DataType,
-		Bytes:    v.Bytes,
-		Count:    v.Count,
-		Error:    v.Error,
-	}
-}
-
 // FromDriverTagValue creates a unified TagValue from a driver.TagValue.
 // This is used when reading via the driver package's unified interface.
 func FromDriverTagValue(dv *driver.TagValue) *TagValue {
@@ -188,52 +129,5 @@ func FromDriverTagValue(dv *driver.TagValue) *TagValue {
 		Bytes:       dv.Bytes,
 		Count:       dv.Count,
 		Error:       dv.Error,
-	}
-}
-
-// ToDriverTagValue converts the unified TagValue to a driver.TagValue.
-func (v *TagValue) ToDriverTagValue() *driver.TagValue {
-	if v == nil {
-		return nil
-	}
-	return &driver.TagValue{
-		Name:        v.Name,
-		DataType:    v.DataType,
-		Family:      v.Family,
-		Value:       v.Value,
-		StableValue: v.StableValue,
-		Bytes:       v.Bytes,
-		Count:       v.Count,
-		Error:       v.Error,
-	}
-}
-
-// LogixTagInfoToDriver converts a logix.TagInfo to a driver.TagInfo.
-func LogixTagInfoToDriver(t logix.TagInfo) driver.TagInfo {
-	dims := make([]uint32, len(t.Dimensions))
-	for i, d := range t.Dimensions {
-		dims[i] = uint32(d)
-	}
-	return driver.TagInfo{
-		Name:       t.Name,
-		TypeCode:   t.TypeCode,
-		Instance:   t.Instance,
-		Dimensions: dims,
-		TypeName:   t.TypeName(),
-		Writable:   t.IsReadable(),
-	}
-}
-
-// DriverTagInfoToLogix converts a driver.TagInfo to a logix.TagInfo.
-func DriverTagInfoToLogix(t driver.TagInfo) logix.TagInfo {
-	dims := make([]int, len(t.Dimensions))
-	for i, d := range t.Dimensions {
-		dims[i] = int(d)
-	}
-	return logix.TagInfo{
-		Name:       t.Name,
-		TypeCode:   t.TypeCode,
-		Instance:   t.Instance,
-		Dimensions: dims,
 	}
 }

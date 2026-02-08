@@ -151,7 +151,11 @@ func (p *Publisher) Start() error {
 
 	// Call on-connect callback to publish initial values
 	if p.onConnectCallback != nil {
-		go p.onConnectCallback()
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			p.onConnectCallback()
+		}()
 	}
 
 	return nil

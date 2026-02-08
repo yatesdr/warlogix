@@ -106,9 +106,9 @@ func (m *Manager) startBatcher() {
 		return
 	}
 	m.started = true
+	m.wg.Add(1) // Must be inside lock to prevent race with StopAll()
 	m.mu.Unlock()
 
-	m.wg.Add(1)
 	go m.batchProcessor()
 }
 

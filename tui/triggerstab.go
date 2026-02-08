@@ -128,21 +128,16 @@ func (t *TriggersTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'e':
 		t.showEditDialog()
 		return nil
-	case 's':
-		t.startSelected()
-		return nil
-	case 'S':
-		t.stopSelected()
+	case ' ':
+		t.toggleSelected()
 		return nil
 	case 'F':
 		t.testSelected()
 		return nil
 	}
 	if event.Key() == tcell.KeyTab {
-		if t.dataTable.GetRowCount() > 0 {
-			t.app.app.SetFocus(t.dataTable)
-			return nil
-		}
+		t.app.app.SetFocus(t.dataTable)
+		return nil
 	}
 	return event
 }
@@ -827,46 +822,38 @@ func (t *TriggersTab) confirmRemoveTrigger() {
 	})
 }
 
-func (t *TriggersTab) startSelected() {
+func (t *TriggersTab) toggleSelected() {
 	name := t.getSelectedName()
 	if name == "" {
 		return
 	}
 
 	cfg := t.app.config.FindTrigger(name)
-	if cfg != nil {
-		cfg.Enabled = true
-		t.app.SaveConfig()
-	}
-
-	if err := t.app.triggerMgr.StartTrigger(name); err != nil {
-		t.app.setStatus(fmt.Sprintf("Failed to start: %v", err))
+	if cfg == nil {
 		return
 	}
 
-	t.Refresh()
-	t.app.setStatus(fmt.Sprintf("Started trigger: %s", name))
-}
-
-func (t *TriggersTab) stopSelected() {
-	name := t.getSelectedName()
-	if name == "" {
-		return
-	}
-
-	cfg := t.app.config.FindTrigger(name)
-	if cfg != nil {
+	if cfg.Enabled {
+		// Stop the trigger
 		cfg.Enabled = false
 		t.app.SaveConfig()
+		if err := t.app.triggerMgr.StopTrigger(name); err != nil {
+			t.app.setStatus(fmt.Sprintf("Failed to stop: %v", err))
+			return
+		}
+		t.Refresh()
+		t.app.setStatus(fmt.Sprintf("Stopped trigger: %s", name))
+	} else {
+		// Start the trigger
+		cfg.Enabled = true
+		t.app.SaveConfig()
+		if err := t.app.triggerMgr.StartTrigger(name); err != nil {
+			t.app.setStatus(fmt.Sprintf("Failed to start: %v", err))
+			return
+		}
+		t.Refresh()
+		t.app.setStatus(fmt.Sprintf("Started trigger: %s", name))
 	}
-
-	if err := t.app.triggerMgr.StopTrigger(name); err != nil {
-		t.app.setStatus(fmt.Sprintf("Failed to stop: %v", err))
-		return
-	}
-
-	t.Refresh()
-	t.app.setStatus(fmt.Sprintf("Stopped trigger: %s", name))
 }
 
 func (t *TriggersTab) testSelected() {
@@ -903,8 +890,7 @@ func (t *TriggersTab) updateButtonBar() {
 	buttonText := " " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
 		th.TagHotkey + "x" + th.TagActionText + " remove  " +
 		th.TagHotkey + "e" + th.TagActionText + "dit  " +
-		th.TagHotkey + "s" + th.TagActionText + "tart  " +
-		th.TagHotkey + "S" + th.TagActionText + "top  " +
+		th.TagHotkey + "Space" + th.TagActionText + " toggle  " +
 		th.TagHotkey + "F" + th.TagActionText + "ire  " +
 		th.TagActionText + "│  " +
 		th.TagHotkey + "?" + th.TagActionText + " help " + th.TagReset

@@ -245,13 +245,21 @@ func (t *Trigger) Stop() {
 func (t *Trigger) monitorLoop() {
 	defer t.wg.Done()
 
+	// Get context reference safely to prevent race with Stop()
+	t.mu.RLock()
+	ctx := t.ctx
+	t.mu.RUnlock()
+	if ctx == nil {
+		return
+	}
+
 	// Poll interval - fast enough for responsive triggers
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-t.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			t.checkTrigger()
