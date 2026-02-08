@@ -11,7 +11,8 @@ War was originally designed as an "Edge" application to simplify pushing data ou
 
 > **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff is stable but requires more testing, and Omron support is still experimental.
 
-<img width="908" height="547" alt="image" src="https://github.com/user-attachments/assets/2a86c6b3-b82d-42da-b792-a2a6677a0383" />
+<img width="916" height="548" alt="image" src="https://github.com/user-attachments/assets/26355fa0-95bc-4987-b6c1-2420e5c60d71" />
+
 
 
 
