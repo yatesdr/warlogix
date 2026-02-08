@@ -2378,14 +2378,25 @@ func parseArrayValue(input string) (interface{}, error) {
 
 	// Try parsing as floats
 	floatVals := make([]float64, len(parts))
+	allFloats := true
 	for i, p := range parts {
 		p = strings.TrimSpace(p)
 		v, err := strconv.ParseFloat(p, 64)
 		if err != nil {
-			return nil, fmt.Errorf("cannot parse %q as number", p)
+			allFloats = false
+			break
 		}
 		floatVals[i] = v
 	}
 
-	return floatVals, nil
+	if allFloats {
+		return floatVals, nil
+	}
+
+	// Fall back to string array
+	strVals := make([]string, len(parts))
+	for i, p := range parts {
+		strVals[i] = strings.TrimSpace(p)
+	}
+	return strVals, nil
 }
