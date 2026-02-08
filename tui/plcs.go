@@ -290,8 +290,11 @@ func (t *PLCsTab) discover() {
 func (t *PLCsTab) showDiscoveryResults(devices []logix.DeviceInfo) {
 	const pageName = "discovery"
 
+	th := CurrentTheme
 	list := tview.NewList()
 	list.SetBorder(true).SetTitle(" Discovered Devices ")
+	list.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	ApplyListTheme(list)
 
 	for _, dev := range devices {
 		ip := dev.IP.String()
