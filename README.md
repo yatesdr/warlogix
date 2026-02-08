@@ -1,18 +1,20 @@
 # WarLogix
 
-A TUI (Text User Interface) gateway for industrial PLCs. Connect to Allen-Bradley, Siemens, Beckhoff, and Omron PLCs and republish data via REST API, MQTT, Kafka, and Redis/Valkey.
-
-> **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff and Omron support are works in progress.
-
-<img width="837" height="537" alt="image" src="https://github.com/user-attachments/assets/9a1794ae-725d-468d-820b-b80e96c09888" />
-
-## Why WarLogix?
 
 **WAR** stands for *"Whispers Across Realms"* - bridging the gap between industrial automation and modern IT infrastructure.
 
-Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwhile, your data platforms expect REST, MQTT, Kafka, and Redis. WarLogix translates between these worlds, letting you stream PLC data to dashboards, databases, and analytics pipelines without writing custom integration code.
+Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwhile, your data platforms expect REST, MQTT, Kafka, and Redis. WarLogix translates between these worlds, letting you stream PLC data to dashboards, databases, and analytics pipelines without writing custom integration code.  No expensive middleware. No vendor lock-in. Just a single binary that runs anywhere.
 
-No expensive middleware. No vendor lock-in. Just a single binary that runs anywhere.
+At its heart WarLogix is a TUI (Text User Interface) gateway for industrial PLCs, and can connect and read / write data from Allen-Bradley, Siemens, Beckhoff, and Omron PLCs.  It will then republish that data via REST API, MQTT, Kafka, and Redis/Valkey for use in the wider factory infrastructure.   It includes advanced features for grouping tags into 'Soft-UDTs' and for publishing tags or groups of tags when specific trigger condition are met.   It is optimized for high-performance read from PLCs and writing to upstream services, with write-back functionality for discrete types.
+
+War was originally designed as an "Edge" application to simplify pushing data out of NAT'd process networks, but is found to also work well in the server room for aggregating and monitoring data factory-wide.   It has been designed for easy configuration and back up (single-file config), and works well for distribution with Ansible and other distribution managers.   WarLogix runs on most modern terminals, and includes a built-in SSH server and daemon-mode for when you prefer to run it in the background on existing computers or servers, while connecting to it remotely to refine the configuration or monitor conditions.
+
+> **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff is stable but requires more testing, and Omron support is still experimental.
+
+<img width="916" height="548" alt="image" src="https://github.com/user-attachments/assets/26355fa0-95bc-4987-b6c1-2420e5c60d71" />
+
+
+
 
 ## Warnings
 
@@ -43,15 +45,6 @@ go build -o warlogix ./cmd/warlogix
 
 Configuration is stored at `~/.warlogix/config.yaml` and created automatically on first run.
 
-### Navigation
-
-- **Direct tab access**: `P`LCs, Repu`B`lisher, `T`agPacks, Tri`G`gers, R`E`ST, `M`QTT, `V`alkey, `K`afka, `D`ebug
-- `Shift+Tab` - Cycle through tabs
-- `N` - Configure namespace
-- `?` - Help
-- `Q` - Quit
-
-Press `d` to discover PLCs on your network, or `a` to add manually.
 
 ## Documentation
 

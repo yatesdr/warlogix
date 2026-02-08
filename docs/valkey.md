@@ -2,6 +2,10 @@
 
 WarLogix stores tag values in Valkey/Redis with optional Pub/Sub notifications and write-back queue support.
 
+
+<img width="911" height="541" alt="image" src="https://github.com/user-attachments/assets/80851e84-b122-4718-b0a5-c3e858017371" />
+
+
 ## Configuration
 
 ```yaml

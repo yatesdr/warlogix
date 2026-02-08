@@ -1,6 +1,8 @@
 # REST API Reference
 
-The REST API exposes PLC data over HTTP for integration with other systems.
+The REST API exposes PLC data over HTTP for integration with other systems and debugging.   This can be useful if the other systems reside on a routable subnet and need a simple polling check, but the other publishing options are much more performant and should be preferred.   Namespaces are not used for the REST server since read and write requests are targeted at a specific WarLogix instance already.
+
+<img width="1118" height="667" alt="image" src="https://github.com/user-attachments/assets/d7acb0d7-c245-48ea-abb0-a77956c4aaa6" />
 
 ## Configuration
 
