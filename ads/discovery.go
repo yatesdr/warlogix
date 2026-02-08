@@ -171,44 +171,59 @@ func tryADSDeviceInfo(conn net.Conn, ip net.IP) *DiscoveredDevice {
 	binary.LittleEndian.PutUint32(packet[30:34], 0)       // Error code
 	binary.LittleEndian.PutUint32(packet[34:38], 1)       // Invoke ID
 
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: sending request packet")
 	if _, err := conn.Write(packet); err != nil {
+		logging.DebugLog("tui", "ADS tryADSDeviceInfo: write error: %v", err)
 		return nil
 	}
 
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: reading response header")
 	// Read response
 	respHeader := make([]byte, 6)
 	if _, err := conn.Read(respHeader); err != nil {
+		logging.DebugLog("tui", "ADS tryADSDeviceInfo: read header error: %v", err)
 		return nil
 	}
 
 	// Parse TCP header
 	respLen := binary.LittleEndian.Uint32(respHeader[2:6])
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: response length=%d", respLen)
 	if respLen < 32 || respLen > 1024 {
+		logging.DebugLog("tui", "ADS tryADSDeviceInfo: invalid response length")
 		return nil
 	}
 
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: reading response data")
 	respData := make([]byte, respLen)
 	if _, err := conn.Read(respData); err != nil {
+		logging.DebugLog("tui", "ADS tryADSDeviceInfo: read data error: %v", err)
 		return nil
 	}
 
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: parsing response")
 	// Check response command (should be ReadDeviceInfo response)
 	if len(respData) < 32 {
+		logging.DebugLog("tui", "ADS tryADSDeviceInfo: response too short")
 		return nil
 	}
 
 	cmdId := binary.LittleEndian.Uint16(respData[16:18])
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: cmdId=%d", cmdId)
 	if cmdId != CmdReadDeviceInfo {
+		logging.DebugLog("tui", "ADS tryADSDeviceInfo: wrong command id")
 		return nil
 	}
 
 	stateFlags := binary.LittleEndian.Uint16(respData[18:20])
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: stateFlags=%d", stateFlags)
 	if stateFlags&0x0001 == 0 {
 		// Not a response
+		logging.DebugLog("tui", "ADS tryADSDeviceInfo: not a response")
 		return nil
 	}
 
 	errorCode := binary.LittleEndian.Uint32(respData[24:28])
+	logging.DebugLog("tui", "ADS tryADSDeviceInfo: errorCode=%d", errorCode)
 	if errorCode != 0 {
 		// ADS error, but device is ADS-capable
 		return &DiscoveredDevice{
