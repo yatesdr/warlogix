@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -257,73 +259,364 @@ func (t *PLCsTab) Refresh() {
 	t.statusBar.SetText(statusText)
 }
 
+// discoverySession holds the active discovery session
+var discoverySession *driver.DiscoverySession
+
+// discoveredDevicesCache holds cached discovered devices
+var discoveredDevicesCache []driver.DiscoveredDevice
+var discoveredDevicesCacheMu sync.Mutex
+
 func (t *PLCsTab) discover() {
-	t.app.setStatus("Discovering PLCs (scanning network)...")
+	// Don't start new discovery if modal is already open
+	if t.app.isModalOpen() {
+		t.app.setStatus("Close current dialog first")
+		return
+	}
 
-	go func() {
-		// Get local subnets for port scanning
-		subnets := driver.GetLocalSubnets()
-		scanCIDR := ""
-		if len(subnets) > 0 {
-			scanCIDR = subnets[0] // Use first subnet for scanning
-		}
+	// Load cached devices first
+	discoveredDevicesCacheMu.Lock()
+	cachedDevices := make([]driver.DiscoveredDevice, len(discoveredDevicesCache))
+	copy(cachedDevices, discoveredDevicesCache)
+	discoveredDevicesCacheMu.Unlock()
 
-		// Run unified discovery across all protocols
-		devices := driver.DiscoverAll("255.255.255.255", scanCIDR, 500*time.Millisecond, 50)
-
-		t.app.QueueUpdateDraw(func() {
-			if len(devices) == 0 {
-				t.app.setStatus("No PLCs discovered")
-				return
-			}
-
-			// Don't show discovery dialog if another modal is already open
-			// This prevents focus issues when user opens another dialog during discovery
-			if t.app.isModalOpen() {
-				t.app.setStatus(fmt.Sprintf("Found %d device(s) - press 'd' again to view", len(devices)))
-				return
-			}
-
-			t.app.setStatus(fmt.Sprintf("Found %d device(s)", len(devices)))
-			t.showDiscoveryResults(devices)
-		})
-	}()
+	// Show modal immediately with cached devices (if any), then update as new devices are found
+	t.showDiscoveryModal(cachedDevices)
 }
 
-func (t *PLCsTab) showDiscoveryResults(devices []driver.DiscoveredDevice) {
+func (t *PLCsTab) showDiscoveryModal(initialDevices []driver.DiscoveredDevice) {
 	const pageName = "discovery"
 
 	th := CurrentTheme
-	list := tview.NewList()
-	list.SetBorder(true).SetTitle(" Discovered Devices ")
-	list.SetBorderColor(th.Border).SetTitleColor(th.Accent)
-	ApplyListTheme(list)
 
-	for _, dev := range devices {
-		ip := dev.IP.String()
-		text := fmt.Sprintf("%s - %s (%s)", ip, dev.ProductName, dev.Protocol)
-		list.AddItem(text, "", 0, nil)
+	// Track all devices (starts with cached, adds new ones)
+	var devices []driver.DiscoveredDevice
+	var devicesMu sync.Mutex
+	devices = append(devices, initialDevices...)
+
+	// Create the main container
+	flex := tview.NewFlex().SetDirection(tview.FlexRow)
+	flex.SetBorder(true)
+	flex.SetBorderColor(th.Border).SetTitleColor(th.Accent)
+	flex.SetBackgroundColor(th.Background)
+
+	// Status bar showing discovery progress
+	statusBar := tview.NewTextView()
+	statusBar.SetTextColor(th.Accent)
+	statusBar.SetBackgroundColor(th.Background)
+	statusBar.SetTextAlign(tview.AlignCenter)
+	statusBar.SetText(" Scanning network... ")
+
+	// Filter input (hidden by default)
+	filterInput := tview.NewInputField()
+	filterInput.SetLabel(" Filter: ")
+	filterInput.SetFieldWidth(40)
+	filterInput.SetLabelColor(th.Text)
+	filterInput.SetFieldBackgroundColor(th.FieldBackground)
+	filterInput.SetFieldTextColor(th.FieldText)
+	filterInput.SetBackgroundColor(th.Background)
+
+	// Track filter visibility and current filter
+	filterVisible := false
+	currentFilter := ""
+
+	// Create the list
+	list := tview.NewList()
+	list.SetBackgroundColor(th.Background)
+	list.SetMainTextColor(th.Text)
+	list.SetSecondaryTextColor(th.TextDim)
+	list.SetSelectedBackgroundColor(th.Accent)
+	list.SetSelectedTextColor(th.SelectedText)
+	list.ShowSecondaryText(true)
+
+	// Track filtered indices to map selection back to original devices
+	var filteredIndices []int
+
+	// Function to update title
+	updateTitle := func(scanning bool) {
+		devicesMu.Lock()
+		total := len(devices)
+		devicesMu.Unlock()
+
+		title := fmt.Sprintf(" Discovered Devices (%d) ", total)
+		if currentFilter != "" {
+			title = fmt.Sprintf(" Discovered Devices (%d/%d) ", len(filteredIndices), total)
+		}
+		if scanning {
+			title = fmt.Sprintf(" Discovering... (%d found) ", total)
+		}
+		flex.SetTitle(title)
 	}
 
-	list.AddItem("Cancel", "", 'c', nil)
+	// Function to populate list based on filter
+	populateList := func() {
+		devicesMu.Lock()
+		devicesCopy := make([]driver.DiscoveredDevice, len(devices))
+		copy(devicesCopy, devices)
+		devicesMu.Unlock()
 
-	list.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+		list.Clear()
+		filteredIndices = nil
+		filter := strings.ToLower(currentFilter)
+
+		for i, dev := range devicesCopy {
+			ip := dev.IP.String()
+			mainText := fmt.Sprintf("%s - %s", ip, dev.ProductName)
+			secondaryText := fmt.Sprintf("  %s | %s | %s", dev.Vendor, dev.Family, dev.Protocol)
+
+			// Apply filter
+			if filter != "" {
+				searchText := strings.ToLower(mainText + secondaryText)
+				if !strings.Contains(searchText, filter) {
+					continue
+				}
+			}
+
+			filteredIndices = append(filteredIndices, i)
+			list.AddItem(mainText, secondaryText, 0, nil)
+		}
+
+		updateTitle(discoverySession != nil)
+	}
+
+	// Initial population
+	populateList()
+
+	// Filter input change handler
+	filterInput.SetChangedFunc(func(text string) {
+		currentFilter = text
+		populateList()
+	})
+
+	// Close button
+	closeBtn := tview.NewButton("Close")
+	closeBtn.SetBackgroundColor(th.FieldBackground)
+	closeBtn.SetLabelColor(th.ButtonText)
+
+	// Clear cache button
+	clearBtn := tview.NewButton("Clear Cache")
+	clearBtn.SetBackgroundColor(th.FieldBackground)
+	clearBtn.SetLabelColor(th.ButtonText)
+
+	// Stop/cleanup function
+	stopDiscovery := func() {
+		if discoverySession != nil {
+			discoverySession.Stop()
+			discoverySession = nil
+		}
+		statusBar.SetText(" Discovery stopped ")
+	}
+
+	closeBtn.SetSelectedFunc(func() {
+		stopDiscovery()
 		t.app.closeModal(pageName)
-		if index < len(devices) {
-			dev := devices[index]
-			t.showAddDialogWithDevice(&dev)
+	})
+
+	clearBtn.SetSelectedFunc(func() {
+		discoveredDevicesCacheMu.Lock()
+		discoveredDevicesCache = nil
+		discoveredDevicesCacheMu.Unlock()
+
+		devicesMu.Lock()
+		devices = nil
+		devicesMu.Unlock()
+
+		populateList()
+		t.app.setStatus("Discovery cache cleared")
+	})
+
+	// Button container
+	buttonFlex := tview.NewFlex().SetDirection(tview.FlexColumn)
+	buttonFlex.SetBackgroundColor(th.Background)
+	buttonFlex.AddItem(nil, 0, 1, false)
+	buttonFlex.AddItem(clearBtn, 14, 0, false)
+	buttonFlex.AddItem(nil, 2, 0, false)
+	buttonFlex.AddItem(closeBtn, 10, 0, false)
+	buttonFlex.AddItem(nil, 0, 1, false)
+
+	// Help text
+	helpText := tview.NewTextView()
+	helpText.SetText(" [/] Filter  [c] Clear Cache  [Enter] Add  [Esc] Close")
+	helpText.SetTextColor(th.TextDim)
+	helpText.SetBackgroundColor(th.Background)
+	helpText.SetTextAlign(tview.AlignCenter)
+
+	// Build layout
+	flex.AddItem(statusBar, 1, 0, false)
+	flex.AddItem(list, 0, 1, true)
+	flex.AddItem(helpText, 1, 0, false)
+	flex.AddItem(buttonFlex, 1, 0, false)
+
+	// Handle list selection
+	list.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+		if index >= 0 && index < len(filteredIndices) {
+			devicesMu.Lock()
+			originalIndex := filteredIndices[index]
+			if originalIndex < len(devices) {
+				dev := devices[originalIndex]
+				devicesMu.Unlock()
+				stopDiscovery()
+				t.app.closeModal(pageName)
+				t.showAddDialogWithDevice(&dev)
+				return
+			}
+			devicesMu.Unlock()
 		}
 	})
 
+	// Input capture for the list
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			if filterVisible {
+				// Hide filter and clear it
+				filterVisible = false
+				filterInput.SetText("")
+				currentFilter = ""
+				populateList()
+				flex.Clear()
+				flex.AddItem(statusBar, 1, 0, false)
+				flex.AddItem(list, 0, 1, true)
+				flex.AddItem(helpText, 1, 0, false)
+				flex.AddItem(buttonFlex, 1, 0, false)
+				t.app.app.SetFocus(list)
+				return nil
+			}
+			stopDiscovery()
 			t.app.closeModal(pageName)
+			return nil
+		case tcell.KeyTab:
+			t.app.app.SetFocus(clearBtn)
+			return nil
+		case tcell.KeyRune:
+			switch event.Rune() {
+			case '/':
+				if !filterVisible {
+					filterVisible = true
+					// Insert filter at top
+					flex.Clear()
+					flex.AddItem(statusBar, 1, 0, false)
+					flex.AddItem(filterInput, 1, 0, true)
+					flex.AddItem(list, 0, 1, false)
+					flex.AddItem(helpText, 1, 0, false)
+					flex.AddItem(buttonFlex, 1, 0, false)
+					t.app.app.SetFocus(filterInput)
+				}
+				return nil
+			case 'c', 'C':
+				// Clear cache
+				discoveredDevicesCacheMu.Lock()
+				discoveredDevicesCache = nil
+				discoveredDevicesCacheMu.Unlock()
+
+				devicesMu.Lock()
+				devices = nil
+				devicesMu.Unlock()
+
+				populateList()
+				t.app.setStatus("Discovery cache cleared")
+				return nil
+			}
+		}
+		return event
+	})
+
+	// Input capture for the filter
+	filterInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			// Hide filter and clear it
+			filterVisible = false
+			filterInput.SetText("")
+			currentFilter = ""
+			populateList()
+			flex.Clear()
+			flex.AddItem(statusBar, 1, 0, false)
+			flex.AddItem(list, 0, 1, true)
+			flex.AddItem(helpText, 1, 0, false)
+			flex.AddItem(buttonFlex, 1, 0, false)
+			t.app.app.SetFocus(list)
+			return nil
+		case tcell.KeyEnter, tcell.KeyDown:
+			t.app.app.SetFocus(list)
 			return nil
 		}
 		return event
 	})
 
-	t.app.showCenteredModal(pageName, list, 60, 15)
+	// Input capture for buttons
+	buttonInputCapture := func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			stopDiscovery()
+			t.app.closeModal(pageName)
+			return nil
+		case tcell.KeyTab:
+			t.app.app.SetFocus(closeBtn)
+			return nil
+		case tcell.KeyBacktab:
+			t.app.app.SetFocus(list)
+			return nil
+		}
+		return event
+	}
+	clearBtn.SetInputCapture(buttonInputCapture)
+	closeBtn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			stopDiscovery()
+			t.app.closeModal(pageName)
+			return nil
+		case tcell.KeyTab, tcell.KeyBacktab:
+			t.app.app.SetFocus(list)
+			return nil
+		}
+		return event
+	})
+
+	// Show modal
+	t.app.showCenteredModal(pageName, flex, 75, 22)
+
+	// Start discovery in background
+	go func() {
+		// Get local subnets for port scanning
+		subnets := driver.GetLocalSubnets()
+		scanCIDR := ""
+		if len(subnets) > 0 {
+			scanCIDR = subnets[0]
+		}
+
+		// Create new discovery session
+		discoverySession = driver.NewDiscoverySession()
+		deviceChan := discoverySession.Start("255.255.255.255", scanCIDR, 50)
+
+		// Process discovered devices as they come in
+		for dev := range deviceChan {
+			devicesMu.Lock()
+			devices = append(devices, dev)
+			devicesMu.Unlock()
+
+			// Update cache
+			discoveredDevicesCacheMu.Lock()
+			discoveredDevicesCache = append(discoveredDevicesCache, dev)
+			discoveredDevicesCacheMu.Unlock()
+
+			// Update UI
+			t.app.QueueUpdateDraw(func() {
+				populateList()
+			})
+		}
+
+		// Discovery complete
+		t.app.QueueUpdateDraw(func() {
+			devicesMu.Lock()
+			count := len(devices)
+			devicesMu.Unlock()
+
+			statusBar.SetText(fmt.Sprintf(" Discovery complete - %d device(s) found ", count))
+			updateTitle(false)
+			discoverySession = nil
+		})
+	}()
 }
 
 func (t *PLCsTab) showAddDialog() {
