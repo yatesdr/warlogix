@@ -85,9 +85,15 @@ type FINSResponse struct {
 }
 
 // ParseFINSResponse parses a FINS response.
+// Response format (per W227 FINS Commands Reference):
+// - Header (10 bytes): ICF, RSV, GCT, DNA, DA1, DA2, SNA, SA1, SA2, SID
+// - Command (2 bytes): Response command (original command)
+// - End Code (2 bytes): Main code + Sub code (0x0000 = success)
+// - Data (variable): Response data
 func ParseFINSResponse(data []byte) (*FINSResponse, error) {
 	if len(data) < 14 {
-		logging.DebugLog("FINS", "Response too short: %d bytes (need 14 minimum)", len(data))
+		logging.DebugLog("FINS", "Response too short: %d bytes (need 14 minimum for header+cmd+endcode)", len(data))
+		logging.DebugLog("FINS", "Raw response bytes: %X", data)
 		return nil, fmt.Errorf("FINS response too short: %d bytes", len(data))
 	}
 
@@ -97,6 +103,12 @@ func ParseFINSResponse(data []byte) (*FINSResponse, error) {
 		return nil, err
 	}
 
+	// ICF bit 6 should be 1 for response
+	isResponse := (header.ICF & 0x40) != 0
+	logging.DebugLog("FINS", "Header: ICF=0x%02X (isResponse=%v) GCT=%d DNA=%d DA1=%d DA2=%d SNA=%d SA1=%d SA2=%d SID=%d",
+		header.ICF, isResponse, header.GCT, header.DNA, header.DA1, header.DA2,
+		header.SNA, header.SA1, header.SA2, header.SID)
+
 	resp := &FINSResponse{
 		Header:  *header,
 		Command: binary.BigEndian.Uint16(data[10:12]),
@@ -105,9 +117,16 @@ func ParseFINSResponse(data []byte) (*FINSResponse, error) {
 	}
 
 	// Log response details
-	logging.DebugLog("FINS", "Response: cmd=0x%04X endCode=0x%04X dataLen=%d SID=%d (DNA=%d DA1=%d DA2=%d)",
-		resp.Command, resp.EndCode, len(resp.Data), header.SID,
-		header.DNA, header.DA1, header.DA2)
+	mainCode := resp.EndCode >> 8
+	subCode := resp.EndCode & 0xFF
+	logging.DebugLog("FINS", "Response: cmd=0x%04X endCode=0x%04X (main=0x%02X sub=0x%02X) dataLen=%d",
+		resp.Command, resp.EndCode, mainCode, subCode, len(resp.Data))
+
+	if len(resp.Data) > 0 && len(resp.Data) <= 64 {
+		logging.DebugLog("FINS", "Response data: %X", resp.Data)
+	} else if len(resp.Data) > 64 {
+		logging.DebugLog("FINS", "Response data (first 64 bytes): %X...", resp.Data[:64])
+	}
 
 	return resp, nil
 }

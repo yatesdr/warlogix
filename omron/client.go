@@ -338,25 +338,39 @@ func (c *Client) OpenConnection() error {
 }
 
 // tryForwardOpen attempts Forward Open with the specified connection size.
+// Forward Open establishes a CIP connection for connected messaging.
+// Connection path: Port 1 (backplane), Slot 0, to Message Router (class 2, instance 1)
 func (c *Client) tryForwardOpen(connectionSize uint16) error {
+	logging.DebugLog("Omron", "tryForwardOpen: connectionSize=%d", connectionSize)
+
 	// Build Forward Open config
 	cfg := cip.DefaultForwardOpenConfig()
-	cfg.ConnectionPath = []byte{0x01, 0x00, 0x20, 0x02, 0x24, 0x01} // Port 1, slot 0, Message Router
+	// Connection path: Port 1 (0x01), Link 0 (0x00), Class 2 (0x20,0x02), Instance 1 (0x24,0x01)
+	cfg.ConnectionPath = []byte{0x01, 0x00, 0x20, 0x02, 0x24, 0x01}
 	cfg.OTConnectionSize = connectionSize
 	cfg.TOConnectionSize = connectionSize
+
+	logging.DebugLog("Omron", "ForwardOpen config: path=%X OT_Size=%d TO_Size=%d",
+		cfg.ConnectionPath, cfg.OTConnectionSize, cfg.TOConnectionSize)
 
 	// Use standard Forward Open (0x54) for sizes ≤511, Large (0x5B) for >511
 	var reqData []byte
 	var connSerial uint16
 	var err error
 	if connectionSize <= 511 {
+		logging.DebugLog("Omron", "Using standard Forward Open (0x54)")
 		reqData, connSerial, err = cip.BuildForwardOpenRequestSmall(cfg)
 	} else {
+		logging.DebugLog("Omron", "Using Large Forward Open (0x5B)")
 		reqData, connSerial, err = cip.BuildForwardOpenRequest(cfg)
 	}
 	if err != nil {
+		logging.DebugLog("Omron", "Failed to build Forward Open request: %v", err)
 		return fmt.Errorf("build Forward Open: %w", err)
 	}
+
+	logging.DebugLog("Omron", "ForwardOpen request: connSerial=%d reqLen=%d", connSerial, len(reqData))
+	logging.DebugTX("eip", reqData)
 
 	// Send via unconnected messaging
 	cpf := &eip.EipCommonPacket{
@@ -368,38 +382,52 @@ func (c *Client) tryForwardOpen(connectionSize uint16) error {
 
 	resp, err := c.eipClient.SendRRData(*cpf)
 	if err != nil {
+		logging.DebugLog("Omron", "ForwardOpen SendRRData failed: %v", err)
 		return fmt.Errorf("SendRRData failed: %w", err)
 	}
 
 	if len(resp.Items) < 2 {
+		logging.DebugLog("Omron", "ForwardOpen response missing CPF items: got %d", len(resp.Items))
 		return fmt.Errorf("expected 2 CPF items, got %d", len(resp.Items))
 	}
 
 	cipResp := resp.Items[1].Data
+	logging.DebugRX("eip", cipResp)
+
 	if len(cipResp) < 4 {
-		return fmt.Errorf("response too short")
+		logging.DebugLog("Omron", "ForwardOpen CIP response too short: %d bytes", len(cipResp))
+		return fmt.Errorf("response too short: %d bytes", len(cipResp))
 	}
 
 	// Check CIP response status
+	replyService := cipResp[0]
 	status := cipResp[2]
 	addlStatusSize := cipResp[3]
+
+	logging.DebugLog("Omron", "ForwardOpen response: service=0x%02X status=0x%02X addlStatusSize=%d",
+		replyService, status, addlStatusSize)
 
 	if status != 0x00 {
 		extStatus := uint16(0)
 		if addlStatusSize >= 1 && len(cipResp) >= 6 {
 			extStatus = binary.LittleEndian.Uint16(cipResp[4:6])
 		}
-		return fmt.Errorf("Forward Open failed: status=0x%02X, extStatus=0x%04X", status, extStatus)
+		statusMsg := forwardOpenErrorMessage(status, extStatus)
+		logging.DebugLog("Omron", "ForwardOpen failed: status=0x%02X extStatus=0x%04X (%s)",
+			status, extStatus, statusMsg)
+		return fmt.Errorf("Forward Open failed: status=0x%02X, extStatus=0x%04X (%s)", status, extStatus, statusMsg)
 	}
 
 	// Parse Forward Open response
 	dataStart := 4 + int(addlStatusSize)*2
 	if dataStart >= len(cipResp) {
+		logging.DebugLog("Omron", "ForwardOpen response missing connection data")
 		return fmt.Errorf("response missing data")
 	}
 
 	foResp, err := cip.ParseForwardOpenResponse(cipResp[dataStart:])
 	if err != nil {
+		logging.DebugLog("Omron", "Failed to parse ForwardOpen response: %v", err)
 		return err
 	}
 
@@ -413,7 +441,99 @@ func (c *Client) tryForwardOpen(connectionSize uint16) error {
 	}
 	c.connSize = connectionSize
 
+	logging.DebugLog("Omron", "ForwardOpen success: OT_ConnID=0x%08X TO_ConnID=0x%08X",
+		foResp.OTConnectionID, foResp.TOConnectionID)
+
 	return nil
+}
+
+// forwardOpenErrorMessage returns a human-readable message for Forward Open errors.
+func forwardOpenErrorMessage(status byte, extStatus uint16) string {
+	// Common Forward Open extended status codes
+	switch extStatus {
+	case 0x0100:
+		return "connection in use or duplicate Forward Open"
+	case 0x0103:
+		return "transport class and trigger combination not supported"
+	case 0x0106:
+		return "ownership conflict"
+	case 0x0107:
+		return "target connection not found"
+	case 0x0108:
+		return "invalid network connection parameter"
+	case 0x0109:
+		return "invalid connection size"
+	case 0x0110:
+		return "target not configured for RPI"
+	case 0x0111:
+		return "RPI not supported"
+	case 0x0113:
+		return "out of connections"
+	case 0x0114:
+		return "vendor ID or product code mismatch"
+	case 0x0115:
+		return "product type mismatch"
+	case 0x0116:
+		return "revision mismatch"
+	case 0x0117:
+		return "invalid produced or consumed application path"
+	case 0x0118:
+		return "invalid or inconsistent configuration application path"
+	case 0x0119:
+		return "non-listen only connection not opened"
+	case 0x011A:
+		return "target object out of connections"
+	case 0x0203:
+		return "connection timed out"
+	case 0x0204:
+		return "unconnected send timed out"
+	case 0x0205:
+		return "parameter error in unconnected send"
+	case 0x0206:
+		return "message too large for unconnected send"
+	case 0x0301:
+		return "no buffer memory available"
+	case 0x0302:
+		return "network bandwidth not available"
+	case 0x0303:
+		return "no screeners available"
+	case 0x0305:
+		return "signature mismatch"
+	case 0x0311:
+		return "port not available"
+	case 0x0312:
+		return "link address not valid"
+	case 0x0315:
+		return "invalid segment in connection path"
+	case 0x0316:
+		return "error in Forward Close service"
+	case 0x0317:
+		return "scheduling not specified"
+	case 0x0318:
+		return "link address to self not valid"
+	case 0x0319:
+		return "secondary resources not available"
+	case 0x031A:
+		return "rack connection already established"
+	case 0x031B:
+		return "module connection already established"
+	case 0x031C:
+		return "miscellaneous"
+	case 0x031D:
+		return "redundant connection mismatch"
+	case 0x031E:
+		return "no more user-configurable link consumer resources"
+	case 0x0800:
+		return "network link offline"
+	case 0x0810:
+		return "no target application data available"
+	case 0x0811:
+		return "no originator application data available"
+	case 0x0812:
+		return "node address changed since connection established"
+	default:
+		return "unknown error"
+	}
 }
 
 // CloseConnection tears down the CIP connection using Forward Close.
@@ -851,8 +971,13 @@ func (c *Client) readEIP(tagNames []string) ([]*TagValue, error) {
 }
 
 // sendCIPRequest sends a CIP request via EIP.
+// Uses unconnected messaging (SendRRData) for individual requests.
 func (c *Client) sendCIPRequest(req cip.Request) ([]byte, error) {
 	reqData := req.Marshal()
+
+	logging.DebugLog("Omron", "sendCIPRequest: service=0x%02X path=%X dataLen=%d",
+		req.Service, req.Path, len(req.Data))
+	logging.DebugTX("eip", reqData)
 
 	cpf := eip.EipCommonPacket{
 		Items: []eip.EipCommonPacketItem{
@@ -863,14 +988,27 @@ func (c *Client) sendCIPRequest(req cip.Request) ([]byte, error) {
 
 	resp, err := c.eipClient.SendRRData(cpf)
 	if err != nil {
+		logging.DebugLog("Omron", "sendCIPRequest SendRRData error: %v", err)
 		return nil, err
 	}
 
 	if len(resp.Items) < 2 {
-		return nil, fmt.Errorf("invalid CIP response")
+		logging.DebugLog("Omron", "sendCIPRequest: invalid response, expected 2 CPF items, got %d", len(resp.Items))
+		return nil, fmt.Errorf("invalid CIP response: expected 2 CPF items, got %d", len(resp.Items))
 	}
 
-	return resp.Items[1].Data, nil
+	respData := resp.Items[1].Data
+	logging.DebugRX("eip", respData)
+
+	// Log CIP response header if available
+	if len(respData) >= 4 {
+		replyService := respData[0]
+		status := respData[2]
+		logging.DebugLog("Omron", "sendCIPRequest response: service=0x%02X status=0x%02X dataLen=%d",
+			replyService, status, len(respData))
+	}
+
+	return respData, nil
 }
 
 // Write writes a value to an address.

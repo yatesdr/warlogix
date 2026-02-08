@@ -25,7 +25,7 @@ var globalDebugMu sync.RWMutex
 
 // Known protocol names for filtering
 var knownProtocols = []string{
-	"omron", "fins", "fins/tcp", "fins/udp",
+	"omron", "fins", "fins/tcp", "fins/udp", "eip", "eip/discovery", "omron/eip",
 	"ads",
 	"logix",
 	"s7",
@@ -33,7 +33,6 @@ var knownProtocols = []string{
 	"kafka",
 	"valkey",
 	"tui",
-	"eip",
 	"plcman",
 	"tagpack",
 	"debug",
@@ -102,10 +101,17 @@ func (l *DebugLogger) SetFilter(filter string) {
 				l.filters["fins"] = true
 				l.filters["fins/tcp"] = true
 				l.filters["fins/udp"] = true
+				l.filters["eip"] = true
+				l.filters["eip/discovery"] = true
+				l.filters["omron/eip"] = true
 			case "fins":
 				l.filters["fins/tcp"] = true
 				l.filters["fins/udp"] = true
 				l.filters["omron"] = true
+			case "eip":
+				l.filters["eip/discovery"] = true
+				l.filters["omron"] = true
+				l.filters["omron/eip"] = true
 			}
 		}
 	}

@@ -86,6 +86,9 @@ func (t *tcpTransport) connect(address string, port int, network, node, unit, sr
 }
 
 // negotiateNodeAddress performs FINS/TCP node address exchange.
+// Per Omron W421 FINS/TCP specification:
+// - Request: FINS(4) + Length(4) + Command(4) + ErrorCode(4) + ClientNode(4) = 20 bytes
+// - Response: FINS(4) + Length(4) + Command(4) + ErrorCode(4) + ClientNode(4) + ServerNode(4) = 24 bytes
 func (t *tcpTransport) negotiateNodeAddress() error {
 	// Build Node Address Data Send request
 	req := make([]byte, tcpHeaderSize+4)
@@ -105,6 +108,9 @@ func (t *tcpTransport) negotiateNodeAddress() error {
 	// Client node (0 = auto-assign)
 	binary.BigEndian.PutUint32(req[16:20], uint32(t.localNode))
 
+	logging.DebugLog("FINS/TCP", "Node address request: clientNode=%d (0=auto-assign)", t.localNode)
+	logging.DebugTX("FINS/TCP", req)
+
 	// Set deadline
 	if t.timeout > 0 {
 		t.conn.SetDeadline(time.Now().Add(t.timeout))
@@ -112,42 +118,73 @@ func (t *tcpTransport) negotiateNodeAddress() error {
 
 	// Send request
 	if _, err := t.conn.Write(req); err != nil {
+		logging.DebugError("FINS/TCP", "send node address request", err)
 		return fmt.Errorf("failed to send node address request: %w", err)
 	}
 
 	// Read response
 	resp := make([]byte, tcpHeaderSize+8)
 	if _, err := io.ReadFull(t.conn, resp); err != nil {
+		logging.DebugError("FINS/TCP", "read node address response", err)
 		return fmt.Errorf("failed to read node address response: %w", err)
 	}
 
+	logging.DebugRX("FINS/TCP", resp)
+
 	// Verify magic
 	if string(resp[0:4]) != finsTCPMagic {
-		return fmt.Errorf("invalid FINS response magic")
+		logging.DebugLog("FINS/TCP", "Invalid magic: got %q, expected %q", string(resp[0:4]), finsTCPMagic)
+		return fmt.Errorf("invalid FINS response magic: got %q", string(resp[0:4]))
 	}
+
+	// Check length field
+	respLen := binary.BigEndian.Uint32(resp[4:8])
+	logging.DebugLog("FINS/TCP", "Response length field: %d (expected 12 for node address response)", respLen)
 
 	// Check command
 	cmd := binary.BigEndian.Uint32(resp[8:12])
+	logging.DebugLog("FINS/TCP", "Response command: 0x%08X (expected 0x%08X for node address response)", cmd, cmdNodeAddressResponse)
 	if cmd != cmdNodeAddressResponse {
-		return fmt.Errorf("unexpected command: 0x%08X", cmd)
+		return fmt.Errorf("unexpected command: 0x%08X (expected 0x%08X)", cmd, cmdNodeAddressResponse)
 	}
 
 	// Check error code
 	errCode := binary.BigEndian.Uint32(resp[12:16])
 	if errCode != 0 {
-		return fmt.Errorf("node address error: 0x%08X", errCode)
+		logging.DebugLog("FINS/TCP", "Node address error code: 0x%08X", errCode)
+		errMsg := finsNodeAddressErrorMsg(errCode)
+		return fmt.Errorf("node address error: 0x%08X (%s)", errCode, errMsg)
 	}
 
 	// Extract assigned addresses
 	t.localNode = byte(binary.BigEndian.Uint32(resp[16:20]))
 	t.serverNode = byte(binary.BigEndian.Uint32(resp[20:24]))
 
+	logging.DebugLog("FINS/TCP", "Node address negotiation success: localNode=%d (assigned), serverNode=%d", t.localNode, t.serverNode)
+
 	// Use server node as destination if not explicitly set
 	if t.plcNode == 0 {
 		t.plcNode = t.serverNode
+		logging.DebugLog("FINS/TCP", "Using serverNode %d as destination (plcNode was 0)", t.plcNode)
 	}
 
 	return nil
+}
+
+// finsNodeAddressErrorMsg returns a human-readable message for FINS/TCP node address error codes.
+func finsNodeAddressErrorMsg(errCode uint32) string {
+	switch errCode {
+	case 0x00000000:
+		return "normal"
+	case 0x00000001:
+		return "client node address already used"
+	case 0x00000002:
+		return "client node address out of range"
+	case 0x00000003:
+		return "server node address already used"
+	default:
+		return "unknown error"
+	}
 }
 
 // close closes the TCP connection.
@@ -186,6 +223,10 @@ func (t *tcpTransport) nextSID() byte {
 }
 
 // sendCommand sends a FINS command and returns the response.
+// FINS frame format (per W227 FINS Commands Reference):
+// - Header (10 bytes): ICF, RSV, GCT, DNA, DA1, DA2, SNA, SA1, SA2, SID
+// - Command (2 bytes): Command code (e.g., 0x0101 for Memory Read)
+// - Data (variable): Command-specific data
 func (t *tcpTransport) sendCommand(command uint16, data []byte) ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -195,19 +236,26 @@ func (t *tcpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 		return nil, fmt.Errorf("not connected")
 	}
 
+	sid := t.nextSID()
+
 	// Build FINS frame
+	// ICF bits: 7=Gateway(0=use), 6=Type(0=cmd,1=resp), 5=RespReq(0=no,1=yes), 4-0=Reserved
+	// ICF=0x80 means: use gateway, command, response required
 	header := FINSHeader{
-		ICF: 0x80,
-		RSV: 0x00,
-		GCT: 0x02,
+		ICF: 0x80, // Command, response required
+		RSV: 0x00, // Reserved
+		GCT: 0x02, // Gateway count (max 2 hops)
 		DNA: t.network,
 		DA1: t.plcNode,
 		DA2: t.unit,
 		SNA: t.network,
 		SA1: t.localNode,
 		SA2: 0x00,
-		SID: t.nextSID(),
+		SID: sid,
 	}
+
+	logging.DebugLog("FINS/TCP", "Command 0x%04X: SID=%d DNA=%d DA1=%d DA2=%d SNA=%d SA1=%d dataLen=%d",
+		command, sid, t.network, t.plcNode, t.unit, t.network, t.localNode, len(data))
 
 	finsFrame := FINSFrame{
 		Header:  header,

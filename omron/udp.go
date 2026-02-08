@@ -140,6 +140,7 @@ func (t *udpTransport) nextSID() byte {
 }
 
 // sendCommand sends a FINS command and returns the response.
+// FINS/UDP frame format: Just the FINS frame (no TCP wrapper)
 func (t *udpTransport) sendCommand(command uint16, data []byte) ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -149,7 +150,10 @@ func (t *udpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 		return nil, fmt.Errorf("not connected")
 	}
 
+	sid := t.nextSID()
+
 	// Build FINS frame
+	// ICF=0x80: use gateway, command, response required
 	header := FINSHeader{
 		ICF: 0x80, // Command, response required
 		RSV: 0x00,
@@ -160,8 +164,11 @@ func (t *udpTransport) sendCommand(command uint16, data []byte) ([]byte, error) 
 		SNA: t.network,
 		SA1: t.localNode,
 		SA2: 0x00,
-		SID: t.nextSID(),
+		SID: sid,
 	}
+
+	logging.DebugLog("FINS/UDP", "Command 0x%04X: SID=%d DNA=%d DA1=%d DA2=%d SNA=%d SA1=%d dataLen=%d",
+		command, sid, t.network, t.plcNode, t.unit, t.network, t.localNode, len(data))
 
 	frame := FINSFrame{
 		Header:  header,
