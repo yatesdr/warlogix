@@ -6,60 +6,37 @@ A TUI (Text User Interface) gateway for industrial PLCs. Connect to Allen-Bradle
 
 <img width="837" height="537" alt="image" src="https://github.com/user-attachments/assets/9a1794ae-725d-468d-820b-b80e96c09888" />
 
-
 ## Why WarLogix?
 
 **WAR** stands for *"Whispers Across Realms"* - bridging the gap between industrial automation and modern IT infrastructure.
 
 Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwhile, your data platforms expect REST, MQTT, Kafka, and Redis. WarLogix translates between these worlds, letting you stream PLC data to dashboards, databases, and analytics pipelines without writing custom integration code.
 
-**Use cases:**
-- Real-time production monitoring and OEE dashboards
-- Historical data collection for analytics and ML
-- Event-driven alerts and notifications
-- Bidirectional control from IT systems to PLCs
-- Multi-vendor PLC consolidation into unified data streams
-
 No expensive middleware. No vendor lock-in. Just a single binary that runs anywhere.
 
-## Features
+## Documentation
 
-- **Multi-PLC Support** - Connect to multiple PLCs from different vendors simultaneously
-- **Tag Browser** - Browse and select tags with real-time value updates
-- **UDT Support** - Automatic structure unpacking with change detection filtering
-- **Health Monitoring** - Periodic health publishing (REST, MQTT, Valkey, Kafka)
-- **REST API** - HTTP endpoints for tag values and writes
-- **MQTT** - Publish tags with optional write-back
-- **Valkey/Redis** - Key storage with Pub/Sub and write-back queue
-- **Kafka** - Tag changes and event triggers
-- **TagPacks** - Group tags from multiple PLCs for atomic publishing
-- **Daemon Mode** - Background service with SSH access
-- **High Performance** - Batched reads, optimized publishing, 100K+ messages/sec
+### Getting Started
+- [User Interface Guide](docs/ui-tabs.md) - TUI tabs and keyboard shortcuts
+- [Configuration Reference](docs/configuration.md) - Config file format and options
+- [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
 
-## Performance
+### Services
+- [REST API](docs/rest-api.md) - HTTP endpoints for tag values and writes
+- [MQTT](docs/mqtt.md) - Topics, QoS settings, and write-back
+- [Valkey/Redis](docs/valkey.md) - Keys, Pub/Sub, and write-back queue
+- [Kafka](docs/kafka.md) - Topics, authentication, and batching
 
-WarLogix is designed for high-throughput industrial data streaming. Optimizations include batched PLC reads, change filtering, and efficient broker publishing.
+### Advanced Features
+- [Triggers](docs/triggers.md) - Event-driven data capture to MQTT and Kafka
+- [TagPacks](docs/tagpacks.md) - Aggregate tags for atomic publishing
+- [Multi-Instance Deployment](docs/multi-instance.md) - Namespace isolation for multiple sites
+- [Data Types](docs/data-types.md) - Types, byte order, and UDT support
+- [Performance Guide](docs/performance.md) - Optimization and benchmarking
 
-### Republishing Throughput
-
-Tested with 50 PLCs × 100 tags (5,000 total tags) on localhost:
-
-| Broker | Confirmed Delivery | Implementation |
-|--------|-------------------|----------------|
-| Kafka | 290,000+ msg/s | Batched async |
-| Valkey | 45,000+ msg/s | Synchronous |
-| MQTT | 32,000+ msg/s | Synchronous QoS 1 |
-
-### PLC Read Performance
-
-| PLC Family | Batching | Typical Throughput |
-|------------|----------|-------------------|
-| Allen-Bradley Logix | Yes (scalars) | 500-2,000 tags/sec |
-| Siemens S7 | Yes (aggressive) | 300-1,500 tags/sec |
-| Beckhoff ADS | Yes (SumUp Read) | 1,000-5,000 tags/sec |
-| Omron FINS | No | 50-200 tags/sec |
-
-Run `warlogix --stress-test-republishing` to benchmark your system. See [Performance Guide](docs/performance.md) for optimization tips.
+### Reference
+- [Safety and Intended Use](docs/safety-and-intended-use.md) - **Important limitations and proper use of write-back**
+- [Developer Guide](docs/developer.md) - Using drivers in your own Go applications
 
 ## Quick Start
 
@@ -67,11 +44,7 @@ Run `warlogix --stress-test-republishing` to benchmark your system. See [Perform
 
 Pre-built binaries are available on the [Releases](https://github.com/yatesdr/warlogix/releases) page for Linux, macOS, and Windows.
 
-> **Note:** This project is under active development. It's recommended to use released versions rather than building from source. Check back frequently for updates and new features.
-
 ### Build from Source (Optional)
-
-If you prefer to build from source:
 
 ```bash
 git clone https://github.com/yatesdr/warlogix.git
@@ -95,6 +68,23 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 - `?` - Help
 - `Q` - Quit
 
+Press `d` to discover PLCs on your network, or `a` to add manually.
+
+## Features
+
+- **Multi-PLC Support** - Connect to multiple PLCs from different vendors simultaneously
+- **Tag Browser** - Browse and select tags with real-time value updates
+- **UDT Support** - Automatic structure unpacking with change detection filtering
+- **Health Monitoring** - Periodic health publishing (REST, MQTT, Valkey, Kafka)
+- **REST API** - HTTP endpoints for tag values and writes
+- **MQTT** - Publish tags with optional write-back
+- **Valkey/Redis** - Key storage with Pub/Sub and write-back queue
+- **Kafka** - High-throughput tag changes and event triggers
+- **TagPacks** - Group tags within a single PLC or across multiple PLCs for atomic publishing, useful for aggregating related data for upstream IT processes
+- **Triggers** - Event-driven data capture with MQTT (QoS 2) and Kafka publishing
+- **Daemon Mode** - Background service with SSH access
+- **High Performance** - Batched reads, optimized publishing, 100K+ messages/sec
+
 ## Supported PLCs
 
 | Family | Models | Tag Discovery | Support Level |
@@ -104,15 +94,36 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 | Beckhoff | TwinCAT 2/3 | Automatic | Moderately tested |
 | Omron | CJ/CS/CP/NJ/NX Series | Manual | Experimental |
 
-**Note:** Allen-Bradley Logix has the most complete support. Siemens and Beckhoff are functional but less tested. Omron FINS support is experimental and may have bugs.
+## Performance
 
-Press `d` to discover PLCs on your network, or `a` to add manually.
+WarLogix is designed for high-throughput industrial data streaming with batched PLC reads, change filtering, and efficient broker publishing.
+
+### Republishing Throughput
+
+Simulated publishing test with 50 PLCs × 100 tags (5,000 total tags) on localhost:
+
+| Broker | Confirmed Delivery | Implementation |
+|--------|-------------------|----------------|
+| Kafka | 290,000+ msg/s | Batched async |
+| Valkey | 45,000+ msg/s | Synchronous |
+| MQTT | 32,000+ msg/s | Synchronous QoS 1 |
+
+### PLC Read Performance
+
+| PLC Family | Batching | Typical Throughput |
+|------------|----------|-------------------|
+| Allen-Bradley Logix | Yes (scalars) | 500-2,000 tags/sec |
+| Siemens S7 | Yes (aggressive) | 300-1,500 tags/sec |
+| Beckhoff ADS | Yes (SumUp Read) | 1,000-5,000 tags/sec |
+| Omron FINS | No | 50-200 tags/sec |
+
+Run `warlogix --stress-test-republishing` to benchmark your system.
 
 ## Keyboard Shortcuts
 
 | Tab | Key | Action |
 |-----|-----|--------|
-| Global | `P/B/T/G/E/M/V/K/D` | Jump to tab (PLCs/Browser/TagPacks/triGgers/rEst/Mqtt/Valkey/Kafka/Debug) |
+| Global | `P/B/T/G/E/M/V/K/D` | Jump to tab |
 | Global | `Shift+Tab` | Cycle tabs |
 | Global | `N` | Configure namespace |
 | Global | `F6` | Cycle themes |
@@ -120,19 +131,12 @@ Press `d` to discover PLCs on your network, or `a` to add manually.
 | Global | `Q` | Quit |
 | PLCs | `d/a/e/x` | Discover/Add/Edit/Remove |
 | PLCs | `c/C/i` | Connect/Disconnect/Info |
-| Browser | `/` | Filter tags |
-| Browser | `Space` | Toggle publish |
-| Browser | `w` | Toggle writable |
-| Browser | `i` | Toggle ignore (UDT members) |
-| Browser | `p` | Focus PLC dropdown |
-| Browser | `c` | Clear filter |
-| Browser | `d` | Show tag details |
-| Browser | `a/e/x` | Add/Edit/Delete manual tags (S7/Omron) |
-| TagPacks | `a/x` | Add pack or tag / Remove (context-sensitive) |
-| TagPacks | `Space/i/e` | Enable/Ignore/Edit |
-| MQTT/Valkey/Kafka | `a/e/x/c/C` | Add/Edit/Remove/Connect/Disconnect |
-| Triggers | `a/x` | Add/Remove (context-sensitive: trigger or tag) |
-| Triggers | `e/s/S/T` | Edit/Start/Stop/Test fire |
+| Browser | `Space/w/i` | Toggle publish/writable/ignore |
+| Browser | `/` then `c` | Filter / Clear filter |
+| TagPacks | `a/x` | Add/Remove (context-sensitive) |
+| Triggers | `a/x/e` | Add/Remove/Edit (context-sensitive) |
+| Triggers | `s/S/T` | Start/Stop/Test fire |
+| Services | `a/e/x/c/C` | Add/Edit/Remove/Connect/Disconnect |
 
 ## Command Line Options
 
@@ -156,23 +160,6 @@ Run as a background service with SSH access:
 ./warlogix -d -p 2222 --ssh-password "secret"
 ssh -p 2222 localhost
 ```
-
-## Documentation
-
-- [Safety and Intended Use](docs/safety-and-intended-use.md) - **Important limitations and proper use of write-back**
-- [User Interface Guide](docs/ui-tabs.md) - TUI tabs and keyboard shortcuts
-- [Configuration Reference](docs/configuration.md) - Config file format and options
-- [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
-- [Multi-Instance Deployment](docs/multi-instance.md) - Namespace isolation for multiple sites
-- [Performance Guide](docs/performance.md) - Optimization and benchmarking
-- [REST API](docs/rest-api.md) - HTTP endpoints
-- [MQTT](docs/mqtt.md) - Topics and write-back
-- [Valkey/Redis](docs/valkey.md) - Keys, Pub/Sub, write-back queue
-- [Kafka](docs/kafka.md) - Topics and authentication
-- [Triggers](docs/triggers.md) - Event-driven data capture
-- [TagPacks](docs/tagpacks.md) - Cross-PLC atomic publishing
-- [Data Types](docs/data-types.md) - Types, byte order, UDT support
-- [Developer Guide](docs/developer.md) - Using drivers in your own Go applications
 
 ## Warnings
 
