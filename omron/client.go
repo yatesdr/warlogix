@@ -1179,7 +1179,7 @@ func (c *Client) readFINSWithTypesBatched(requests []TagRequest) ([]*TagValue, e
 		return nil, err
 	}
 
-	// Apply type hints to results
+	// Apply type hints to results, preserving array flag
 	for i, req := range requests {
 		if results[i] == nil || results[i].Error != nil {
 			continue
@@ -1187,6 +1187,10 @@ func (c *Client) readFINSWithTypesBatched(requests []TagRequest) ([]*TagValue, e
 
 		if req.TypeHint != "" {
 			if tc, ok := TypeCodeFromName(req.TypeHint); ok {
+				// Preserve array flag from the original DataType
+				if IsArray(results[i].DataType) {
+					tc = MakeArrayType(tc)
+				}
 				results[i].DataType = tc
 			}
 		}
