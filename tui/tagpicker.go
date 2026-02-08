@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -15,33 +14,69 @@ type PLCTag struct {
 	Tag string
 }
 
-// ShowTagPicker displays a modal to select a tag from any PLC.
-// Shows all discovered top-level tags (strike-through if not enabled) plus
-// any enabled UDT members from the config.
-// excludeTags is a list of "PLC:Tag" strings to exclude from the list.
-// onSelect is called with the selected PLC and tag name.
-func (a *App) ShowTagPicker(title string, excludeTags []PLCTag, onSelect func(plc, tag string)) {
+// TagPickerOptions configures the tag picker behavior.
+type TagPickerOptions struct {
+	Title        string            // Dialog title
+	ExcludeTags  []PLCTag          // Tags to exclude from the list
+	ExcludePacks []string          // Pack names to exclude
+	IncludePacks bool              // If true, include TagPacks in the list
+	PLCFilter    string            // If set, only show tags from this PLC
+	OnSelectTag  func(plc, tag string) // Called when a tag is selected
+	OnSelectPack func(packName string) // Called when a pack is selected (if IncludePacks)
+}
+
+// pickerEntry represents an item in the tag picker.
+type pickerEntry struct {
+	isPack   bool
+	plc      string // empty for packs
+	tag      string // pack name if isPack
+	display  string // formatted display text
+	enabled  bool   // true if enabled/active
+	isUDT    bool
+	udtDepth int
+}
+
+// ShowTagPickerWithOptions displays a modal to select a tag or pack.
+// Uses a Table for proper strikethrough rendering.
+func (a *App) ShowTagPickerWithOptions(opts TagPickerOptions) {
 	const pageName = "tag-picker"
 
-	// Build exclusion set
-	excluded := make(map[string]bool)
-	for _, et := range excludeTags {
-		excluded[et.PLC+":"+et.Tag] = true
+	// Build exclusion sets
+	excludedTags := make(map[string]bool)
+	for _, et := range opts.ExcludeTags {
+		excludedTags[et.PLC+":"+et.Tag] = true
+	}
+	excludedPacks := make(map[string]bool)
+	for _, p := range opts.ExcludePacks {
+		excludedPacks[p] = true
 	}
 
-	// Build list of tags from all PLCs
-	type tagEntry struct {
-		plc      string
-		tag      string
-		display  string
-		enabled  bool // true if enabled in Browser for polling
-		isUDT    bool // true if tag is a UDT member (has dots in name)
-		udtDepth int  // nesting depth (number of dots)
-	}
-	var allTags []tagEntry
+	// Build list of entries
+	var allEntries []pickerEntry
 
+	// Add packs first if requested
+	if opts.IncludePacks {
+		for _, pack := range a.config.TagPacks {
+			if excludedPacks[pack.Name] {
+				continue
+			}
+			allEntries = append(allEntries, pickerEntry{
+				isPack:  true,
+				tag:     pack.Name,
+				display: pack.Name + " (TagPack)",
+				enabled: pack.Enabled,
+			})
+		}
+	}
+
+	// Add tags from PLCs
 	plcs := a.manager.ListPLCs()
 	for _, plc := range plcs {
+		// Filter by PLC if specified
+		if opts.PLCFilter != "" && plc.Config.Name != opts.PLCFilter {
+			continue
+		}
+
 		// Build set of enabled tags for this PLC
 		enabledTags := make(map[string]bool)
 		for _, sel := range plc.Config.Tags {
@@ -53,45 +88,49 @@ func (a *App) ShowTagPicker(title string, excludeTags []PLCTag, onSelect func(pl
 		// Track which tags we've added to avoid duplicates
 		added := make(map[string]bool)
 
-		// Add all discovered top-level tags (for PLCs that support discovery)
+		// Add all discovered top-level tags
 		tags := plc.GetTags()
 		for _, tag := range tags {
 			key := plc.Config.Name + ":" + tag.Name
-			if excluded[key] {
+			if excludedTags[key] {
 				continue
 			}
 			added[tag.Name] = true
 
-			allTags = append(allTags, tagEntry{
-				plc:      plc.Config.Name,
-				tag:      tag.Name,
-				display:  fmt.Sprintf("%s:%s", plc.Config.Name, tag.Name),
-				enabled:  enabledTags[tag.Name],
-				isUDT:    false,
-				udtDepth: 0,
+			display := tag.Name
+			if opts.PLCFilter == "" {
+				display = plc.Config.Name + ":" + tag.Name
+			}
+
+			allEntries = append(allEntries, pickerEntry{
+				plc:     plc.Config.Name,
+				tag:     tag.Name,
+				display: display,
+				enabled: enabledTags[tag.Name],
 			})
 		}
 
 		// Add config-defined tags not already added from discovery
-		// This includes: manual PLC tags, UDT members, and any tags defined before connection
 		for _, sel := range plc.Config.Tags {
-			// Skip if already added from discovery
 			if added[sel.Name] {
 				continue
 			}
 			key := plc.Config.Name + ":" + sel.Name
-			if excluded[key] {
+			if excludedTags[key] {
 				continue
 			}
 			added[sel.Name] = true
 
-			// Detect UDT members by presence of dots in tag name
 			dotCount := strings.Count(sel.Name, ".")
+			display := sel.Name
+			if opts.PLCFilter == "" {
+				display = plc.Config.Name + ":" + sel.Name
+			}
 
-			allTags = append(allTags, tagEntry{
+			allEntries = append(allEntries, pickerEntry{
 				plc:      plc.Config.Name,
 				tag:      sel.Name,
-				display:  fmt.Sprintf("%s:%s", plc.Config.Name, sel.Name),
+				display:  display,
 				enabled:  sel.Enabled,
 				isUDT:    dotCount > 0,
 				udtDepth: dotCount,
@@ -99,13 +138,16 @@ func (a *App) ShowTagPicker(title string, excludeTags []PLCTag, onSelect func(pl
 		}
 	}
 
-	// Sort by display name
-	sort.Slice(allTags, func(i, j int) bool {
-		return allTags[i].display < allTags[j].display
+	// Sort entries: packs first, then tags by display name
+	sort.Slice(allEntries, func(i, j int) bool {
+		if allEntries[i].isPack != allEntries[j].isPack {
+			return allEntries[i].isPack // packs first
+		}
+		return allEntries[i].display < allEntries[j].display
 	})
 
-	if len(allTags) == 0 {
-		a.showError("No Tags", "No tags available. Connect to a PLC first.")
+	if len(allEntries) == 0 {
+		a.showError("No Items", "No tags available. Connect to a PLC first.")
 		return
 	}
 
@@ -115,101 +157,110 @@ func (a *App) ShowTagPicker(title string, excludeTags []PLCTag, onSelect func(pl
 		SetFieldWidth(40)
 	ApplyInputFieldTheme(filter)
 
-	// Create list
-	list := tview.NewList().
-		SetHighlightFullLine(true)
-	ApplyListTheme(list)
+	// Create table for items (better strikethrough support than List)
+	table := tview.NewTable().
+		SetBorders(false).
+		SetSelectable(true, false)
+	ApplyTableTheme(table)
 
-	// Populate list function
-	// Filter logic: if filter contains ":", split into PLC filter (left) and tag filter (right)
-	// Both parts are matched independently: "logix:data" matches PLC containing "logix" AND tag containing "data"
-	populateList := func(filterText string) {
-		list.Clear()
+	// Track filtered entries for selection callback
+	var filteredEntries []pickerEntry
+
+	// Populate table function
+	populateTable := func(filterText string) {
+		table.Clear()
+		filteredEntries = nil
 		filterLower := strings.ToLower(filterText)
 
-		var plcFilter, tagFilter string
-		if idx := strings.Index(filterLower, ":"); idx != -1 {
-			plcFilter = strings.TrimSpace(filterLower[:idx])
-			tagFilter = strings.TrimSpace(filterLower[idx+1:])
-		} else {
-			// No colon - match either PLC or tag name
-			plcFilter = filterLower
-			tagFilter = filterLower
+		row := 0
+		for _, entry := range allEntries {
+			// Filter matching
+			displayLower := strings.ToLower(entry.display)
+			packMatch := entry.isPack && strings.Contains("pack", filterLower)
+			if filterText != "" && !strings.Contains(displayLower, filterLower) && !packMatch {
+				continue
+			}
+
+			filteredEntries = append(filteredEntries, entry)
+
+			// Build display text
+			displayText := entry.display
+
+			// Add UDT indicator
+			if entry.isUDT {
+				prefix := strings.Repeat("⊳", entry.udtDepth) + " "
+				displayText = prefix + entry.display
+			}
+
+			cell := tview.NewTableCell(displayText).
+				SetExpansion(1).
+				SetReference(&filteredEntries[len(filteredEntries)-1])
+
+			// Use strikethrough + dim color for disabled items (dim for terminals without strikethrough)
+			if !entry.enabled {
+				cell.SetTextColor(CurrentTheme.TextDim).SetAttributes(tcell.AttrStrikeThrough)
+			} else if entry.isUDT {
+				cell.SetTextColor(CurrentTheme.TextDim)
+			}
+
+			table.SetCell(row, 0, cell)
+			row++
 		}
 
-		for _, entry := range allTags {
-			plcLower := strings.ToLower(entry.plc)
-			tagLower := strings.ToLower(entry.tag)
-
-			var match bool
-			if strings.Contains(filterText, ":") {
-				// Both PLC and tag must match their respective filters
-				plcMatch := plcFilter == "" || strings.Contains(plcLower, plcFilter)
-				tagMatch := tagFilter == "" || strings.Contains(tagLower, tagFilter)
-				match = plcMatch && tagMatch
-			} else {
-				// No colon - match if filter appears in either PLC or tag
-				match = filterText == "" ||
-					strings.Contains(plcLower, filterLower) ||
-					strings.Contains(tagLower, filterLower)
-			}
-
-			if match {
-				plcName := entry.plc
-				tagName := entry.tag
-				displayText := entry.display
-
-				// Add UDT member indicator with depth visualization
-				if entry.isUDT {
-					// Show nesting depth: ⊳ for depth 1, ⊳⊳ for depth 2, etc.
-					prefix := strings.Repeat("⊳", entry.udtDepth) + " "
-					displayText = "[::d]" + prefix + "[::-]" + entry.display
-				}
-
-				// Strike-through for tags not enabled in Browser
-				if !entry.enabled {
-					displayText = "[::s]" + displayText + "[::-]"
-				}
-
-				list.AddItem(displayText, "", 0, func() {
-					a.closeModal(pageName)
-					onSelect(plcName, tagName)
-				})
-			}
+		if row > 0 {
+			table.Select(0, 0)
 		}
 	}
-	populateList("")
+	populateTable("")
+
+	// Handle selection
+	selectCurrent := func() {
+		row, _ := table.GetSelection()
+		if row < 0 || row >= len(filteredEntries) {
+			return
+		}
+		entry := filteredEntries[row]
+		a.closeModal(pageName)
+		if entry.isPack && opts.OnSelectPack != nil {
+			opts.OnSelectPack(entry.tag)
+		} else if !entry.isPack && opts.OnSelectTag != nil {
+			opts.OnSelectTag(entry.plc, entry.tag)
+		}
+	}
 
 	filter.SetChangedFunc(func(text string) {
-		populateList(text)
+		populateTable(text)
 	})
 
 	filter.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyDown, tcell.KeyTab:
-			a.app.SetFocus(list)
+			a.app.SetFocus(table)
 			return nil
 		case tcell.KeyEscape:
 			a.closeModal(pageName)
 			return nil
 		case tcell.KeyEnter:
-			// Select first item if any
-			if list.GetItemCount() > 0 {
-				list.SetCurrentItem(0)
-				a.app.SetFocus(list)
+			if table.GetRowCount() > 0 {
+				table.Select(0, 0)
+				a.app.SetFocus(table)
 			}
 			return nil
 		}
 		return event
 	})
 
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
 			a.closeModal(pageName)
 			return nil
+		case tcell.KeyEnter:
+			selectCurrent()
+			return nil
 		case tcell.KeyUp:
-			if list.GetCurrentItem() == 0 {
+			row, _ := table.GetSelection()
+			if row == 0 {
 				a.app.SetFocus(filter)
 				return nil
 			}
@@ -221,14 +272,44 @@ func (a *App) ShowTagPicker(title string, excludeTags []PLCTag, onSelect func(pl
 		return event
 	})
 
+	table.SetSelectedFunc(func(row, col int) {
+		selectCurrent()
+	})
+
 	// Layout
 	content := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(filter, 1, 0, true).
-		AddItem(list, 0, 1, false)
-	content.SetBorder(true).SetTitle(" " + title + " (/ to filter, Enter to select) ")
+		AddItem(table, 0, 1, false)
+	content.SetBorder(true).SetTitle(" " + opts.Title + " (/ to filter, Enter to select) ")
 	content.SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
 
 	a.showCenteredModal(pageName, content, 70, 20)
 	a.app.SetFocus(filter)
 }
+
+// ShowTagPicker displays a modal to select a tag from any PLC.
+// This is a convenience wrapper around ShowTagPickerWithOptions for backwards compatibility.
+func (a *App) ShowTagPicker(title string, excludeTags []PLCTag, onSelect func(plc, tag string)) {
+	a.ShowTagPickerWithOptions(TagPickerOptions{
+		Title:       title,
+		ExcludeTags: excludeTags,
+		OnSelectTag: onSelect,
+	})
+}
+
+// GetEnabledTags returns the list of tag names enabled for republishing on a PLC.
+func (a *App) GetEnabledTags(plcName string) []string {
+	plcCfg := a.config.FindPLC(plcName)
+	if plcCfg == nil {
+		return nil
+	}
+	var tags []string
+	for _, tag := range plcCfg.Tags {
+		if tag.Enabled {
+			tags = append(tags, tag.Name)
+		}
+	}
+	return tags
+}
+

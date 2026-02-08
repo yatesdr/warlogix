@@ -6,6 +6,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+
+	"warlogix/config"
 )
 
 // Theme defines the complete color scheme for the UI.
@@ -67,6 +69,12 @@ func colorToTag(c tcell.Color) string {
 	// For named colors, use the hex value for consistency
 	r, g, b := c.RGB()
 	return fmt.Sprintf("[#%02X%02X%02X]", r, g, b)
+}
+
+// colorToHex converts a tcell.Color to a hex string (without brackets).
+func colorToHex(c tcell.Color) string {
+	r, g, b := c.RGB()
+	return fmt.Sprintf("#%02X%02X%02X", r, g, b)
 }
 
 // NewTheme creates a theme with computed tag strings from the provided colors.
@@ -703,6 +711,41 @@ var (
 	StatusIndicatorError        = CurrentTheme.StatusError
 )
 
+// TagDisplayInfo contains display information for a tag.
+type TagDisplayInfo struct {
+	IsEnabled bool   // Whether the tag is enabled/monitored in Browser
+	Alias     string // Tag alias if set
+}
+
+// FormatTagDisplay checks if a tag is enabled in Browser and returns its info.
+// If plcTags is nil, assumes the tag is not enabled.
+func FormatTagDisplay(tagName string, plcTags []config.TagSelection) TagDisplayInfo {
+	info := TagDisplayInfo{
+		IsEnabled: false,
+		Alias:     "",
+	}
+
+	// Look up the tag in the PLC's tag selections
+	if plcTags != nil {
+		for _, sel := range plcTags {
+			if sel.Name == tagName {
+				info.IsEnabled = sel.Enabled
+				info.Alias = sel.Alias
+				break
+			}
+		}
+	}
+
+	return info
+}
+
+// Fixed indicator colors (theme-independent)
+var (
+	IndicatorGreen = tcell.ColorGreen
+	IndicatorRed   = tcell.ColorRed
+	IndicatorGray  = tcell.ColorGray
+)
+
 // Box drawing characters
 const (
 	BoxHorizontal = "─"
@@ -809,7 +852,7 @@ const helpTextBase = `
    e            Edit selected trigger
    s            Start trigger
    S            Stop trigger
-   T            Test fire trigger
+   F            Fire trigger (test)
 
  Application
    N            Configure namespace

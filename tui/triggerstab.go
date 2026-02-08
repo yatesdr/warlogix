@@ -134,7 +134,7 @@ func (t *TriggersTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'S':
 		t.stopSelected()
 		return nil
-	case 'T':
+	case 'F':
 		t.testSelected()
 		return nil
 	}
@@ -177,15 +177,38 @@ func (t *TriggersTab) updateDataTagsList() {
 		return
 	}
 
+	// Get PLC config for tag lookup
+	var plcTags []config.TagSelection
+	if plcCfg := t.app.config.FindPLC(cfg.PLC); plcCfg != nil {
+		plcTags = plcCfg.Tags
+	}
+
 	th := CurrentTheme
 	for i, tag := range cfg.Tags {
-		displayName := tag
+		var displayName string
+		var isEnabled bool
+
 		// Check if it's a pack reference
 		if strings.HasPrefix(tag, "pack:") {
 			packName := strings.TrimPrefix(tag, "pack:")
-			displayName = th.TagAccent + "[pack] " + th.TagReset + packName
+			if packCfg := t.app.config.FindTagPack(packName); packCfg != nil {
+				isEnabled = packCfg.Enabled
+			}
+			displayName = packName + " (TagPack)"
+		} else {
+			// It's a tag - use shared helper
+			tagInfo := FormatTagDisplay(tag, plcTags)
+			isEnabled = tagInfo.IsEnabled
+			displayName = tag
+			if tagInfo.Alias != "" {
+				displayName = tagInfo.Alias + " (" + tag + ")"
+			}
 		}
+
 		cell := tview.NewTableCell(displayName).SetExpansion(1)
+		if !isEnabled {
+			cell.SetTextColor(th.TextDim).SetAttributes(tcell.AttrStrikeThrough)
+		}
 		t.dataTable.SetCell(i, 0, cell)
 	}
 
@@ -259,17 +282,19 @@ func (t *TriggersTab) Refresh() {
 		// Get runtime status
 		status, _, count, _ := t.app.triggerMgr.GetTriggerStatus(cfg.Name)
 
-		// Status indicator (themed)
-		indicator := CurrentTheme.StatusDisconnected
+		// Status indicator - use fixed colors (theme-independent)
+		indicatorCell := tview.NewTableCell("●").SetExpansion(0)
 		switch status {
 		case trigger.StatusArmed:
-			indicator = CurrentTheme.StatusConnected
+			indicatorCell.SetTextColor(IndicatorGreen)
 		case trigger.StatusFiring:
-			indicator = CurrentTheme.StatusConnecting
+			indicatorCell.SetTextColor(tcell.ColorYellow)
 		case trigger.StatusCooldown:
-			indicator = CurrentTheme.TagPrimary + "●" + CurrentTheme.TagReset
+			indicatorCell.SetTextColor(tcell.ColorBlue)
 		case trigger.StatusError:
-			indicator = CurrentTheme.StatusError
+			indicatorCell.SetTextColor(IndicatorRed)
+		default:
+			indicatorCell.SetTextColor(IndicatorGray)
 		}
 
 		// Condition string
@@ -281,7 +306,7 @@ func (t *TriggersTab) Refresh() {
 			packName = "-"
 		}
 
-		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
+		t.table.SetCell(row, 0, indicatorCell)
 		t.table.SetCell(row, 1, tview.NewTableCell(cfg.Name).SetExpansion(1))
 		t.table.SetCell(row, 2, tview.NewTableCell(cfg.PLC).SetExpansion(1))
 		t.table.SetCell(row, 3, tview.NewTableCell(cfg.TriggerTag).SetExpansion(1))
@@ -309,142 +334,6 @@ func (t *TriggersTab) Refresh() {
 	}
 }
 
-// showTagPicker shows a filterable tag picker dialog and calls onSelect with the chosen tag or pack.
-func (t *TriggersTab) showTagPicker(title string, plcName string, onSelect func(tagName string)) {
-	const pageName = "tag-picker"
-
-	// Get PLC and its tags
-	plc := t.app.manager.GetPLC(plcName)
-	if plc == nil {
-		t.app.showError("Error", "PLC not found or not connected")
-		return
-	}
-
-	tags := plc.GetTags()
-
-	// Get TagPacks
-	packs := t.app.config.TagPacks
-
-	if len(tags) == 0 && len(packs) == 0 {
-		t.app.showError("Error", "No tags or packs available. Connect to PLC first.")
-		return
-	}
-
-	// Create filter input
-	filter := tview.NewInputField().
-		SetLabel("Filter: ").
-		SetFieldWidth(30)
-	ApplyInputFieldTheme(filter)
-
-	// Create list of tags
-	list := tview.NewList().
-		SetHighlightFullLine(true)
-	ApplyListTheme(list)
-
-	// Populate list with tags and packs
-	populateList := func(filterText string) {
-		list.Clear()
-		filterLower := strings.ToLower(filterText)
-
-		// Add packs first (with [pack] prefix for display)
-		for _, pack := range packs {
-			packRef := "pack:" + pack.Name
-			displayName := "[pack] " + pack.Name
-			if filterText == "" || strings.Contains(strings.ToLower(pack.Name), filterLower) || strings.Contains("pack", filterLower) {
-				list.AddItem(displayName, "", 0, func() {
-					t.app.closeModal(pageName)
-					onSelect(packRef)
-				})
-			}
-		}
-
-		// Add tags
-		for _, tag := range tags {
-			if filterText == "" || strings.Contains(strings.ToLower(tag.Name), filterLower) {
-				tagName := tag.Name
-				list.AddItem(tagName, "", 0, func() {
-					t.app.closeModal(pageName)
-					onSelect(tagName)
-				})
-			}
-		}
-	}
-	populateList("")
-
-	filter.SetChangedFunc(func(text string) {
-		populateList(text)
-	})
-
-	filter.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyDown, tcell.KeyTab:
-			t.app.app.SetFocus(list)
-			return nil
-		case tcell.KeyEscape:
-			t.app.closeModal(pageName)
-			return nil
-		case tcell.KeyEnter:
-			// Select first item if any
-			if list.GetItemCount() > 0 {
-				list.SetCurrentItem(0)
-				t.app.app.SetFocus(list)
-			}
-			return nil
-		}
-		return event
-	})
-
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyEscape:
-			t.app.closeModal(pageName)
-			return nil
-		case tcell.KeyUp:
-			if list.GetCurrentItem() == 0 {
-				t.app.app.SetFocus(filter)
-				return nil
-			}
-		}
-		if event.Rune() == '/' {
-			t.app.app.SetFocus(filter)
-			return nil
-		}
-		return event
-	})
-
-	// Instructions
-	instructions := tview.NewTextView().
-		SetText("/ to filter, Enter to select, Esc to cancel").
-		SetTextAlign(tview.AlignCenter)
-	instructions.SetTextColor(CurrentTheme.TextDim)
-
-	// Layout
-	content := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(filter, 1, 0, true).
-		AddItem(list, 0, 1, false).
-		AddItem(instructions, 1, 0, false)
-	content.SetBorder(true).SetTitle(" " + title + " ")
-
-	t.app.showCenteredModal(pageName, content, 60, 21)
-	t.app.app.SetFocus(filter)
-}
-
-// getRepublishedTags returns the list of tag names enabled for republishing on a PLC.
-func (t *TriggersTab) getRepublishedTags(plcName string) []string {
-	plcCfg := t.app.config.FindPLC(plcName)
-	if plcCfg == nil {
-		return nil
-	}
-	var tags []string
-	for _, tag := range plcCfg.Tags {
-		if tag.Enabled {
-			tags = append(tags, tag.Name)
-		}
-	}
-	return tags
-}
-
 func (t *TriggersTab) showAddDialog() {
 	const pageName = "add-trigger"
 
@@ -470,7 +359,7 @@ func (t *TriggersTab) showAddDialog() {
 
 	// Get initial tags for first PLC
 	selectedPLC := plcNames[0]
-	tagOptions := t.getRepublishedTags(selectedPLC)
+	tagOptions := t.app.GetEnabledTags(selectedPLC)
 	if len(tagOptions) == 0 {
 		tagOptions = []string{"(no tags configured)"}
 	}
@@ -484,7 +373,7 @@ func (t *TriggersTab) showAddDialog() {
 
 	form.AddDropDown("PLC:", plcNames, 0, func(option string, index int) {
 		selectedPLC = option
-		newTags := t.getRepublishedTags(selectedPLC)
+		newTags := t.app.GetEnabledTags(selectedPLC)
 		if len(newTags) == 0 {
 			newTags = []string{"(no tags configured)"}
 		}
@@ -668,7 +557,7 @@ func (t *TriggersTab) showEditDialog() {
 
 	// Get republished tags for current PLC
 	selectedPLC := cfg.PLC
-	tagOptions := t.getRepublishedTags(selectedPLC)
+	tagOptions := t.app.GetEnabledTags(selectedPLC)
 	if len(tagOptions) == 0 {
 		tagOptions = []string{"(no tags configured)"}
 	}
@@ -701,7 +590,7 @@ func (t *TriggersTab) showEditDialog() {
 
 	form.AddDropDown("PLC:", plcNames, plcIdx, func(option string, index int) {
 		selectedPLC = option
-		newTags := t.getRepublishedTags(selectedPLC)
+		newTags := t.app.GetEnabledTags(selectedPLC)
 		if len(newTags) == 0 {
 			newTags = []string{"(no tags configured)"}
 		}
@@ -851,24 +740,39 @@ func (t *TriggersTab) showAddDataTagDialog() {
 		return
 	}
 
-	t.showTagPicker("Add Data Tag to "+name, cfg.PLC, func(tag string) {
-		// Check for duplicate
-		for _, existing := range cfg.Tags {
-			if existing == tag {
-				t.app.setStatus("Tag already in list: " + tag)
-				return
-			}
+	// Build exclusion lists from existing tags in trigger
+	var excludeTags []PLCTag
+	var excludePacks []string
+	for _, tag := range cfg.Tags {
+		if strings.HasPrefix(tag, "pack:") {
+			excludePacks = append(excludePacks, strings.TrimPrefix(tag, "pack:"))
+		} else {
+			excludeTags = append(excludeTags, PLCTag{PLC: cfg.PLC, Tag: tag})
 		}
+	}
 
-		// Add tag to config
-		cfg.Tags = append(cfg.Tags, tag)
-		t.app.SaveConfig()
-
-		// Update trigger manager
-		t.app.triggerMgr.UpdateTrigger(cfg)
-
-		t.updateDataTagsList()
-		t.app.setStatus(fmt.Sprintf("Added: %s", tag))
+	t.app.ShowTagPickerWithOptions(TagPickerOptions{
+		Title:        "Add Data Tag to " + name,
+		PLCFilter:    cfg.PLC,
+		IncludePacks: true,
+		ExcludeTags:  excludeTags,
+		ExcludePacks: excludePacks,
+		OnSelectTag: func(plc, tag string) {
+			cfg.Tags = append(cfg.Tags, tag)
+			t.app.SaveConfig()
+			t.app.triggerMgr.UpdateTrigger(cfg)
+			t.updateDataTagsList()
+			t.app.setStatus(fmt.Sprintf("Added: %s", tag))
+			t.app.app.SetFocus(t.dataTable)
+		},
+		OnSelectPack: func(packName string) {
+			cfg.Tags = append(cfg.Tags, "pack:"+packName)
+			t.app.SaveConfig()
+			t.app.triggerMgr.UpdateTrigger(cfg)
+			t.updateDataTagsList()
+			t.app.setStatus(fmt.Sprintf("Added pack: %s", packName))
+			t.app.app.SetFocus(t.dataTable)
+		},
 	})
 }
 
@@ -1001,7 +905,7 @@ func (t *TriggersTab) updateButtonBar() {
 		th.TagHotkey + "e" + th.TagActionText + "dit  " +
 		th.TagHotkey + "s" + th.TagActionText + "tart  " +
 		th.TagHotkey + "S" + th.TagActionText + "top  " +
-		th.TagHotkey + "T" + th.TagActionText + "est  " +
+		th.TagHotkey + "F" + th.TagActionText + "ire  " +
 		th.TagActionText + "│  " +
 		th.TagHotkey + "?" + th.TagActionText + " help " + th.TagReset
 	t.buttonBar.SetText(buttonText)

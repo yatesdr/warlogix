@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -420,10 +421,16 @@ func (a *App) updateTabsDisplay() {
 
 		parts := tabParts[i]
 		if i == a.currentTab {
-			// Active tab: all in bold accent, hotkey also highlighted
-			colorTag := th.TagAccent[:len(th.TagAccent)-1] + "::b]"
-			hotkeyTag := th.TagHotkey[:len(th.TagHotkey)-1] + "::b]"
-			text += colorTag + parts.before + "[-::-]" + hotkeyTag + parts.hotkey + "[-::-]" + colorTag + parts.after + "[-::-]"
+			// Active tab: SelectedText on Accent background, bold
+			// Format: [foreground:background:attributes]
+			fgHex := colorToHex(th.SelectedText)
+			bgHex := colorToHex(th.Accent)
+			colorTag := fmt.Sprintf("[%s:%s:b]", fgHex, bgHex)
+			// Hotkey uses Hotkey color on same background
+			hotkeyFgHex := colorToHex(th.Hotkey)
+			hotkeyTag := fmt.Sprintf("[%s:%s:b]", hotkeyFgHex, bgHex)
+			resetTag := "[-:-:-]"
+			text += colorTag + " " + parts.before + hotkeyTag + parts.hotkey + colorTag + parts.after + " " + resetTag
 		} else {
 			// Inactive tab: dimmed with hotkey highlighted
 			text += th.TagTextDim + parts.before + th.TagHotkey + parts.hotkey + th.TagTextDim + parts.after + th.TagReset

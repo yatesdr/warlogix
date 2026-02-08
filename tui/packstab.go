@@ -8,6 +8,7 @@ import (
 	"github.com/rivo/tview"
 
 	"warlogix/config"
+	"warlogix/kafka"
 )
 
 // PacksTab handles the Tag Packs configuration tab.
@@ -88,9 +89,6 @@ func (t *PacksTab) setupUI() {
 			return nil
 		case 'i':
 			t.toggleMemberIgnore()
-			return nil
-		case 'E':
-			t.enableSelectedMember()
 			return nil
 		}
 		if event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab {
@@ -193,20 +191,14 @@ func (t *PacksTab) updateMemberList() {
 	for i, member := range cfg.Members {
 		row := i + 1
 
-		// Check if tag is enabled in Browser and get alias
-		tagEnabled := false
-		tagAlias := ""
+		// Get PLC config for tag lookup
+		var plcTags []config.TagSelection
 		if plcCfg := t.app.config.FindPLC(member.PLC); plcCfg != nil {
-			for _, sel := range plcCfg.Tags {
-				if sel.Name == member.Tag {
-					if sel.Enabled {
-						tagEnabled = true
-					}
-					tagAlias = sel.Alias
-					break
-				}
-			}
+			plcTags = plcCfg.Tags
 		}
+
+		// Use shared helper to format tag display
+		tagInfo := FormatTagDisplay(member.Tag, plcTags)
 
 		// Show "I" indicator if this member is ignored for change detection
 		ignoreStr := ""
@@ -214,20 +206,22 @@ func (t *PacksTab) updateMemberList() {
 			ignoreStr = th.TagError + "I" + th.TagReset
 		}
 
-		plcText := member.PLC
-		// Show alias with (address) if alias exists, otherwise just the tag name/address
-		tagText := member.Tag
-		if tagAlias != "" {
-			tagText = tagAlias + " (" + member.Tag + ")"
-		}
-		if !tagEnabled {
-			// Strike-through for tags not enabled in Browser
-			plcText = "[::s]" + member.PLC + "[::-]"
-			tagText = "[::s]" + tagText + "[::-]"
+		// Build display text with alias if present
+		tagDisplay := member.Tag
+		if tagInfo.Alias != "" {
+			tagDisplay = tagInfo.Alias + " (" + member.Tag + ")"
 		}
 
-		t.memberTable.SetCell(row, 0, tview.NewTableCell(plcText).SetExpansion(1))
-		t.memberTable.SetCell(row, 1, tview.NewTableCell(tagText).SetExpansion(1))
+		// Create cells - use SetAttributes for strikethrough and dim color for terminals without strikethrough support
+		plcCell := tview.NewTableCell(member.PLC).SetExpansion(1)
+		tagCell := tview.NewTableCell(tagDisplay).SetExpansion(1)
+		if !tagInfo.IsEnabled {
+			plcCell.SetTextColor(th.TextDim).SetAttributes(tcell.AttrStrikeThrough)
+			tagCell.SetTextColor(th.TextDim).SetAttributes(tcell.AttrStrikeThrough)
+		}
+
+		t.memberTable.SetCell(row, 0, plcCell)
+		t.memberTable.SetCell(row, 1, tagCell)
 		t.memberTable.SetCell(row, 2, tview.NewTableCell(ignoreStr).SetExpansion(0))
 	}
 }
@@ -243,20 +237,58 @@ func (t *PacksTab) updateInfo(name string) {
 	info := th.Label("Name", cfg.Name) + "\n"
 	info += th.Label("Enabled", fmt.Sprintf("%v", cfg.Enabled)) + "\n\n"
 
-	mqttStatus := "○"
-	if cfg.MQTTEnabled {
-		mqttStatus = "●"
+	// Check service connectivity
+	mqttConnected := false
+	for _, pub := range t.app.mqttMgr.List() {
+		if pub.IsRunning() {
+			mqttConnected = true
+			break
+		}
 	}
-	kafkaStatus := "○"
-	if cfg.KafkaEnabled {
-		kafkaStatus = "●"
+	valkeyConnected := false
+	for _, pub := range t.app.valkeyMgr.List() {
+		if pub.IsRunning() {
+			valkeyConnected = true
+			break
+		}
 	}
-	valkeyStatus := "○"
-	if cfg.ValkeyEnabled {
-		valkeyStatus = "●"
+	kafkaConnected := false
+	for _, cfgK := range t.app.config.Kafka {
+		if producer := t.app.kafkaMgr.GetProducer(cfgK.Name); producer != nil {
+			if producer.GetStatus() == kafka.StatusConnected {
+				kafkaConnected = true
+				break
+			}
+		}
 	}
 
-	info += fmt.Sprintf("MQTT: %s  Kafka: %s  Valkey: %s", mqttStatus, kafkaStatus, valkeyStatus)
+	// Service indicators: green=active, red=enabled but not connected, gray=disabled (fixed colors)
+	var mqttIndicator, kafkaIndicator, valkeyIndicator string
+	if !cfg.MQTTEnabled {
+		mqttIndicator = "[gray]●[-]"
+	} else if mqttConnected {
+		mqttIndicator = "[green]●[-]"
+	} else {
+		mqttIndicator = "[red]●[-]"
+	}
+
+	if !cfg.KafkaEnabled {
+		kafkaIndicator = "[gray]●[-]"
+	} else if kafkaConnected {
+		kafkaIndicator = "[green]●[-]"
+	} else {
+		kafkaIndicator = "[red]●[-]"
+	}
+
+	if !cfg.ValkeyEnabled {
+		valkeyIndicator = "[gray]●[-]"
+	} else if valkeyConnected {
+		valkeyIndicator = "[green]●[-]"
+	} else {
+		valkeyIndicator = "[red]●[-]"
+	}
+
+	info += fmt.Sprintf("MQTT: %s  Kafka: %s  Valkey: %s", mqttIndicator, kafkaIndicator, valkeyIndicator)
 
 	t.info.SetText(info)
 }
@@ -285,36 +317,77 @@ func (t *PacksTab) Refresh() {
 		return packs[i].Name < packs[j].Name
 	})
 
+	// Check service connectivity once for all packs
+	mqttConnected := false
+	for _, pub := range t.app.mqttMgr.List() {
+		if pub.IsRunning() {
+			mqttConnected = true
+			break
+		}
+	}
+	valkeyConnected := false
+	for _, pub := range t.app.valkeyMgr.List() {
+		if pub.IsRunning() {
+			valkeyConnected = true
+			break
+		}
+	}
+	kafkaConnected := false
+	for _, cfg := range t.app.config.Kafka {
+		if producer := t.app.kafkaMgr.GetProducer(cfg.Name); producer != nil {
+			if producer.GetStatus() == kafka.StatusConnected {
+				kafkaConnected = true
+				break
+			}
+		}
+	}
+
 	// Add packs to table
 	for i, cfg := range packs {
 		row := i + 1
 
-		// Status indicator
-		indicator := CurrentTheme.StatusDisconnected
+		// Status indicator - use fixed colors (theme-independent)
+		indicatorCell := tview.NewTableCell("●").SetExpansion(0)
 		if cfg.Enabled {
-			indicator = CurrentTheme.StatusConnected
+			indicatorCell.SetTextColor(IndicatorGreen)
+		} else {
+			indicatorCell.SetTextColor(IndicatorGray)
 		}
 
-		// Broker indicators
-		mqttStr := "○"
-		if cfg.MQTTEnabled {
-			mqttStr = "●"
-		}
-		kafkaStr := "○"
-		if cfg.KafkaEnabled {
-			kafkaStr = "●"
-		}
-		valkeyStr := "○"
-		if cfg.ValkeyEnabled {
-			valkeyStr = "●"
+		// Service indicators: green=active, red=enabled but not connected, gray=disabled
+		mqttCell := tview.NewTableCell("●").SetExpansion(0)
+		if !cfg.MQTTEnabled {
+			mqttCell.SetTextColor(IndicatorGray)
+		} else if mqttConnected {
+			mqttCell.SetTextColor(IndicatorGreen)
+		} else {
+			mqttCell.SetTextColor(IndicatorRed)
 		}
 
-		t.packTable.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
+		kafkaCell := tview.NewTableCell("●").SetExpansion(0)
+		if !cfg.KafkaEnabled {
+			kafkaCell.SetTextColor(IndicatorGray)
+		} else if kafkaConnected {
+			kafkaCell.SetTextColor(IndicatorGreen)
+		} else {
+			kafkaCell.SetTextColor(IndicatorRed)
+		}
+
+		valkeyCell := tview.NewTableCell("●").SetExpansion(0)
+		if !cfg.ValkeyEnabled {
+			valkeyCell.SetTextColor(IndicatorGray)
+		} else if valkeyConnected {
+			valkeyCell.SetTextColor(IndicatorGreen)
+		} else {
+			valkeyCell.SetTextColor(IndicatorRed)
+		}
+
+		t.packTable.SetCell(row, 0, indicatorCell)
 		t.packTable.SetCell(row, 1, tview.NewTableCell(cfg.Name).SetExpansion(1))
 		t.packTable.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", len(cfg.Members))).SetExpansion(0))
-		t.packTable.SetCell(row, 3, tview.NewTableCell(mqttStr).SetExpansion(0))
-		t.packTable.SetCell(row, 4, tview.NewTableCell(kafkaStr).SetExpansion(0))
-		t.packTable.SetCell(row, 5, tview.NewTableCell(valkeyStr).SetExpansion(0))
+		t.packTable.SetCell(row, 3, mqttCell)
+		t.packTable.SetCell(row, 4, kafkaCell)
+		t.packTable.SetCell(row, 5, valkeyCell)
 	}
 
 	// Update status bar
@@ -435,6 +508,7 @@ func (t *PacksTab) showAddTagDialog() {
 		t.updateMemberList()
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Added %s:%s to pack", plc, tag))
+		t.app.app.SetFocus(t.memberTable)
 	})
 }
 
@@ -502,58 +576,6 @@ func (t *PacksTab) toggleMemberIgnore() {
 	} else {
 		t.app.setStatus(fmt.Sprintf("Changes to %s:%s will trigger publish", cfg.Members[idx].PLC, cfg.Members[idx].Tag))
 	}
-}
-
-func (t *PacksTab) enableSelectedMember() {
-	name := t.getSelectedName()
-	if name == "" {
-		return
-	}
-
-	cfg := t.app.config.FindTagPack(name)
-	if cfg == nil || len(cfg.Members) == 0 {
-		return
-	}
-
-	row, _ := t.memberTable.GetSelection()
-	idx := row - 1
-	if idx < 0 || idx >= len(cfg.Members) {
-		return
-	}
-
-	member := cfg.Members[idx]
-
-	// Find PLC config
-	plcCfg := t.app.config.FindPLC(member.PLC)
-	if plcCfg == nil {
-		t.app.setStatus(fmt.Sprintf("PLC %s not found", member.PLC))
-		return
-	}
-
-	// Check if tag is already enabled
-	for i := range plcCfg.Tags {
-		if plcCfg.Tags[i].Name == member.Tag {
-			if plcCfg.Tags[i].Enabled {
-				t.app.setStatus(fmt.Sprintf("%s:%s is already enabled", member.PLC, member.Tag))
-				return
-			}
-			// Enable it
-			plcCfg.Tags[i].Enabled = true
-			t.app.SaveConfig()
-			t.updateMemberList()
-			t.app.setStatus(fmt.Sprintf("Enabled %s:%s in Browser", member.PLC, member.Tag))
-			return
-		}
-	}
-
-	// Tag not in config, add it as enabled
-	plcCfg.Tags = append(plcCfg.Tags, config.TagSelection{
-		Name:    member.Tag,
-		Enabled: true,
-	})
-	t.app.SaveConfig()
-	t.updateMemberList()
-	t.app.setStatus(fmt.Sprintf("Enabled %s:%s in Browser", member.PLC, member.Tag))
 }
 
 func (t *PacksTab) removeSelected() {
@@ -679,7 +701,6 @@ func (t *PacksTab) updateButtonBar() {
 		th.TagHotkey + "Space" + th.TagActionText + " enable  " +
 		th.TagHotkey + "e" + th.TagActionText + "dit  " +
 		th.TagHotkey + "i" + th.TagActionText + "gnore  " +
-		th.TagHotkey + "E" + th.TagActionText + "nable tag  " +
 		th.TagActionText + "│  " +
 		th.TagHotkey + "?" + th.TagActionText + " help " + th.TagReset
 	t.buttonBar.SetText(buttonText)

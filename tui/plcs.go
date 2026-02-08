@@ -207,17 +207,17 @@ func (t *PLCsTab) Refresh() {
 	for i, plc := range plcs {
 		row := i + 1
 
-		// Status indicator (use CurrentTheme for dynamic theming)
-		var indicator string
+		// Status indicator - use fixed colors (theme-independent)
+		indicatorCell := tview.NewTableCell("●").SetExpansion(0)
 		switch plc.GetStatus() {
 		case plcman.StatusConnected:
-			indicator = CurrentTheme.StatusConnected
+			indicatorCell.SetTextColor(IndicatorGreen)
 		case plcman.StatusConnecting:
-			indicator = CurrentTheme.StatusConnecting
+			indicatorCell.SetTextColor(tcell.ColorYellow)
 		case plcman.StatusError:
-			indicator = CurrentTheme.StatusError
+			indicatorCell.SetTextColor(IndicatorRed)
 		default:
-			indicator = CurrentTheme.StatusDisconnected
+			indicatorCell.SetTextColor(IndicatorGray)
 		}
 
 		// Product name
@@ -226,7 +226,7 @@ func (t *PLCsTab) Refresh() {
 			productName = info.Model
 		}
 
-		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
+		t.table.SetCell(row, 0, indicatorCell)
 		t.table.SetCell(row, 1, tview.NewTableCell(plc.Config.Name).SetExpansion(1))
 		t.table.SetCell(row, 2, tview.NewTableCell(plc.Config.Address).SetExpansion(1))
 		t.table.SetCell(row, 3, tview.NewTableCell(plc.Config.GetFamily().String()).SetExpansion(1))
