@@ -655,6 +655,16 @@ func ApplyFormTheme(form *tview.Form) {
 	form.SetButtonActivatedStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
 }
 
+// ApplyListTheme applies the current theme colors to a List.
+// Call this in RefreshTheme() for each list.
+func ApplyListTheme(list *tview.List) {
+	th := CurrentTheme
+	list.SetMainTextColor(th.Text)
+	list.SetSecondaryTextColor(th.TextDim)
+	list.SetSelectedTextColor(th.SelectedText)
+	list.SetSelectedBackgroundColor(th.Accent)
+}
+
 // Legacy color variables - now derived from CurrentTheme for backwards compatibility
 // These are kept for any code that directly references them
 var (
@@ -713,7 +723,8 @@ const (
 // Tab labels
 const (
 	TabPLCs     = "PLCs"
-	TabBrowser  = "Tag Browser"
+	TabBrowser  = "Republisher"
+	TabPacks    = "TagPacks"
 	TabREST     = "REST"
 	TabMQTT     = "MQTT"
 	TabValkey   = "Valkey"

@@ -38,7 +38,7 @@ func (v *TagValue) TypeName() string {
 	switch v.Family {
 	case "s7":
 		return s7.TypeName(v.DataType)
-	case "beckhoff":
+	case "beckhoff", "ads":
 		return ads.TypeName(v.DataType)
 	case "omron":
 		return omron.TypeName(v.DataType)

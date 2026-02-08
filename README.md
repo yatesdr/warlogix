@@ -32,6 +32,7 @@ No expensive middleware. No vendor lock-in. Just a single binary that runs anywh
 - **MQTT** - Publish tags with optional write-back
 - **Valkey/Redis** - Key storage with Pub/Sub and write-back queue
 - **Kafka** - Tag changes and event triggers
+- **TagPacks** - Group tags from multiple PLCs for atomic publishing
 - **Daemon Mode** - Background service with SSH access
 - **High Performance** - Batched reads, optimized publishing, 100K+ messages/sec
 
@@ -123,6 +124,8 @@ Press `d` to discover PLCs on your network, or `a` to add manually.
 | Browser | `c` | Clear filter |
 | Browser | `d` | Show tag details |
 | Browser | `a/e/x` | Add/Edit/Delete manual tags (S7/Omron) |
+| TagPacks | `c/a/d` | Create pack/Add tag/Delete |
+| TagPacks | `Space/i/e/r` | Enable/Ignore/Edit/Rename |
 | MQTT/Valkey/Kafka | `a/e/r/c/C` | Add/Edit/Remove/Connect/Disconnect |
 | Triggers | `a/e/r/t/x` | Add/Edit/Remove/Add tag/Remove tag |
 | Triggers | `s/S/T` | Start/Stop/Test |
@@ -160,6 +163,7 @@ ssh -p 2222 localhost
 - [Valkey/Redis](docs/valkey.md) - Keys, Pub/Sub, write-back queue
 - [Kafka](docs/kafka.md) - Topics and authentication
 - [Triggers](docs/triggers.md) - Event-driven data capture
+- [TagPacks](docs/tagpacks.md) - Cross-PLC atomic publishing
 - [Data Types](docs/data-types.md) - Types, byte order, UDT support
 
 ## Warnings

@@ -372,3 +372,20 @@ func (m *Manager) SetOnConnectCallback(callback func()) {
 		pub.SetOnConnectCallback(callback)
 	}
 }
+
+// PublishRaw publishes raw bytes to a channel on all running publishers.
+// Used for TagPack publishing.
+func (m *Manager) PublishRaw(channel string, data []byte) {
+	m.mu.RLock()
+	publishers := make([]*Publisher, len(m.publishers))
+	copy(publishers, m.publishers)
+	m.mu.RUnlock()
+
+	for _, pub := range publishers {
+		if pub.IsRunning() {
+			if err := pub.PublishRaw(channel, data); err != nil {
+				debugLog("Valkey raw publish error (%s): %v", pub.config.Name, err)
+			}
+		}
+	}
+}

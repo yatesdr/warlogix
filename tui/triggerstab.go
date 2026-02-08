@@ -53,7 +53,7 @@ func (t *TriggersTab) setupUI() {
 	t.table.SetSelectionChangedFunc(t.onSelectionChanged)
 
 	// Set up headers (themed)
-	headers := []string{"", "Name", "PLC", "Trigger", "Condition", "Fires", "Status"}
+	headers := []string{"", "Name", "PLC", "Trigger", "Condition", "Pack", "Fires", "Status"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
 			SetTextColor(CurrentTheme.Accent).
@@ -208,6 +208,9 @@ func (t *TriggersTab) updateInfo(name string) {
 	if cfg.AckTag != "" {
 		info += fmt.Sprintf("%sAck:%s %s (1=ok, -1=err)\n", th.TagAccent, th.TagReset, cfg.AckTag)
 	}
+	if cfg.PublishPack != "" {
+		info += fmt.Sprintf("%sPack:%s %s\n", th.TagAccent, th.TagReset, cfg.PublishPack)
+	}
 	info += th.Label("Kafka", cfg.KafkaCluster) + "\n"
 	info += th.Label("Topic", cfg.Topic) + "\n"
 
@@ -271,13 +274,20 @@ func (t *TriggersTab) Refresh() {
 		// Condition string
 		condStr := fmt.Sprintf("%s %v", cfg.Condition.Operator, cfg.Condition.Value)
 
+		// Pack name (or "-" if none)
+		packName := cfg.PublishPack
+		if packName == "" {
+			packName = "-"
+		}
+
 		t.table.SetCell(row, 0, tview.NewTableCell(indicator).SetExpansion(0))
 		t.table.SetCell(row, 1, tview.NewTableCell(cfg.Name).SetExpansion(1))
 		t.table.SetCell(row, 2, tview.NewTableCell(cfg.PLC).SetExpansion(1))
 		t.table.SetCell(row, 3, tview.NewTableCell(cfg.TriggerTag).SetExpansion(1))
 		t.table.SetCell(row, 4, tview.NewTableCell(condStr).SetExpansion(1))
-		t.table.SetCell(row, 5, tview.NewTableCell(fmt.Sprintf("%d", count)).SetExpansion(0))
-		t.table.SetCell(row, 6, tview.NewTableCell(status.String()).SetExpansion(1))
+		t.table.SetCell(row, 5, tview.NewTableCell(packName).SetExpansion(1))
+		t.table.SetCell(row, 6, tview.NewTableCell(fmt.Sprintf("%d", count)).SetExpansion(0))
+		t.table.SetCell(row, 7, tview.NewTableCell(status.String()).SetExpansion(1))
 	}
 
 	// Update status bar
@@ -427,6 +437,12 @@ func (t *TriggersTab) showAddDialog() {
 		kafkaNames = append(kafkaNames, k.Name)
 	}
 
+	// Get list of TagPacks (optional)
+	packNames := []string{"(None)"}
+	for _, p := range t.app.config.TagPacks {
+		packNames = append(packNames, p.Name)
+	}
+
 	form := tview.NewForm()
 	ApplyFormTheme(form)
 	form.SetBorder(true).SetTitle(" Add Trigger ")
@@ -479,6 +495,7 @@ func (t *TriggersTab) showAddDialog() {
 
 	form.AddDropDown("Kafka:", kafkaNames, 0, nil)
 	form.AddInputField("Topic:", "", 30, nil, nil)
+	form.AddDropDown("Publish Pack:", packNames, 0, nil)
 
 	form.AddButton("Add", func() {
 		name := form.GetFormItemByLabel("Name:").(*tview.InputField).GetText()
@@ -489,6 +506,7 @@ func (t *TriggersTab) showAddDialog() {
 		ackTagIdx, ackTag := ackTagDropdown.GetCurrentOption()
 		kafkaIdx, _ := form.GetFormItemByLabel("Kafka:").(*tview.DropDown).GetCurrentOption()
 		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
+		packIdx, _ := form.GetFormItemByLabel("Publish Pack:").(*tview.DropDown).GetCurrentOption()
 
 		// Validate trigger tag
 		if name == "" || triggerTag == "(no tags configured)" {
@@ -506,6 +524,12 @@ func (t *TriggersTab) showAddDialog() {
 		kafkaCluster := ""
 		if kafkaIdx > 0 {
 			kafkaCluster = kafkaNames[kafkaIdx]
+		}
+
+		// Get pack name (empty if "(None)" selected)
+		publishPack := ""
+		if packIdx > 0 {
+			publishPack = packNames[packIdx]
 		}
 
 		// Parse value
@@ -540,6 +564,7 @@ func (t *TriggersTab) showAddDialog() {
 			Tags:         []string{}, // Data tags added separately
 			KafkaCluster: kafkaCluster,
 			Topic:        topic,
+			PublishPack:  publishPack,
 			Metadata:     make(map[string]string),
 		}
 
@@ -596,6 +621,16 @@ func (t *TriggersTab) showEditDialog() {
 		kafkaNames = append(kafkaNames, k.Name)
 		if k.Name == cfg.KafkaCluster {
 			kafkaIdx = i + 1 // +1 because "(None)" is at index 0
+		}
+	}
+
+	// Get list of TagPacks
+	packNames := []string{"(None)"}
+	packIdx := 0 // Default to "(None)"
+	for i, p := range t.app.config.TagPacks {
+		packNames = append(packNames, p.Name)
+		if p.Name == cfg.PublishPack {
+			packIdx = i + 1 // +1 because "(None)" is at index 0
 		}
 	}
 
@@ -673,6 +708,7 @@ func (t *TriggersTab) showEditDialog() {
 
 	form.AddDropDown("Kafka:", kafkaNames, kafkaIdx, nil)
 	form.AddInputField("Topic:", cfg.Topic, 30, nil, nil)
+	form.AddDropDown("Publish Pack:", packNames, packIdx, nil)
 
 	originalName := cfg.Name
 
@@ -685,6 +721,7 @@ func (t *TriggersTab) showEditDialog() {
 		ackTagIdx, ackTag := ackTagDropdown.GetCurrentOption()
 		newKafkaIdx, _ := form.GetFormItemByLabel("Kafka:").(*tview.DropDown).GetCurrentOption()
 		topic := form.GetFormItemByLabel("Topic:").(*tview.InputField).GetText()
+		newPackIdx, _ := form.GetFormItemByLabel("Publish Pack:").(*tview.DropDown).GetCurrentOption()
 
 		// Validate trigger tag
 		if newName == "" || triggerTag == "(no tags configured)" {
@@ -702,6 +739,12 @@ func (t *TriggersTab) showEditDialog() {
 		kafkaCluster := ""
 		if newKafkaIdx > 0 {
 			kafkaCluster = kafkaNames[newKafkaIdx]
+		}
+
+		// Get pack name (empty if "(None)" selected)
+		publishPack := ""
+		if newPackIdx > 0 {
+			publishPack = packNames[newPackIdx]
 		}
 
 		// Parse value
@@ -736,6 +779,7 @@ func (t *TriggersTab) showEditDialog() {
 			Tags:         cfg.Tags, // Keep existing data tags
 			KafkaCluster: kafkaCluster,
 			Topic:        topic,
+			PublishPack:  publishPack,
 			Metadata:     cfg.Metadata,
 		}
 

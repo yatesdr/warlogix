@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1272,12 +1273,43 @@ func (c *Client) AllTags() ([]TagInfo, error) {
 	return tags, nil
 }
 
-// Programs returns an empty list since TwinCAT doesn't have the same program structure as Logix.
-// Symbols are accessed by their full path (e.g., "MAIN.Variable", "GVL.GlobalVar").
+// Programs returns the unique top-level prefixes from discovered symbols.
+// TwinCAT symbols are accessed by their full path (e.g., "MAIN.Variable", "GVL.GlobalVar").
+// This extracts prefixes like MAIN, GVL, FB_Motor, etc. from the symbol table.
 func (c *Client) Programs() ([]string, error) {
-	// TwinCAT doesn't have the same concept of programs
-	// Return common POU prefixes that users might recognize
-	return []string{"MAIN", "GVL"}, nil
+	c.symbolsMu.RLock()
+	defer c.symbolsMu.RUnlock()
+
+	if !c.symbolsLoaded || len(c.symbols) == 0 {
+		// Symbols not yet loaded, return common defaults
+		return []string{"MAIN", "GVL"}, nil
+	}
+
+	// Extract unique top-level prefixes from symbol names
+	prefixes := make(map[string]bool)
+	for name := range c.symbols {
+		if idx := strings.Index(name, "."); idx > 0 {
+			prefix := name[:idx]
+			// Skip internal/system symbols (start with underscore or are all caps constants)
+			if !strings.HasPrefix(prefix, "_") {
+				prefixes[prefix] = true
+			}
+		}
+	}
+
+	// Convert to sorted slice
+	result := make([]string, 0, len(prefixes))
+	for prefix := range prefixes {
+		result = append(result, prefix)
+	}
+	sort.Strings(result)
+
+	if len(result) == 0 {
+		// Fallback to defaults if no prefixes found
+		return []string{"MAIN", "GVL"}, nil
+	}
+
+	return result, nil
 }
 
 // Identity returns device information in a format compatible with the plcman interface.

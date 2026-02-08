@@ -13,11 +13,13 @@ import (
 
 	"warlogix/config"
 	"warlogix/plcman"
+	"warlogix/tagpack"
 )
 
 // Server is the REST API server.
 type Server struct {
 	manager *plcman.Manager
+	packMgr *tagpack.Manager
 	config  *config.RESTConfig
 	server  *http.Server
 	running bool
@@ -30,6 +32,13 @@ func NewServer(manager *plcman.Manager, cfg *config.RESTConfig) *Server {
 		manager: manager,
 		config:  cfg,
 	}
+}
+
+// SetPackManager sets the TagPack manager for the server.
+func (s *Server) SetPackManager(mgr *tagpack.Manager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.packMgr = mgr
 }
 
 // IsRunning returns whether the server is currently running.
@@ -138,10 +147,11 @@ type PLCResponse struct {
 }
 
 // TagResponse is the JSON response for a tag value.
+// When a tag has an alias, Name contains the alias and Offset contains the original address.
 type TagResponse struct {
 	PLC       string      `json:"plc"`
 	Name      string      `json:"name"`
-	Alias     string      `json:"alias,omitempty"`
+	Offset    string      `json:"offset,omitempty"` // Original tag name/address when alias is used
 	Type      string      `json:"type"`
 	Value     interface{} `json:"value"`
 	Error     string      `json:"error,omitempty"`
@@ -172,6 +182,28 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parts := strings.Split(path, "/")
+
+	// Handle /tagpack endpoint (list all or get specific pack)
+	if parts[0] == "tagpack" {
+		if r.Method != http.MethodGet {
+			s.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if len(parts) == 1 {
+			// GET /tagpack - list all packs
+			s.handlePackList(w)
+		} else {
+			// GET /tagpack/{name} - get specific pack
+			packName, err := url.PathUnescape(parts[1])
+			if err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid URL encoding in pack name")
+				return
+			}
+			s.handlePackDetails(w, packName)
+		}
+		return
+	}
+
 	plcName, err := url.PathUnescape(parts[0])
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid URL encoding in PLC name")
@@ -295,21 +327,34 @@ func (s *Server) handleProgramTags(w http.ResponseWriter, plc *plcman.ManagedPLC
 	values := plc.GetValues()
 
 	prefix := "Program:" + program + "."
-	response := []TagResponse{}
 
-	// Only return tags that are enabled for republishing
+	// Return tags in flat map format with "plc.tag" keys (matching TagPack format)
+	response := make(map[string]TagResponse)
+
+	// Only return tags that are enabled for republishing and not excluded from REST
 	for _, sel := range plc.Config.Tags {
-		if !sel.Enabled {
+		if !sel.Enabled || sel.NoREST {
 			continue
 		}
 		if !strings.HasPrefix(sel.Name, prefix) {
 			continue
 		}
 
+		// Use alias in key if available, store original as offset
+		tagPart := sel.Name
+		offset := ""
+		if sel.Alias != "" {
+			tagPart = sel.Alias
+			offset = sel.Name
+		}
+
+		// Build flat key: "plc.tag"
+		key := plc.Config.Name + "." + tagPart
+
 		resp := TagResponse{
-			PLC:   plc.Config.Name,
-			Name:  sel.Name,
-			Alias: sel.Alias,
+			PLC:    plc.Config.Name,
+			Name:   tagPart,
+			Offset: offset,
 		}
 
 		if v, ok := values[sel.Name]; ok {
@@ -320,7 +365,7 @@ func (s *Server) handleProgramTags(w http.ResponseWriter, plc *plcman.ManagedPLC
 			}
 		}
 
-		response = append(response, resp)
+		response[key] = resp
 	}
 
 	s.writeJSON(w, response)
@@ -329,18 +374,29 @@ func (s *Server) handleProgramTags(w http.ResponseWriter, plc *plcman.ManagedPLC
 func (s *Server) handleAllTags(w http.ResponseWriter, plc *plcman.ManagedPLC) {
 	values := plc.GetValues()
 
-	// Only return tags that are enabled for republishing
-	response := make([]TagResponse, 0)
+	// Return tags in flat map format with "plc.tag" keys (matching TagPack format)
+	response := make(map[string]TagResponse)
 
 	for _, sel := range plc.Config.Tags {
-		if !sel.Enabled {
+		if !sel.Enabled || sel.NoREST {
 			continue
 		}
 
+		// Use alias in key if available, store original as offset
+		tagPart := sel.Name
+		offset := ""
+		if sel.Alias != "" {
+			tagPart = sel.Alias
+			offset = sel.Name
+		}
+
+		// Build flat key: "plc.tag"
+		key := plc.Config.Name + "." + tagPart
+
 		resp := TagResponse{
-			PLC:   plc.Config.Name,
-			Name:  sel.Name,
-			Alias: sel.Alias,
+			PLC:    plc.Config.Name,
+			Name:   tagPart,
+			Offset: offset,
 		}
 
 		if v, ok := values[sel.Name]; ok {
@@ -351,36 +407,44 @@ func (s *Server) handleAllTags(w http.ResponseWriter, plc *plcman.ManagedPLC) {
 			}
 		}
 
-		response = append(response, resp)
+		response[key] = resp
 	}
 
 	s.writeJSON(w, response)
 }
 
 func (s *Server) handleSingleTag(w http.ResponseWriter, plc *plcman.ManagedPLC, tagName string) {
-	// Check if this tag is enabled for republishing
+	// Check if this tag is enabled for republishing and not excluded from REST
 	var sel *config.TagSelection
 	for i := range plc.Config.Tags {
-		if plc.Config.Tags[i].Name == tagName && plc.Config.Tags[i].Enabled {
+		if plc.Config.Tags[i].Name == tagName && plc.Config.Tags[i].Enabled && !plc.Config.Tags[i].NoREST {
 			sel = &plc.Config.Tags[i]
 			break
 		}
 	}
 
 	if sel == nil {
-		s.writeError(w, http.StatusNotFound, "tag not found or not enabled for republishing")
+		s.writeError(w, http.StatusNotFound, "tag not found or not enabled for REST")
 		return
+	}
+
+	// Use alias as name if available, store original as offset
+	name := tagName
+	offset := ""
+	if sel.Alias != "" {
+		name = sel.Alias
+		offset = tagName
 	}
 
 	// Check cached values first
 	values := plc.GetValues()
 	if v, ok := values[tagName]; ok {
 		resp := TagResponse{
-			PLC:   plc.Config.Name,
-			Name:  tagName,
-			Alias: sel.Alias,
-			Type:  v.TypeName(),
-			Value: v.GoValue(),
+			PLC:    plc.Config.Name,
+			Name:   name,
+			Offset: offset,
+			Type:   v.TypeName(),
+			Value:  v.GoValue(),
 		}
 		if v.Error != nil {
 			resp.Error = v.Error.Error()
@@ -401,11 +465,11 @@ func (s *Server) handleSingleTag(w http.ResponseWriter, plc *plcman.ManagedPLC, 
 	}
 
 	resp := TagResponse{
-		PLC:   plc.Config.Name,
-		Name:  tagName,
-		Alias: sel.Alias,
-		Type:  v.TypeName(),
-		Value: v.GoValue(),
+		PLC:    plc.Config.Name,
+		Name:   name,
+		Offset: offset,
+		Type:   v.TypeName(),
+		Value:  v.GoValue(),
 	}
 	if v.Error != nil {
 		resp.Error = v.Error.Error()
@@ -543,4 +607,42 @@ func (s *Server) handlePLCHealth(w http.ResponseWriter, plc *plcman.ManagedPLC) 
 	}
 
 	s.writeJSON(w, resp)
+}
+
+// handlePackList returns the list of all TagPacks.
+func (s *Server) handlePackList(w http.ResponseWriter) {
+	s.mu.RLock()
+	packMgr := s.packMgr
+	s.mu.RUnlock()
+
+	if packMgr == nil {
+		s.writeJSON(w, []tagpack.PackInfo{})
+		return
+	}
+
+	packs := packMgr.ListPacks()
+	if packs == nil {
+		packs = []tagpack.PackInfo{}
+	}
+	s.writeJSON(w, packs)
+}
+
+// handlePackDetails returns the current values for a specific TagPack.
+func (s *Server) handlePackDetails(w http.ResponseWriter, packName string) {
+	s.mu.RLock()
+	packMgr := s.packMgr
+	s.mu.RUnlock()
+
+	if packMgr == nil {
+		s.writeError(w, http.StatusNotFound, "pack not found")
+		return
+	}
+
+	pv := packMgr.GetPackValue(packName)
+	if pv == nil {
+		s.writeError(w, http.StatusNotFound, "pack not found")
+		return
+	}
+
+	s.writeJSON(w, pv)
 }

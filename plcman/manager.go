@@ -300,6 +300,11 @@ type ValueChange struct {
 	Value    interface{}
 	Writable bool
 	Family   string      // PLC family ("s7", "logix", "beckhoff", etc.)
+	// Service inhibit flags - when true, don't publish to that service
+	NoREST   bool
+	NoMQTT   bool
+	NoKafka  bool
+	NoValkey bool
 }
 
 // PollStats tracks polling statistics for debugging.
@@ -388,6 +393,11 @@ func (w *PLCWorker) poll() {
 	aliasMap := make(map[string]string)      // Tag name -> alias
 	typeMap := make(map[string]string)       // Tag name -> configured data type
 	ignoreMap := make(map[string][]string)   // Tag name -> list of members to ignore for change detection
+	// Service inhibit maps
+	noRESTMap := make(map[string]bool)
+	noMQTTMap := make(map[string]bool)
+	noKafkaMap := make(map[string]bool)
+	noValkeyMap := make(map[string]bool)
 
 	// For S7 family, normalize keys to uppercase since S7 addresses are case-insensitive
 	normalizeKey := func(s string) string {
@@ -404,6 +414,10 @@ func (w *PLCWorker) poll() {
 		key := normalizeKey(sel.Name)
 		writableMap[key] = sel.Writable
 		aliasMap[key] = sel.Alias
+		noRESTMap[key] = sel.NoREST
+		noMQTTMap[key] = sel.NoMQTT
+		noKafkaMap[key] = sel.NoKafka
+		noValkeyMap[key] = sel.NoValkey
 		if sel.DataType != "" {
 			typeMap[sel.Name] = sel.DataType // typeMap uses original name for driver
 		}
@@ -552,6 +566,10 @@ func (w *PLCWorker) poll() {
 					Value:    newVal,
 					Writable: writableMap[lookupKey],
 					Family:   string(family),
+					NoREST:   noRESTMap[lookupKey],
+					NoMQTT:   noMQTTMap[lookupKey],
+					NoKafka:  noKafkaMap[lookupKey],
+					NoValkey: noValkeyMap[lookupKey],
 				}
 				// For S7, set Address to uppercase version of TagName
 				if family == config.FamilyS7 {
@@ -1478,17 +1496,31 @@ func (m *Manager) GetTagValueChange(plcName, tagName string) *ValueChange {
 	defer plc.mu.RUnlock()
 
 	val, ok := plc.Values[tagName]
-	if !ok || val == nil || val.Error != nil {
+	if !ok {
+		logging.DebugLog("plcman", "GetTagValueChange: tag %s not in Values map for PLC %s", tagName, plcName)
+		return nil
+	}
+	if val == nil {
+		logging.DebugLog("plcman", "GetTagValueChange: tag %s has nil value for PLC %s", tagName, plcName)
+		return nil
+	}
+	if val.Error != nil {
+		logging.DebugLog("plcman", "GetTagValueChange: tag %s has error for PLC %s: %v", tagName, plcName, val.Error)
 		return nil
 	}
 
 	// Build lookup from config
 	var writable bool
 	var alias string
+	var noREST, noMQTT, noKafka, noValkey bool
 	for _, tag := range plc.Config.Tags {
 		if tag.Name == tagName {
 			writable = tag.Writable
 			alias = tag.Alias
+			noREST = tag.NoREST
+			noMQTT = tag.NoMQTT
+			noKafka = tag.NoKafka
+			noValkey = tag.NoValkey
 			break
 		}
 	}
@@ -1502,6 +1534,10 @@ func (m *Manager) GetTagValueChange(plcName, tagName string) *ValueChange {
 		Value:    val.GoValue(),
 		Writable: writable,
 		Family:   string(family),
+		NoREST:   noREST,
+		NoMQTT:   noMQTT,
+		NoKafka:  noKafka,
+		NoValkey: noValkey,
 	}
 
 	// For S7, set Address to uppercase version of TagName
@@ -1539,10 +1575,18 @@ func (m *Manager) GetAllCurrentValues() []ValueChange {
 		// Build lookup maps from config
 		writableMap := make(map[string]bool)
 		aliasMap := make(map[string]string)
+		noRESTMap := make(map[string]bool)
+		noMQTTMap := make(map[string]bool)
+		noKafkaMap := make(map[string]bool)
+		noValkeyMap := make(map[string]bool)
 		for _, tag := range plc.Config.Tags {
 			key := normalizeKey(tag.Name)
 			writableMap[key] = tag.Writable
 			aliasMap[key] = tag.Alias
+			noRESTMap[key] = tag.NoREST
+			noMQTTMap[key] = tag.NoMQTT
+			noKafkaMap[key] = tag.NoKafka
+			noValkeyMap[key] = tag.NoValkey
 		}
 		for tagName, val := range plc.Values {
 			if val != nil && val.Error == nil {
@@ -1555,6 +1599,10 @@ func (m *Manager) GetAllCurrentValues() []ValueChange {
 					Value:    val.GoValue(),
 					Writable: writableMap[lookupKey],
 					Family:   string(family),
+					NoREST:   noRESTMap[lookupKey],
+					NoMQTT:   noMQTTMap[lookupKey],
+					NoKafka:  noKafkaMap[lookupKey],
+					NoValkey: noValkeyMap[lookupKey],
 				}
 				// For S7, set Address to uppercase version of TagName
 				if family == config.FamilyS7 {

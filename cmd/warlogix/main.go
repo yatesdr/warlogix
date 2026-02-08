@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"warlogix/mqtt"
 	"warlogix/plcman"
 	"warlogix/ssh"
+	"warlogix/tagpack"
 	"warlogix/trigger"
 	"warlogix/tui"
 	"warlogix/valkey"
@@ -225,14 +227,39 @@ func runLocalMode(cfg *config.Config) {
 		})
 	}
 
+	// Create TagPack manager
+	packProvider := &plcDataProvider{manager: manager}
+	packMgr := tagpack.NewManager(cfg, packProvider)
+	packMgr.SetOnPublish(func(pv tagpack.PackValue, packCfg *config.TagPackConfig) {
+		data, err := json.Marshal(pv)
+		if err != nil {
+			tui.DebugLog("[TagPack] JSON marshal error: %v", err)
+			return
+		}
+		topic := packCfg.Topic
+		if packCfg.MQTTEnabled {
+			mqttMgr.PublishRaw(topic, data)
+		}
+		if packCfg.KafkaEnabled {
+			kafkaMgr.PublishRaw(topic, data)
+		}
+		if packCfg.ValkeyEnabled {
+			valkeyMgr.PublishRaw(topic, data)
+		}
+	})
+	packMgr.SetLogFunc(func(format string, args ...interface{}) {
+		tui.DebugLog(format, args...)
+	})
+
 	// Create trigger manager
 	tagReader := &plcman.TriggerTagReader{Manager: manager}
 	tagWriter := &plcman.TriggerTagWriter{Manager: manager}
 	triggerMgr := trigger.NewManager(kafkaMgr, tagReader, tagWriter)
 	triggerMgr.LoadFromConfig(cfg.Triggers)
+	triggerMgr.SetPackManager(packMgr)
 
 	// Set up publishing on value changes
-	setupValueChangeHandlers(manager, mqttMgr, valkeyMgr, kafkaMgr)
+	setupValueChangeHandlers(manager, mqttMgr, valkeyMgr, kafkaMgr, packMgr)
 
 	// Set up MQTT/Valkey write handling
 	setupWriteHandlers(cfg, manager, mqttMgr, valkeyMgr)
@@ -247,6 +274,8 @@ func runLocalMode(cfg *config.Config) {
 
 	// Create TUI app first (this sets up the debug logger)
 	app := tui.NewApp(cfg, *configPath, manager, apiServer, mqttMgr, valkeyMgr, kafkaMgr, triggerMgr)
+	app.SetPackManager(packMgr)
+	apiServer.SetPackManager(packMgr)
 
 	// Set up file logging if specified
 	if *logFile != "" {
@@ -374,14 +403,39 @@ func runDaemonMode(cfg *config.Config) {
 		})
 	}
 
+	// Create TagPack manager
+	packProviderDaemon := &plcDataProvider{manager: manager}
+	packMgrDaemon := tagpack.NewManager(cfg, packProviderDaemon)
+	packMgrDaemon.SetOnPublish(func(pv tagpack.PackValue, packCfg *config.TagPackConfig) {
+		data, err := json.Marshal(pv)
+		if err != nil {
+			tui.DebugLog("[TagPack] JSON marshal error: %v", err)
+			return
+		}
+		topic := packCfg.Topic
+		if packCfg.MQTTEnabled {
+			mqttMgr.PublishRaw(topic, data)
+		}
+		if packCfg.KafkaEnabled {
+			kafkaMgr.PublishRaw(topic, data)
+		}
+		if packCfg.ValkeyEnabled {
+			valkeyMgr.PublishRaw(topic, data)
+		}
+	})
+	packMgrDaemon.SetLogFunc(func(format string, args ...interface{}) {
+		tui.DebugLog(format, args...)
+	})
+
 	// Create trigger manager
 	tagReader := &plcman.TriggerTagReader{Manager: manager}
 	tagWriter := &plcman.TriggerTagWriter{Manager: manager}
 	triggerMgr := trigger.NewManager(kafkaMgr, tagReader, tagWriter)
 	triggerMgr.LoadFromConfig(cfg.Triggers)
+	triggerMgr.SetPackManager(packMgrDaemon)
 
 	// Set up publishing on value changes
-	setupValueChangeHandlers(manager, mqttMgr, valkeyMgr, kafkaMgr)
+	setupValueChangeHandlers(manager, mqttMgr, valkeyMgr, kafkaMgr, packMgrDaemon)
 
 	// Set up MQTT/Valkey write handling
 	setupWriteHandlers(cfg, manager, mqttMgr, valkeyMgr)
@@ -414,6 +468,8 @@ func runDaemonMode(cfg *config.Config) {
 		sshServer.Stop()
 		os.Exit(1)
 	}
+	app.SetPackManager(packMgrDaemon)
+	apiServer.SetPackManager(packMgrDaemon)
 
 	// Set up file logging if specified
 	var fileLogger *logging.FileLogger
@@ -561,7 +617,7 @@ func runDaemonMode(cfg *config.Config) {
 }
 
 // setupValueChangeHandlers sets up the value change callback for publishing to MQTT, Valkey, and Kafka.
-func setupValueChangeHandlers(manager *plcman.Manager, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager) {
+func setupValueChangeHandlers(manager *plcman.Manager, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, packMgr *tagpack.Manager) {
 	manager.SetOnValueChange(func(changes []plcman.ValueChange) {
 		mqttRunning := mqttMgr.AnyRunning()
 		valkeyRunning := valkeyMgr.AnyRunning()
@@ -570,17 +626,28 @@ func setupValueChangeHandlers(manager *plcman.Manager, mqttMgr *mqtt.Manager, va
 		tui.DebugLog("OnValueChange: %d changes, MQTT: %v, Valkey: %v, Kafka: %v",
 			len(changes), mqttRunning, valkeyRunning, kafkaPublishing)
 
+		changesCopy := make([]plcman.ValueChange, len(changes))
+		copy(changesCopy, changes)
+
+		// Notify TagPack manager of changes (grouped by PLC)
+		changesByPLC := make(map[string][]string)
+		for _, c := range changesCopy {
+			changesByPLC[c.PLCName] = append(changesByPLC[c.PLCName], c.TagName)
+		}
+		for plcName, tags := range changesByPLC {
+			packMgr.OnTagChanges(plcName, tags)
+		}
+
 		if !mqttRunning && !valkeyRunning && !kafkaPublishing {
 			return
 		}
 
-		changesCopy := make([]plcman.ValueChange, len(changes))
-		copy(changesCopy, changes)
-
 		if mqttRunning {
 			go func() {
 				for _, c := range changesCopy {
-					mqttMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, true)
+					if !c.NoMQTT {
+						mqttMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, true)
+					}
 				}
 			}()
 		}
@@ -588,7 +655,9 @@ func setupValueChangeHandlers(manager *plcman.Manager, mqttMgr *mqtt.Manager, va
 		if valkeyRunning {
 			go func() {
 				for _, c := range changesCopy {
-					valkeyMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, c.Writable)
+					if !c.NoValkey {
+						valkeyMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, c.Writable)
+					}
 				}
 			}()
 		}
@@ -596,7 +665,9 @@ func setupValueChangeHandlers(manager *plcman.Manager, mqttMgr *mqtt.Manager, va
 		if kafkaPublishing {
 			go func() {
 				for _, c := range changesCopy {
-					kafkaMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, c.Writable, true)
+					if !c.NoKafka {
+						kafkaMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, c.Writable, true)
+					}
 				}
 			}()
 		}
@@ -652,4 +723,38 @@ func setupWriteHandlers(cfg *config.Config, manager *plcman.Manager, mqttMgr *mq
 	valkeyMgr.SetTagTypeLookup(func(plcName, tagName string) uint16 {
 		return manager.GetTagType(plcName, tagName)
 	})
+}
+
+// plcDataProvider implements tagpack.PLCDataProvider using the PLC manager.
+type plcDataProvider struct {
+	manager *plcman.Manager
+}
+
+// GetTagValue returns the current value, type name, and alias for a tag.
+func (p *plcDataProvider) GetTagValue(plcName, tagName string) (value interface{}, typeName, alias string, ok bool) {
+	vc := p.manager.GetTagValueChange(plcName, tagName)
+	if vc == nil {
+		return nil, "", "", false
+	}
+	return vc.Value, vc.TypeName, vc.Alias, true
+}
+
+// GetPLCMetadata returns metadata about a PLC.
+func (p *plcDataProvider) GetPLCMetadata(plcName string) tagpack.PLCMetadata {
+	plc := p.manager.GetPLC(plcName)
+	if plc == nil {
+		return tagpack.PLCMetadata{}
+	}
+
+	meta := tagpack.PLCMetadata{
+		Address:   plc.Config.Address,
+		Family:    string(plc.Config.GetFamily()),
+		Connected: plc.GetStatus() == plcman.StatusConnected,
+	}
+
+	if err := plc.GetError(); err != nil {
+		meta.Error = err.Error()
+	}
+
+	return meta
 }

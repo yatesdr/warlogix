@@ -35,6 +35,7 @@ var knownProtocols = []string{
 	"tui",
 	"eip",
 	"plcman",
+	"tagpack",
 	"debug",
 }
 

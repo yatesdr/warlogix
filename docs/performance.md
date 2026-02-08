@@ -56,15 +56,17 @@ Valkey/ValkeyServer1:
 
 ### Real-World Capacity
 
-With change filtering (only publishing when values change), real-world message rates are typically much lower than stress test maximums:
+With change filtering (only publishing when values change), real-world message rates are typically much lower than stress test maximums.
+
+**Note:** WarLogix enforces a minimum poll rate of 250ms (4Hz max) to protect PLCs. The default is 1000ms (1Hz), with 500ms (2Hz) being typical for active monitoring.
 
 | Scenario | Tag Changes/sec | Kafka | MQTT | Valkey |
 |----------|----------------|-------|------|--------|
-| 10 PLCs @ 10Hz, 10% change rate | 1,000 | 290x headroom | 32x | 45x |
-| 50 PLCs @ 10Hz, 10% change rate | 5,000 | 58x headroom | 6x | 9x |
-| 100 PLCs @ 10Hz, 20% change rate | 20,000 | 14x headroom | 1.6x | 2.2x |
+| 10 PLCs @ 2Hz, 10% change rate | 200 | 1,454x headroom | 162x | 224x |
+| 50 PLCs @ 2Hz, 10% change rate | 1,000 | 290x headroom | 32x | 45x |
+| 100 PLCs @ 2Hz, 20% change rate | 4,000 | 72x headroom | 8x | 11x |
 
-All three brokers provide sufficient capacity for typical industrial deployments. Choose based on your infrastructure requirements, not raw throughput numbers.
+All three brokers provide substantial capacity for typical industrial deployments. Choose based on your infrastructure requirements, not raw throughput numbers.
 
 ## PLC Read Performance
 
@@ -72,22 +74,28 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 ### Allen-Bradley (Logix)
 
-**Batching:** Yes - scalar tags are batched into Multiple Service Packet requests.
+**Batching:** Yes - tags are batched into Multiple Service Packet requests.
 
 | Mode | Batch Size | Typical Throughput |
 |------|------------|-------------------|
 | Connected (Forward Open) | Up to 50 tags | 500-2,000 tags/sec |
 | Unconnected | Up to 5 tags | 50-200 tags/sec |
 
+**How Batching Works:**
+
+- **Scalar tags** (DINT, REAL, BOOL, etc.) are batched together efficiently
+- **UDT/Structure tags** are read separately from scalars, but their members are batched (up to 50 members per request)
+- **Arrays** require size-appropriate reads and may be fragmented for large arrays
+
 **Optimization Tips:**
 
 1. **Enable Connected Messaging** - WarLogix attempts Forward Open automatically. Connected mode is ~10x faster than unconnected.
 
-2. **Group Scalar Tags** - Scalars (DINT, REAL, BOOL) batch efficiently. Arrays and structures read individually.
+2. **Prefer Scalars Over UDTs** - While UDT members are batched, reading individual scalar tags is slightly more efficient than UDT member expansion.
 
 3. **Minimize Large Arrays** - Large arrays require fragmented reads. Consider reading only needed elements.
 
-4. **Use Appropriate Poll Rates** - 100-500ms is typical. Faster polling increases PLC CPU load.
+4. **Use Appropriate Poll Rates** - 250ms-1s is typical (250ms minimum). Faster polling increases PLC CPU load.
 
 **Micro800 Note:** Micro800 series doesn't support Multiple Service Packet. All reads are individual, limiting throughput to ~50-100 tags/sec.
 
@@ -113,7 +121,7 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 5. **Large Arrays** - Arrays exceeding PDU size are automatically chunked, but this adds round-trips.
 
-### Omron FINS
+### Omron FINS (CS/CJ/CP Series)
 
 **Batching:** No - each tag is read individually.
 
@@ -121,7 +129,8 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 |-----------|-------------------|
 | FINS/TCP | 50-200 tags/sec |
 | FINS/UDP | 30-150 tags/sec |
-| EIP (NJ/NX) | 100-300 tags/sec |
+
+**Supported PLC Series:** CS1, CJ1, CJ2, CP1, and other FINS-compatible PLCs.
 
 **Optimization Tips:**
 
@@ -129,11 +138,34 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 2. **Minimize Tag Count** - Without batching, read time scales linearly with tag count.
 
-3. **Use EIP for NJ/NX** - NJ/NX series support EtherNet/IP which may perform better than FINS.
+3. **Group Memory Areas** - Reads within the same area (DM, CIO, WR) are slightly more efficient.
 
-4. **Group Memory Areas** - Reads within the same area (DM, CIO, WR) are slightly more efficient.
+4. **Consider Larger Poll Intervals** - 500ms-1s may be more appropriate given individual read limitations.
 
-5. **Consider Larger Poll Intervals** - 500ms-1s may be more appropriate given individual read limitations.
+### Omron EIP/CIP (NJ/NX Series)
+
+**Batching:** No - each tag is read individually (batching planned for future release).
+
+| Mode | Typical Throughput |
+|------|-------------------|
+| Unconnected | 100-300 tags/sec |
+
+**Supported PLC Series:** NJ series (NJ101, NJ301, NJ501), NX series (NX1, NX102, NX502, NX702), and other EtherNet/IP-compatible Omron PLCs.
+
+**Protocol Notes:**
+
+- Uses CIP (Common Industrial Protocol) over EtherNet/IP, similar to Allen-Bradley Logix
+- Symbolic tag addressing (tag names, not memory addresses)
+- Supports tag discovery (automatic enumeration of available tags)
+- Port 44818 (standard EtherNet/IP port)
+
+**Optimization Tips:**
+
+1. **Use EIP for NJ/NX** - Prefer EIP protocol over FINS for NJ/NX series; it provides symbolic addressing and tag discovery.
+
+2. **Minimize Tag Count** - Without batching, read time scales linearly with tag count.
+
+3. **Consider Larger Poll Intervals** - 500ms-1s recommended until batching is implemented.
 
 ### Beckhoff TwinCAT (ADS)
 
@@ -160,21 +192,24 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 | PLC Family | Batching | Relative Speed | Best For |
 |------------|----------|---------------|----------|
-| **Allen-Bradley Logix** | Scalars only | Fast | Mixed scalar/array workloads |
+| **Allen-Bradley Logix** | Scalars + UDT members | Fast | Mixed scalar/array workloads |
 | **Siemens S7** | Aggressive | Fast | Homogeneous DB reads |
-| **Omron FINS** | None | Slow | Small tag counts (<50) |
+| **Omron FINS** (CS/CJ) | None | Slow | Small tag counts (<50) |
+| **Omron EIP** (NJ/NX) | None (planned) | Moderate | Symbolic tag access, discovery |
 | **Beckhoff ADS** | Full (SumUp) | Fastest | Large tag counts |
 
 ## System Optimization
 
 ### Poll Rate Selection
 
+WarLogix enforces a minimum poll rate of 250ms to protect PLCs from excessive polling. The default is 1000ms (1 second).
+
 | Use Case | Recommended Poll Rate |
 |----------|----------------------|
-| Fast-changing process values | 50-100ms |
-| Standard monitoring | 100-500ms |
+| Fast-changing process values | 250-500ms |
+| Standard monitoring | 500ms-1s |
 | Slow-changing values | 1-5s |
-| Status/diagnostic data | 5-30s |
+| Status/diagnostic data | 5-10s |
 
 Faster poll rates increase:
 - PLC CPU utilization
@@ -216,7 +251,7 @@ WarLogix only publishes when values change. To reduce message volume:
 ### Memory and CPU
 
 - **Memory** - ~1KB per monitored tag for caching and state.
-- **CPU** - Dominated by JSON serialization; ~1-5% per 1,000 tags at 10Hz.
+- **CPU** - Dominated by JSON serialization; ~1-2% per 1,000 tags at 2Hz.
 
 For very large deployments (>10,000 tags), consider:
 - Multiple WarLogix instances with tag partitioning

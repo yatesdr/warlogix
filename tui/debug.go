@@ -16,6 +16,7 @@ type DebugTab struct {
 	flex       *tview.Flex
 	logView    *tview.TextView
 	statusBar  *tview.TextView
+	buttonBar  *tview.TextView
 	messages   []string
 	mu         sync.Mutex
 	maxLines   int
@@ -38,6 +39,12 @@ func NewDebugTab(app *App) *DebugTab {
 }
 
 func (t *DebugTab) setupUI() {
+	// Button bar
+	t.buttonBar = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	t.updateButtonBar()
+
 	// Log view
 	t.logView = tview.NewTextView().
 		SetDynamicColors(true).
@@ -63,15 +70,16 @@ func (t *DebugTab) setupUI() {
 		return event
 	})
 
-	// Status bar (themed)
+	// Status bar
 	t.statusBar = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextColor(CurrentTheme.Text)
 	t.updateStatusBar()
 
-	// Main layout
+	// Main layout - buttonBar at top, outside frames
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
+		AddItem(t.buttonBar, 1, 0, false).
 		AddItem(t.logView, 0, 1, true).
 		AddItem(t.statusBar, 1, 0, false)
 }
@@ -169,9 +177,10 @@ func (t *DebugTab) buildText() string {
 // Clear clears the debug log.
 func (t *DebugTab) Clear() {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.messages = make([]string, 0)
 	t.logView.SetText("")
+	t.mu.Unlock()
+	t.updateStatusBar()
 }
 
 // GetPrimitive returns the main primitive for this tab.
@@ -201,6 +210,7 @@ func (t *DebugTab) Refresh() {
 		t.logView.SetText(text)
 		t.logView.ScrollToEnd()
 	}
+	t.statusBar.SetText(fmt.Sprintf(" %d log lines (max %d)", msgCount, t.maxLines))
 }
 
 // DebugLog logs a message to the debug tab if it exists.
@@ -278,20 +288,27 @@ func SetDebugFileLogger(logger *logging.FileLogger) {
 }
 
 func (t *DebugTab) updateStatusBar() {
+	t.mu.Lock()
+	lineCount := len(t.messages)
+	t.mu.Unlock()
+	t.statusBar.SetText(fmt.Sprintf(" %d log lines (max %d)", lineCount, t.maxLines))
+}
+
+func (t *DebugTab) updateButtonBar() {
 	th := CurrentTheme
-	statusText := fmt.Sprintf(" %sc%s clear  %sg%s top  %sG%s bottom  %s↑↓%s scroll  %s│%s  %s?%s help  %sShift+Tab%s next tab%s",
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText,
-		th.TagActionText, th.TagActionText,
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText, th.TagReset)
-	t.statusBar.SetText(statusText)
+	buttonText := " " + th.TagHotkey + "c" + th.TagActionText + "lear  " +
+		th.TagHotkey + "g" + th.TagActionText + " top  " +
+		th.TagHotkey + "G" + th.TagActionText + " bottom  " +
+		th.TagHotkey + "↑↓" + th.TagActionText + " scroll  " +
+		th.TagActionText + "│  " +
+		th.TagHotkey + "?" + th.TagActionText + " help  " +
+		th.TagHotkey + "Shift+Tab" + th.TagActionText + " next tab " + th.TagReset
+	t.buttonBar.SetText(buttonText)
 }
 
 // RefreshTheme updates theme-dependent UI elements.
 func (t *DebugTab) RefreshTheme() {
+	t.updateButtonBar()
 	t.updateStatusBar()
 	th := CurrentTheme
 	t.logView.SetBorderColor(th.Border).SetTitleColor(th.Accent)

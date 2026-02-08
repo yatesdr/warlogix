@@ -8,6 +8,7 @@ import (
 
 	"warlogix/config"
 	"warlogix/kafka"
+	"warlogix/tagpack"
 )
 
 // Status represents the current state of a trigger.
@@ -57,6 +58,7 @@ type Trigger struct {
 	config    *config.TriggerConfig
 	condition *Condition
 	kafka     *kafka.Manager
+	packMgr   *tagpack.Manager
 	reader    TagReader
 	writer    TagWriter
 
@@ -107,6 +109,13 @@ func (t *Trigger) SetLogFunc(fn func(format string, args ...interface{})) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.logFn = fn
+}
+
+// SetPackManager sets the TagPack manager for publishing packs on trigger fire.
+func (t *Trigger) SetPackManager(packMgr *tagpack.Manager) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.packMgr = packMgr
 }
 
 func (t *Trigger) log(format string, args ...interface{}) {
@@ -325,7 +334,14 @@ func (t *Trigger) fire() {
 	t.lastFire = time.Now()
 	t.status = StatusCooldown
 	t.lastErr = nil
+	packMgr := t.packMgr
 	t.mu.Unlock()
+
+	// Publish TagPack immediately if configured
+	if t.config.PublishPack != "" && packMgr != nil {
+		packMgr.PublishPackImmediate(t.config.PublishPack)
+		t.log("published pack '%s'", t.config.PublishPack)
+	}
 
 	// Write ack tag with success value (1) if configured
 	if t.config.AckTag != "" && t.writer != nil {

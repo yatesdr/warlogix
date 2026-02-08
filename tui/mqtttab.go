@@ -31,7 +31,7 @@ func NewMQTTTab(app *App) *MQTTTab {
 }
 
 func (t *MQTTTab) setupUI() {
-	// Button bar (themed)
+	// Button bar (themed) - at top, outside frame
 	t.buttonBar = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
@@ -56,9 +56,9 @@ func (t *MQTTTab) setupUI() {
 			SetAttributes(tcell.AttrBold))
 	}
 
+	// Table with frame
 	t.tableBox = tview.NewFlex().SetDirection(tview.FlexRow)
 	t.tableBox.SetBorder(true).SetTitle(" MQTT Brokers ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
-	t.tableBox.AddItem(t.buttonBar, 1, 0, false)
 	t.tableBox.AddItem(t.table, 0, 1, true)
 
 	// Info panel
@@ -73,9 +73,10 @@ func (t *MQTTTab) setupUI() {
 		SetDynamicColors(true).
 		SetTextColor(CurrentTheme.Text)
 
-	// Main layout
+	// Main layout - buttonBar at top, outside frames
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
+		AddItem(t.buttonBar, 1, 0, false).
 		AddItem(t.tableBox, 0, 1, true).
 		AddItem(t.info, 8, 0, false).
 		AddItem(t.statusBar, 1, 0, false)
@@ -126,7 +127,7 @@ func (t *MQTTTab) updateInfo() {
 	text += "   {root_topic}/{plc_name}/tags/{tag_name}\n\n"
 	text += " " + th.TagAccent + "Message Format:" + th.TagReset + "\n"
 	text += "   {\"value\": <value>, \"type\": \"<type>\", \"timestamp\": \"<iso8601>\"}\n\n"
-	text += " " + th.Dim("Messages are retained and only published on value change") + "\n"
+	text += " " + th.Dim("Tag messages are retained and only published on value change") + "\n"
 
 	t.info.SetText(text)
 }

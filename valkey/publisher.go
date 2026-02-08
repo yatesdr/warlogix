@@ -29,11 +29,12 @@ func joinKey(segments ...string) string {
 }
 
 // TagMessage represents a tag value message stored in Valkey.
+// When a tag has an alias, Tag contains the alias and Offset contains the original address.
 type TagMessage struct {
 	Factory   string      `json:"factory"`
 	PLC       string      `json:"plc"`
 	Tag       string      `json:"tag"`
-	Address   string      `json:"address,omitempty"` // S7 address in uppercase (empty for non-S7)
+	Offset    string      `json:"offset,omitempty"` // Original tag name/address when alias is used
 	Value     interface{} `json:"value"`
 	Type      string      `json:"type"`
 	Writable  bool        `json:"writable"`
@@ -265,7 +266,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 		Factory:   cfg.Factory,
 		PLC:       plcName,
 		Tag:       displayTag,
-		Address:   address, // Empty for non-S7, uppercase address for S7
+		Offset:    address, // Original tag name/address when alias is used
 		Value:     value,
 		Type:      typeName,
 		Writable:  writable,
@@ -340,7 +341,7 @@ func (p *Publisher) PublishBatch(items []TagPublishItem) error {
 			Factory:   cfg.Factory,
 			PLC:       item.PLCName,
 			Tag:       displayTag,
-			Address:   item.Address,
+			Offset:    item.Address, // Original tag name/address when alias is used
 			Value:     item.Value,
 			Type:      item.TypeName,
 			Writable:  item.Writable,
@@ -547,6 +548,23 @@ func (p *Publisher) processWriteRequest(client *redis.Client, req WriteRequest, 
 	client.Publish(ctx, responseChannel, data)
 
 	debugLog("Valkey write %s:%s = %v -> success=%v", req.PLC, req.Tag, req.Value, response.Success)
+}
+
+// PublishRaw publishes raw bytes to a channel.
+// Used for TagPack publishing.
+func (p *Publisher) PublishRaw(channel string, data []byte) error {
+	p.mu.RLock()
+	if !p.running || p.client == nil {
+		p.mu.RUnlock()
+		return nil
+	}
+	client := p.client
+	p.mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	return client.Publish(ctx, channel, data).Err()
 }
 
 func debugLog(format string, args ...interface{}) {

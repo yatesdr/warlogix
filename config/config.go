@@ -61,8 +61,27 @@ type Config struct {
 	Valkey   []ValkeyConfig   `yaml:"valkey,omitempty"`
 	Kafka    []KafkaConfig    `yaml:"kafka,omitempty"`
 	Triggers []TriggerConfig  `yaml:"triggers,omitempty"`
+	TagPacks []TagPackConfig  `yaml:"tag_packs,omitempty"`
 	PollRate time.Duration    `yaml:"poll_rate"`
 	UI       UIConfig         `yaml:"ui,omitempty"`
+}
+
+// TagPackConfig holds configuration for a Tag Pack.
+type TagPackConfig struct {
+	Name          string          `yaml:"name"`
+	Enabled       bool            `yaml:"enabled"`
+	Topic         string          `yaml:"topic"`          // e.g., "packs/production"
+	MQTTEnabled   bool            `yaml:"mqtt_enabled"`
+	KafkaEnabled  bool            `yaml:"kafka_enabled"`
+	ValkeyEnabled bool            `yaml:"valkey_enabled"`
+	Members       []TagPackMember `yaml:"members"`
+}
+
+// TagPackMember represents a single tag in a TagPack.
+type TagPackMember struct {
+	PLC           string `yaml:"plc"`             // PLC name
+	Tag           string `yaml:"tag"`             // Tag name (uses alias if set)
+	IgnoreChanges bool   `yaml:"ignore_changes"`  // If true, changes to this tag don't trigger publish
 }
 
 // UIConfig stores user interface preferences.
@@ -149,6 +168,34 @@ type TagSelection struct {
 	Enabled       bool     `yaml:"enabled"`
 	Writable      bool     `yaml:"writable,omitempty"`
 	IgnoreChanges []string `yaml:"ignore_changes,omitempty"` // UDT member names to ignore for change detection
+	// Service inhibit flags - when true, tag is NOT published to that service
+	NoREST   bool `yaml:"no_rest,omitempty"`
+	NoMQTT   bool `yaml:"no_mqtt,omitempty"`
+	NoKafka  bool `yaml:"no_kafka,omitempty"`
+	NoValkey bool `yaml:"no_valkey,omitempty"`
+}
+
+// PublishesToAny returns true if the tag publishes to at least one service.
+func (t *TagSelection) PublishesToAny() bool {
+	return !t.NoREST || !t.NoMQTT || !t.NoKafka || !t.NoValkey
+}
+
+// GetEnabledServices returns a list of service names this tag publishes to.
+func (t *TagSelection) GetEnabledServices() []string {
+	var services []string
+	if !t.NoREST {
+		services = append(services, "REST")
+	}
+	if !t.NoMQTT {
+		services = append(services, "MQTT")
+	}
+	if !t.NoKafka {
+		services = append(services, "Kafka")
+	}
+	if !t.NoValkey {
+		services = append(services, "Valkey")
+	}
+	return services
 }
 
 // ShouldIgnoreMember returns true if the given member name is in the ignore list.
@@ -251,6 +298,7 @@ type TriggerConfig struct {
 	KafkaCluster string            `yaml:"kafka_cluster"`         // Kafka cluster name
 	Topic        string            `yaml:"topic"`                 // Kafka topic
 	Metadata     map[string]string `yaml:"metadata,omitempty"`    // Static metadata to include
+	PublishPack  string            `yaml:"publish_pack,omitempty"` // TagPack name to republish on trigger
 }
 
 // DefaultConfig returns a configuration with sensible defaults.
@@ -545,4 +593,54 @@ func (c *Config) UpdateTrigger(name string, updated TriggerConfig) bool {
 		}
 	}
 	return false
+}
+
+// FindTagPack returns the TagPack config with the given name, or nil if not found.
+func (c *Config) FindTagPack(name string) *TagPackConfig {
+	for i := range c.TagPacks {
+		if c.TagPacks[i].Name == name {
+			return &c.TagPacks[i]
+		}
+	}
+	return nil
+}
+
+// AddTagPack adds a new TagPack configuration.
+func (c *Config) AddTagPack(pack TagPackConfig) {
+	c.TagPacks = append(c.TagPacks, pack)
+}
+
+// RemoveTagPack removes a TagPack config by name.
+func (c *Config) RemoveTagPack(name string) bool {
+	for i, p := range c.TagPacks {
+		if p.Name == name {
+			c.TagPacks = append(c.TagPacks[:i], c.TagPacks[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateTagPack updates an existing TagPack configuration.
+func (c *Config) UpdateTagPack(name string, updated TagPackConfig) bool {
+	for i, p := range c.TagPacks {
+		if p.Name == name {
+			c.TagPacks[i] = updated
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultTagPackConfig returns a default TagPack configuration.
+func DefaultTagPackConfig(name string) TagPackConfig {
+	return TagPackConfig{
+		Name:          name,
+		Enabled:       true,
+		Topic:         "packs/" + name,
+		MQTTEnabled:   true,
+		KafkaEnabled:  false,
+		ValkeyEnabled: false,
+		Members:       []TagPackMember{},
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"warlogix/kafka"
 	"warlogix/mqtt"
 	"warlogix/plcman"
+	"warlogix/tagpack"
 	"warlogix/trigger"
 	"warlogix/valkey"
 )
@@ -26,12 +27,15 @@ type App struct {
 
 	plcsTab     *PLCsTab
 	browserTab  *BrowserTab
+	packsTab    *PacksTab
 	restTab     *RESTTab
 	mqttTab     *MQTTTab
 	valkeyTab   *ValkeyTab
 	kafkaTab    *KafkaTab
 	triggersTab *TriggersTab
 	debugTab    *DebugTab
+
+	packMgr *tagpack.Manager
 
 	manager    *plcman.Manager
 	apiServer  *api.Server
@@ -70,7 +74,7 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiS
 		valkeyMgr:  valkeyMgr,
 		kafkaMgr:   kafkaMgr,
 		triggerMgr: triggerMgr,
-		tabNames:   []string{TabPLCs, TabBrowser, TabREST, TabMQTT, TabValkey, TabKafka, TabTriggers, TabDebug},
+		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabREST, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 	}
 
@@ -96,7 +100,7 @@ func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Man
 		valkeyMgr:  valkeyMgr,
 		kafkaMgr:   kafkaMgr,
 		triggerMgr: triggerMgr,
-		tabNames:   []string{TabPLCs, TabBrowser, TabREST, TabMQTT, TabValkey, TabKafka, TabTriggers, TabDebug},
+		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabREST, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 		daemonMode: true,
 	}
@@ -136,7 +140,7 @@ func NewAppWithPTY(cfg *config.Config, configPath string, manager *plcman.Manage
 		valkeyMgr:  valkeyMgr,
 		kafkaMgr:   kafkaMgr,
 		triggerMgr: triggerMgr,
-		tabNames:   []string{TabPLCs, TabBrowser, TabREST, TabMQTT, TabValkey, TabKafka, TabTriggers, TabDebug},
+		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabREST, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 		daemonMode: true,
 	}
@@ -184,6 +188,7 @@ func (a *App) setupUI() {
 	// Create tab contents
 	a.plcsTab = NewPLCsTab(a)
 	a.browserTab = NewBrowserTab(a)
+	a.packsTab = NewPacksTab(a)
 	a.restTab = NewRESTTab(a)
 	a.mqttTab = NewMQTTTab(a)
 	a.valkeyTab = NewValkeyTab(a)
@@ -194,11 +199,12 @@ func (a *App) setupUI() {
 	// Add pages
 	a.pages.AddPage(TabPLCs, a.plcsTab.GetPrimitive(), true, true)
 	a.pages.AddPage(TabBrowser, a.browserTab.GetPrimitive(), true, false)
+	a.pages.AddPage(TabPacks, a.packsTab.GetPrimitive(), true, false)
+	a.pages.AddPage(TabTriggers, a.triggersTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabREST, a.restTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabMQTT, a.mqttTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabValkey, a.valkeyTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabKafka, a.kafkaTab.GetPrimitive(), true, false)
-	a.pages.AddPage(TabTriggers, a.triggersTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabDebug, a.debugTab.GetPrimitive(), true, false)
 
 	// Create bottom bar with status (left) and theme indicator (right)
@@ -236,7 +242,7 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	frontPage, _ := a.pages.GetFrontPage()
 
 	// List of known tab pages - anything else is considered a modal
-	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabREST || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabKafka || frontPage == TabTriggers || frontPage == TabDebug
+	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabPacks || frontPage == TabTriggers || frontPage == TabREST || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabKafka || frontPage == TabDebug
 
 	// Don't intercept keys (including Shift-Q) when a modal/form is open
 	if !isMainTab {
@@ -314,16 +320,18 @@ func (a *App) focusCurrentTab() {
 	case 1:
 		a.app.SetFocus(a.browserTab.GetFocusable())
 	case 2:
-		a.app.SetFocus(a.restTab.GetFocusable())
+		a.app.SetFocus(a.packsTab.GetFocusable())
 	case 3:
-		a.app.SetFocus(a.mqttTab.GetFocusable())
-	case 4:
-		a.app.SetFocus(a.valkeyTab.GetFocusable())
-	case 5:
-		a.app.SetFocus(a.kafkaTab.GetFocusable())
-	case 6:
 		a.app.SetFocus(a.triggersTab.GetFocusable())
+	case 4:
+		a.app.SetFocus(a.restTab.GetFocusable())
+	case 5:
+		a.app.SetFocus(a.mqttTab.GetFocusable())
+	case 6:
+		a.app.SetFocus(a.valkeyTab.GetFocusable())
 	case 7:
+		a.app.SetFocus(a.kafkaTab.GetFocusable())
+	case 8:
 		a.app.SetFocus(a.debugTab.GetFocusable())
 	}
 }
@@ -333,7 +341,12 @@ func (a *App) updateTabsDisplay() {
 	text := ""
 	for i, name := range a.tabNames {
 		if i > 0 {
-			text += th.TagTextDim + "  │  " + th.TagReset
+			// Use diamond separator between PLC-side tabs (Triggers) and Services (REST)
+			if name == TabREST {
+				text += th.TagTextDim + "  │ " + th.TagAccent + "◆" + th.TagTextDim + " │  " + th.TagReset
+			} else {
+				text += th.TagTextDim + "  │  " + th.TagReset
+			}
 		}
 		if i == a.currentTab {
 			// TagAccent is "[#RRGGBB]", need to insert "::b" before the closing bracket
@@ -472,9 +485,10 @@ func (a *App) periodicRefresh() {
 				// Skip refresh if a modal dialog is open to avoid interference with form input
 				frontPage, _ := a.pages.GetFrontPage()
 				isModalOpen := frontPage != TabPLCs && frontPage != TabBrowser &&
+					frontPage != TabPacks && frontPage != TabTriggers &&
 					frontPage != TabREST && frontPage != TabMQTT &&
 					frontPage != TabValkey && frontPage != TabKafka &&
-					frontPage != TabTriggers && frontPage != TabDebug
+					frontPage != TabDebug
 
 				// Only refresh if tabs are initialized and no modal is open
 				if a.debugTab != nil {
@@ -484,17 +498,20 @@ func (a *App) periodicRefresh() {
 				if isModalOpen {
 					return
 				}
-				if a.mqttTab != nil && a.currentTab == 3 {
+				if a.packsTab != nil && a.currentTab == 2 {
+					a.packsTab.Refresh()
+				}
+				if a.triggersTab != nil && a.currentTab == 3 {
+					a.triggersTab.Refresh()
+				}
+				if a.mqttTab != nil && a.currentTab == 5 {
 					a.mqttTab.Refresh()
 				}
-				if a.valkeyTab != nil && a.currentTab == 4 {
+				if a.valkeyTab != nil && a.currentTab == 6 {
 					a.valkeyTab.Refresh()
 				}
-				if a.kafkaTab != nil && a.currentTab == 5 {
+				if a.kafkaTab != nil && a.currentTab == 7 {
 					a.kafkaTab.Refresh()
-				}
-				if a.triggersTab != nil && a.currentTab == 6 {
-					a.triggersTab.Refresh()
 				}
 			})
 		}
@@ -628,8 +645,14 @@ func (a *App) QueueUpdateDraw(f func()) {
 	a.app.QueueUpdateDraw(f)
 }
 
-// ForcePublishTag publishes a single tag's current value to all services (MQTT, Valkey, Kafka).
+// SetPackManager sets the TagPack manager for the app.
+func (a *App) SetPackManager(mgr *tagpack.Manager) {
+	a.packMgr = mgr
+}
+
+// ForcePublishTag publishes a single tag's current value to enabled services (MQTT, Valkey, Kafka).
 // This is called when a tag is newly enabled to publish its current value immediately.
+// Respects per-tag service inhibit flags (NoMQTT, NoValkey, NoKafka).
 func (a *App) ForcePublishTag(plcName, tagName string) {
 	v := a.manager.GetTagValueChange(plcName, tagName)
 	if v == nil {
@@ -638,39 +661,54 @@ func (a *App) ForcePublishTag(plcName, tagName string) {
 
 	DebugLog("ForcePublishTag: publishing %s.%s", plcName, tagName)
 
-	// Publish to all services with force=true
-	a.mqttMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, true)
-	a.valkeyMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable)
-	a.kafkaMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable, true)
+	// Publish to enabled services with force=true, respecting inhibit flags
+	if !v.NoMQTT {
+		a.mqttMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, true)
+	}
+	if !v.NoValkey {
+		a.valkeyMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable)
+	}
+	if !v.NoKafka {
+		a.kafkaMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable, true)
+	}
 }
 
 // ForcePublishAllValues publishes all current tag values to MQTT brokers.
 // This is called when an MQTT broker connects to do an initial sync.
+// Respects per-tag NoMQTT inhibit flag.
 func (a *App) ForcePublishAllValues() {
 	values := a.manager.GetAllCurrentValues()
 	DebugLogMQTT("ForcePublishAllValues: publishing %d values", len(values))
 	for _, v := range values {
-		a.mqttMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, true)
+		if !v.NoMQTT {
+			a.mqttMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, true)
+		}
 	}
 }
 
 // ForcePublishAllValuesToValkey publishes all current tag values to Valkey servers.
 // This is called when a Valkey server connects to do an initial sync.
+// Respects per-tag NoValkey inhibit flag.
 func (a *App) ForcePublishAllValuesToValkey() {
 	values := a.manager.GetAllCurrentValues()
 	DebugLogValkey("ForcePublishAllValuesToValkey: publishing %d values", len(values))
 	for _, v := range values {
-		a.valkeyMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable)
+		if !v.NoValkey {
+			a.valkeyMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable)
+		}
 	}
 }
 
 // ForcePublishAllValuesToKafka publishes all current tag values to Kafka clusters.
 // This is called when a Kafka cluster connects with PublishChanges enabled.
+// Respects per-tag NoKafka inhibit flag.
 func (a *App) ForcePublishAllValuesToKafka() {
 	values := a.manager.GetAllCurrentValues()
 	DebugLog("ForcePublishAllValuesToKafka: publishing %d values", len(values))
 	for _, v := range values {
-		a.kafkaMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable, true)
+		if !v.NoKafka {
+			a.kafkaMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable, true)
+		}
 	}
 }
 
@@ -735,6 +773,9 @@ func (a *App) refreshAllThemes() {
 	}
 	if a.browserTab != nil {
 		a.browserTab.RefreshTheme()
+	}
+	if a.packsTab != nil {
+		a.packsTab.RefreshTheme()
 	}
 	if a.mqttTab != nil {
 		a.mqttTab.RefreshTheme()

@@ -28,10 +28,11 @@ func buildHealthTopic(baseTopic string) string {
 }
 
 // TagMessage is the JSON structure published to Kafka for tag changes.
+// When a tag has an alias, Tag contains the alias and Offset contains the original address.
 type TagMessage struct {
 	PLC       string      `json:"plc"`
 	Tag       string      `json:"tag"`
-	Address   string      `json:"address,omitempty"` // S7 address in uppercase (empty for non-S7)
+	Offset    string      `json:"offset,omitempty"` // Original tag name/address when alias is used
 	Value     interface{} `json:"value"`
 	Type      string      `json:"type,omitempty"`
 	Writable  bool        `json:"writable"`
@@ -444,7 +445,7 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 		msg := TagMessage{
 			PLC:       plcName,
 			Tag:       displayTag,
-			Address:   address, // S7 address in uppercase, empty for non-S7
+			Offset:    address, // Original tag name/address when alias is used
 			Value:     value,
 			Type:      typeName,
 			Writable:  writable,
@@ -560,4 +561,41 @@ func (m *Manager) ClearLastValues() {
 	m.lastMu.Lock()
 	m.lastValues = make(map[string]interface{})
 	m.lastMu.Unlock()
+}
+
+// PublishRaw publishes raw bytes to a topic on all connected clusters.
+// Used for TagPack publishing.
+func (m *Manager) PublishRaw(topic string, data []byte) {
+	m.startBatcher()
+
+	m.mu.RLock()
+	producers := make([]*Producer, 0, len(m.producers))
+	for _, p := range m.producers {
+		producers = append(producers, p)
+	}
+	m.mu.RUnlock()
+
+	for _, p := range producers {
+		if p.GetStatus() != StatusConnected {
+			continue
+		}
+
+		job := publishJob{
+			producer:  p,
+			topic:     sanitizeTopic(topic),
+			key:       []byte(topic),
+			payload:   data,
+			cacheKey:  "", // No caching for raw publishes
+			value:     nil,
+			queueTime: time.Now(),
+		}
+
+		select {
+		case m.batchChan <- job:
+			// Queued
+		case <-time.After(5 * time.Second):
+			logKafka("WARN: Batch queue blocked >5s for raw publish to %s", topic)
+			m.batchChan <- job
+		}
+	}
 }

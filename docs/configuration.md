@@ -175,10 +175,13 @@ ui:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `fins_port` | int | No | FINS UDP port (default: 9600) |
-| `fins_network` | int | No | FINS network number (default: 0) |
-| `fins_node` | int | No | FINS node number (default: 0) |
-| `fins_unit` | int | No | CPU unit number (default: 0) |
+| `protocol` | string | No | `fins` (default) or `eip` for NJ/NX series |
+| `fins_port` | int | No | FINS UDP port (default: 9600) - FINS only |
+| `fins_network` | int | No | FINS network number (default: 0) - FINS only |
+| `fins_node` | int | No | FINS node number (default: 0) - FINS only |
+| `fins_unit` | int | No | CPU unit number (default: 0) - FINS only |
+
+**Note:** Use `protocol: eip` for NJ/NX series PLCs. EIP uses symbolic tag names and supports automatic tag discovery. FINS fields are ignored when using EIP.
 
 ## Tag Configuration
 

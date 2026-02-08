@@ -27,6 +27,7 @@ type BrowserTab struct {
 	treeFrame *tview.Frame
 	details   *tview.TextView
 	statusBar *tview.TextView
+	buttonBar *tview.TextView
 
 	selectedPLC          string
 	lastPLCOptions       []string              // Track dropdown options to avoid unnecessary updates
@@ -54,6 +55,12 @@ func NewBrowserTab(app *App) *BrowserTab {
 }
 
 func (t *BrowserTab) setupUI() {
+	// Button bar
+	t.buttonBar = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter)
+	t.updateButtonBar()
+
 	// PLC dropdown
 	t.plcSelect = tview.NewDropDown().
 		SetLabel("PLC: ").
@@ -62,6 +69,7 @@ func (t *BrowserTab) setupUI() {
 	t.plcSelect.SetSelectedFunc(func(text string, index int) {
 		t.selectedPLC = text
 		t.loadTags()
+		t.updateButtonBar() // Update button bar based on PLC type (manual vs discovery)
 		// Only change focus if this was a user selection, not programmatic
 		if !t.updatingDropdown {
 			t.app.app.SetFocus(t.tree)
@@ -135,9 +143,10 @@ func (t *BrowserTab) setupUI() {
 		SetDynamicColors(true).
 		SetTextColor(CurrentTheme.Text)
 
-	// Main layout
+	// Main layout - buttonBar at top, outside frames
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
+		AddItem(t.buttonBar, 1, 0, false).
 		AddItem(header, 1, 0, false).
 		AddItem(content, 0, 1, true).
 		AddItem(t.statusBar, 1, 0, false)
@@ -229,6 +238,13 @@ func (t *BrowserTab) handleTreeKeys(event *tcell.EventKey) *tcell.EventKey {
 			if node != nil {
 				t.deleteManualTag(node)
 			}
+		}
+		return nil
+	case 's':
+		// Configure services for tag
+		node := t.tree.GetCurrentNode()
+		if node != nil {
+			t.showServicesDialog(node)
 		}
 		return nil
 	}
@@ -785,7 +801,23 @@ func (t *BrowserTab) showTagDetails(tag *driver.TagInfo) {
 	enabled := t.enabledTags[tag.Name]
 	writable := t.writableTags[tag.Name]
 	if enabled {
-		sb.WriteString("\n" + th.SuccessText(CheckboxChecked+" Publishing to REST/MQTT/Valkey"))
+		// Get enabled services for this tag
+		services := []string{"REST", "MQTT", "Kafka", "Valkey"} // default all
+		if cfg != nil {
+			for _, sel := range cfg.Tags {
+				if sel.Name == tag.Name {
+					services = sel.GetEnabledServices()
+					break
+				}
+			}
+		}
+		if len(services) == 0 {
+			sb.WriteString("\n" + th.Dim(CheckboxChecked+" Publishing disabled (no services)"))
+		} else if len(services) == 4 {
+			sb.WriteString("\n" + th.SuccessText(CheckboxChecked+" Publishing to all services"))
+		} else {
+			sb.WriteString("\n" + th.SuccessText(CheckboxChecked+" Publishing to "+strings.Join(services, ", ")))
+		}
 	} else {
 		sb.WriteString("\n" + th.Dim(CheckboxUnchecked+" Not publishing"))
 	}
@@ -1049,26 +1081,30 @@ func (t *BrowserTab) updateStatus() {
 		}
 	}
 
-	baseStatus := fmt.Sprintf(" %s%d tags selected | %s/%s filter  %sc%s clear  %sp%s PLC  %sSpace%s toggle  %sw%s writable  %si%s ignore  %sd%s details",
-		statusPrefix, count,
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText,
-		th.TagHotkey, th.TagActionText)
+	t.statusBar.SetText(fmt.Sprintf(" %s%d tags selected for publishing", statusPrefix, count))
+}
+
+func (t *BrowserTab) updateButtonBar() {
+	th := CurrentTheme
+	buttonText := " " + th.TagHotkey + "/" + th.TagActionText + " filter  " +
+		th.TagHotkey + "c" + th.TagActionText + "lear  " +
+		th.TagHotkey + "p" + th.TagActionText + "lc  " +
+		th.TagHotkey + "Space" + th.TagActionText + " toggle  " +
+		th.TagHotkey + "s" + th.TagActionText + "ervices  " +
+		th.TagHotkey + "w" + th.TagActionText + "ritable  " +
+		th.TagHotkey + "i" + th.TagActionText + "gnore  " +
+		th.TagHotkey + "d" + th.TagActionText + "etails"
 
 	// Add manual tag keys for non-discovery PLCs
 	if t.isManualPLC() {
-		baseStatus += fmt.Sprintf("  %sa%s add  %se%s edit  %sx%s delete",
-			th.TagHotkey, th.TagActionText,
-			th.TagHotkey, th.TagActionText,
-			th.TagHotkey, th.TagActionText)
+		buttonText += "  " + th.TagHotkey + "a" + th.TagActionText + "dd  " +
+			th.TagHotkey + "e" + th.TagActionText + "dit  " +
+			th.TagHotkey + "x" + th.TagActionText + " delete"
 	}
 
-	baseStatus += fmt.Sprintf("  %s│%s  %s?%s help", th.TagActionText, th.TagActionText, th.TagHotkey, th.TagActionText)
-	t.statusBar.SetText(baseStatus)
+	buttonText += "  " + th.TagActionText + "│  " +
+		th.TagHotkey + "?" + th.TagActionText + " help " + th.TagReset
+	t.buttonBar.SetText(buttonText)
 }
 
 // GetPrimitive returns the main primitive for this tab.
@@ -1083,6 +1119,7 @@ func (t *BrowserTab) GetFocusable() tview.Primitive {
 
 // RefreshTheme updates theme-dependent UI elements.
 func (t *BrowserTab) RefreshTheme() {
+	t.updateButtonBar()
 	t.updateStatus()
 	th := CurrentTheme
 	t.treeFrame.SetBorderColor(th.Border).SetTitleColor(th.Accent)
@@ -1147,6 +1184,7 @@ func (t *BrowserTab) Refresh() {
 			t.selectedPLC = text
 			t.lastConnectionStatus = 0 // Reset so next Refresh detects status
 			t.loadTags()
+			t.updateButtonBar() // Update button bar based on PLC type
 			// Only change focus if this was a user selection, not programmatic
 			if !t.updatingDropdown {
 				t.app.app.SetFocus(t.tree)
@@ -1161,6 +1199,7 @@ func (t *BrowserTab) Refresh() {
 			t.selectedPLC = options[0]
 			t.lastConnectionStatus = 0 // Reset so next Refresh detects status
 			t.loadTags()
+			t.updateButtonBar() // Update button bar based on PLC type
 		} else if len(options) == 0 {
 			t.selectedPLC = ""
 			t.lastConnectionStatus = 0
@@ -1315,16 +1354,34 @@ func (t *BrowserTab) loadTags() {
 	controllerTags := []driver.TagInfo{}
 	programTags := make(map[string][]driver.TagInfo)
 
+	// Build a set of known program prefixes for Beckhoff-style grouping
+	programPrefixes := make(map[string]bool)
+	for _, prog := range programs {
+		programPrefixes[prog+"."] = true
+	}
+
 	for _, tag := range tags {
 		if strings.HasPrefix(tag.Name, "Program:") {
-			// Extract program name
+			// Logix-style: "Program:MainProgram.tagname"
 			rest := strings.TrimPrefix(tag.Name, "Program:")
 			if idx := strings.Index(rest, "."); idx > 0 {
 				progName := rest[:idx]
 				programTags[progName] = append(programTags[progName], tag)
 			}
 		} else {
-			controllerTags = append(controllerTags, tag)
+			// Check for Beckhoff-style: "MAIN.tagname", "GVL.globalvar"
+			matched := false
+			for prefix := range programPrefixes {
+				if strings.HasPrefix(tag.Name, prefix) {
+					progName := strings.TrimSuffix(prefix, ".")
+					programTags[progName] = append(programTags[progName], tag)
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				controllerTags = append(controllerTags, tag)
+			}
 		}
 	}
 
@@ -1508,6 +1565,130 @@ func (t *BrowserTab) isManualPLC() bool {
 		return false
 	}
 	return !cfg.GetFamily().SupportsDiscovery()
+}
+
+// showServicesDialog shows a dialog to configure which services a tag publishes to.
+func (t *BrowserTab) showServicesDialog(node *tview.TreeNode) {
+	ref := node.GetReference()
+	if ref == nil {
+		return
+	}
+
+	tagInfo, ok := ref.(*driver.TagInfo)
+	if !ok {
+		return
+	}
+
+	tagName := tagInfo.Name
+
+	// Check if tag is enabled for publishing
+	if !t.enabledTags[tagName] {
+		t.app.setStatus("Enable tag for publishing first (Space)")
+		return
+	}
+
+	const pageName = "services"
+
+	// Get current settings
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg == nil {
+		return
+	}
+
+	// Find or initialize tag selection
+	var sel *config.TagSelection
+	for i := range cfg.Tags {
+		if cfg.Tags[i].Name == tagName {
+			sel = &cfg.Tags[i]
+			break
+		}
+	}
+
+	// If tag wasn't found in config, it should exist since it's enabled
+	if sel == nil {
+		t.app.setStatus("Tag configuration not found")
+		return
+	}
+
+	// Current state (inverted: NoREST means REST is unchecked)
+	restEnabled := !sel.NoREST
+	mqttEnabled := !sel.NoMQTT
+	kafkaEnabled := !sel.NoKafka
+	valkeyEnabled := !sel.NoValkey
+
+	form := tview.NewForm()
+	ApplyFormTheme(form)
+
+	// Truncate tag name for title if too long
+	displayName := tagName
+	if len(displayName) > 25 {
+		displayName = displayName[:22] + "..."
+	}
+	form.SetBorder(true).SetTitle(" Services: " + displayName + " ")
+
+	form.AddCheckbox("REST API", restEnabled, func(checked bool) {
+		restEnabled = checked
+	})
+	form.AddCheckbox("MQTT", mqttEnabled, func(checked bool) {
+		mqttEnabled = checked
+	})
+	form.AddCheckbox("Kafka", kafkaEnabled, func(checked bool) {
+		kafkaEnabled = checked
+	})
+	form.AddCheckbox("Valkey", valkeyEnabled, func(checked bool) {
+		valkeyEnabled = checked
+	})
+
+	form.AddButton("Save", func() {
+		// Update config with inverted values
+		sel.NoREST = !restEnabled
+		sel.NoMQTT = !mqttEnabled
+		sel.NoKafka = !kafkaEnabled
+		sel.NoValkey = !valkeyEnabled
+
+		t.app.SaveConfig()
+		t.app.pages.RemovePage(pageName)
+		t.app.app.SetFocus(t.tree)
+
+		// Update details pane
+		t.showTagDetails(tagInfo)
+
+		// Build status message
+		services := sel.GetEnabledServices()
+		if len(services) == 4 {
+			t.app.setStatus(fmt.Sprintf("%s: publishing to all services", tagName))
+		} else if len(services) == 0 {
+			t.app.setStatus(fmt.Sprintf("%s: publishing disabled (no services)", tagName))
+		} else {
+			t.app.setStatus(fmt.Sprintf("%s: publishing to %s", tagName, strings.Join(services, ", ")))
+		}
+	})
+
+	form.AddButton("Cancel", func() {
+		t.app.pages.RemovePage(pageName)
+		t.app.app.SetFocus(t.tree)
+	})
+
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			t.app.pages.RemovePage(pageName)
+			t.app.app.SetFocus(t.tree)
+			return nil
+		}
+		return event
+	})
+
+	// Center the form
+	flex := tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(form, 15, 0, true).
+			AddItem(nil, 0, 1, false), 45, 0, true).
+		AddItem(nil, 0, 1, false)
+
+	t.app.pages.AddPage(pageName, flex, true, true)
+	t.app.app.SetFocus(form)
 }
 
 // showAddTagDialog shows a dialog to add a manual tag.

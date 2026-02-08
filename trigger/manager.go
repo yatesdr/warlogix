@@ -7,12 +7,14 @@ import (
 
 	"warlogix/config"
 	"warlogix/kafka"
+	"warlogix/tagpack"
 )
 
 // Manager manages all configured triggers.
 type Manager struct {
 	triggers map[string]*Trigger
 	kafka    *kafka.Manager
+	packMgr  *tagpack.Manager
 	reader   TagReader
 	writer   TagWriter
 	mu       sync.RWMutex
@@ -28,6 +30,16 @@ func NewManager(kafkaMgr *kafka.Manager, reader TagReader, writer TagWriter) *Ma
 		reader:   reader,
 		writer:   writer,
 	}
+}
+
+// SetPackManager sets the TagPack manager for publishing packs on trigger fire.
+func (m *Manager) SetPackManager(packMgr *tagpack.Manager) {
+	m.mu.Lock()
+	m.packMgr = packMgr
+	for _, t := range m.triggers {
+		t.SetPackManager(packMgr)
+	}
+	m.mu.Unlock()
 }
 
 // SetLogFunc sets the logging callback for all triggers.
@@ -64,6 +76,7 @@ func (m *Manager) AddTrigger(cfg *config.TriggerConfig) error {
 	}
 
 	trigger.SetLogFunc(m.logFn)
+	trigger.SetPackManager(m.packMgr)
 	m.triggers[cfg.Name] = trigger
 
 	return nil

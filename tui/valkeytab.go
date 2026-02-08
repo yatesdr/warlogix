@@ -31,7 +31,7 @@ func NewValkeyTab(app *App) *ValkeyTab {
 }
 
 func (t *ValkeyTab) setupUI() {
-	// Button bar (themed)
+	// Button bar (themed) - at top, outside frame
 	t.buttonBar = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
@@ -56,9 +56,9 @@ func (t *ValkeyTab) setupUI() {
 			SetAttributes(tcell.AttrBold))
 	}
 
+	// Table with frame
 	t.tableBox = tview.NewFlex().SetDirection(tview.FlexRow)
 	t.tableBox.SetBorder(true).SetTitle(" Valkey Servers ").SetBorderColor(CurrentTheme.Border).SetTitleColor(CurrentTheme.Accent)
-	t.tableBox.AddItem(t.buttonBar, 1, 0, false)
 	t.tableBox.AddItem(t.table, 0, 1, true)
 
 	// Info panel
@@ -73,9 +73,10 @@ func (t *ValkeyTab) setupUI() {
 		SetDynamicColors(true).
 		SetTextColor(CurrentTheme.Text)
 
-	// Main layout
+	// Main layout - buttonBar at top, outside frames
 	t.flex = tview.NewFlex().
 		SetDirection(tview.FlexRow).
+		AddItem(t.buttonBar, 1, 0, false).
 		AddItem(t.tableBox, 0, 1, true).
 		AddItem(t.info, 10, 0, false).
 		AddItem(t.statusBar, 1, 0, false)

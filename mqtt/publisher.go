@@ -74,11 +74,12 @@ type Publisher struct {
 }
 
 // TagMessage is the JSON structure published to MQTT.
+// When a tag has an alias, Tag contains the alias and Offset contains the original address.
 type TagMessage struct {
 	Topic     string      `json:"topic"`
 	PLC       string      `json:"plc"`
 	Tag       string      `json:"tag"`
-	Address   string      `json:"address,omitempty"` // S7 address in uppercase (empty for non-S7)
+	Offset    string      `json:"offset,omitempty"` // Original tag name/address when alias is used
 	Value     interface{} `json:"value"`
 	Type      string      `json:"type,omitempty"`
 	Writable  bool        `json:"writable"`
@@ -353,7 +354,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 		Topic:     p.config.RootTopic,
 		PLC:       plcName,
 		Tag:       displayTag,
-		Address:   address, // Empty for non-S7, uppercase address for S7
+		Offset:    address, // Original tag name/address when alias is used
 		Value:     value,
 		Type:      typeName,
 		Writable:  writable,
@@ -370,6 +371,7 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 
 	// Async publish - don't block waiting for ack
 	// QoS 1 ensures the broker will retry, paho handles retries internally
+	// Retained so new subscribers get the last known value
 	token := client.Publish(topic, 1, true, payload)
 
 	// Update cache immediately (optimistic)
@@ -412,7 +414,7 @@ func (p *Publisher) PublishSync(plcName, tagName, alias, address, typeName strin
 		Topic:     p.config.RootTopic,
 		PLC:       plcName,
 		Tag:       displayTag,
-		Address:   address,
+		Offset:    address, // Original tag name/address when alias is used
 		Value:     value,
 		Type:      typeName,
 		Writable:  writable,
@@ -427,7 +429,8 @@ func (p *Publisher) PublishSync(plcName, tagName, alias, address, typeName strin
 	topic := p.BuildTopic(plcName, displayTag)
 
 	// Synchronous publish - wait for broker ack (QoS 1)
-	token := client.Publish(topic, 1, true, payload)
+	// Not retained - tag values update frequently and retained causes stale data
+	token := client.Publish(topic, 1, false, payload)
 	if !token.WaitTimeout(5 * time.Second) {
 		return false
 	}
@@ -462,7 +465,7 @@ func (p *Publisher) PublishHealth(plcName, driver string, online bool, status, e
 		return false
 	}
 
-	// Async publish for health updates
+	// Async publish for health updates (retained for last known state)
 	token := client.Publish(topic, 1, true, payload)
 
 	go func() {
@@ -1219,4 +1222,46 @@ func (m *Manager) UpdateWriteSubscriptions() {
 			pub.subscribeWriteTopics()
 		}
 	}
+}
+
+// PublishRaw publishes raw bytes to a topic on all running publishers.
+// Used for TagPack publishing.
+func (m *Manager) PublishRaw(topic string, data []byte) {
+	m.mu.RLock()
+	pubs := make([]*Publisher, 0, len(m.publishers))
+	for _, pub := range m.publishers {
+		pubs = append(pubs, pub)
+	}
+	m.mu.RUnlock()
+
+	for _, pub := range pubs {
+		if pub.IsRunning() {
+			pub.PublishRaw(topic, data)
+		}
+	}
+}
+
+// PublishRaw publishes raw bytes to a topic.
+func (p *Publisher) PublishRaw(topic string, data []byte) bool {
+	p.mu.RLock()
+	running := p.running
+	client := p.client
+	p.mu.RUnlock()
+
+	if !running || client == nil {
+		return false
+	}
+
+	// Retained so new subscribers get the last known value
+	token := client.Publish(topic, 1, true, data)
+
+	go func() {
+		if !token.WaitTimeout(5 * time.Second) {
+			logMQTT("PublishRaw timeout for topic %s", topic)
+		} else if token.Error() != nil {
+			logMQTT("PublishRaw error for topic %s: %v", topic, token.Error())
+		}
+	}()
+
+	return true
 }

@@ -9,7 +9,8 @@ This guide covers PLC-specific configuration, capabilities, and troubleshooting 
 | **Allen-Bradley** | ControlLogix (1756), CompactLogix (1769), Micro800 | Automatic | EtherNet/IP |
 | **Siemens** | S7-300/400/1200/1500 | Manual | S7comm |
 | **Beckhoff** | TwinCAT 2/3 | Automatic | ADS |
-| **Omron** | CJ/CS/CP/NJ/NX Series | Manual | FINS/UDP |
+| **Omron FINS** | CJ/CS/CP Series | Manual | FINS/TCP or FINS/UDP |
+| **Omron EIP** | NJ/NX Series | Automatic | EtherNet/IP (CIP) |
 
 ---
 
@@ -290,6 +291,76 @@ Tags must be configured manually with memory area and address:
 
 ---
 
+## Omron EIP (NJ/NX Series)
+
+### Overview
+
+Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Protocol), providing symbolic tag addressing and automatic tag discovery—similar to Allen-Bradley Logix PLCs.
+
+**Supported Models:**
+- **NJ Series:** NJ101, NJ301, NJ501
+- **NX Series:** NX1, NX102, NX502, NX702
+
+### PLC-Side Setup
+
+1. **Configure IP address** via Sysmac Studio
+2. **Enable EtherNet/IP** on the built-in port (enabled by default on most models)
+3. **Open firewall** for TCP port 44818 (EtherNet/IP)
+4. **Publish tags** - tags must be published/exposed for external access in Sysmac Studio
+
+### WarLogix Configuration
+
+```yaml
+- name: OmronNJ
+  address: 192.168.1.110
+  family: omron
+  protocol: eip           # Use EtherNet/IP instead of FINS
+  enabled: true
+  tags:
+    - name: ProductCount
+      enabled: true
+    - name: MotorSpeed
+      enabled: true
+    - name: AlarmStatus
+      enabled: true
+```
+
+### Key Differences from FINS
+
+| Feature | FINS (CS/CJ) | EIP (NJ/NX) |
+|---------|--------------|-------------|
+| **Tag Addressing** | Memory addresses (DM100, CIO50) | Symbolic names (ProductCount) |
+| **Tag Discovery** | Manual configuration | Automatic discovery |
+| **Data Types** | Explicit `data_type` required | Embedded in tag metadata |
+| **Port** | UDP 9600 | TCP 44818 |
+
+### Tag Addressing
+
+EIP uses symbolic tag names defined in the Sysmac Studio project:
+
+```yaml
+tags:
+  - name: MyVariable          # Simple variable
+    enabled: true
+  - name: MyArray[0]          # Array element
+    enabled: true
+  - name: MyStruct.Member     # Structure member
+    enabled: true
+```
+
+**Note:** Tag names are case-sensitive and must match exactly as defined in Sysmac Studio.
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Connection refused | Ensure port 44818 is open and EtherNet/IP is enabled |
+| Tag not found | Verify tag name matches exactly (case-sensitive) |
+| Discovery empty | Check that tags are published/exposed in Sysmac Studio |
+| Timeout | Check network connectivity and PLC power |
+
+---
+
 ## Data Types
 
 All PLC families support these common data types:
@@ -311,6 +382,7 @@ All PLC families support these common data types:
 |------------|------------|
 | Siemens S7 | Big-endian |
 | Omron FINS | Big-endian |
+| Omron EIP | Little-endian |
 | Allen-Bradley | Little-endian |
 | Beckhoff | Little-endian |
 

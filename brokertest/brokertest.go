@@ -705,7 +705,7 @@ func (r *Runner) printReport() {
 	fmt.Println("  WHAT THIS MEANS:")
 	fmt.Println("  - Throughput shows confirmed message delivery rate per broker")
 	fmt.Println("  - With change filtering, real-world rates depend on how often values change")
-	fmt.Println("  - Example: 50 PLCs polled at 10Hz with 10% value change rate = 5,000 msg/s")
+	fmt.Println("  - Example: 50 PLCs polled at 2Hz with 10% value change rate = 1,000 msg/s")
 	fmt.Println()
 	fmt.Println("  NOTE: This tests republishing throughput only, not PLC read performance.")
 	fmt.Println("  PLC reads may be substantially slower depending on network latency, PLC")
