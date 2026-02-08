@@ -275,6 +275,62 @@ func escapeTviewText(s string) string {
 	return result.String()
 }
 
+// buildDetailsString creates a summary of extra device info for display
+func buildDetailsString(dev driver.DiscoveredDevice) string {
+	var parts []string
+
+	// Protocol-specific important details first
+	switch dev.Family {
+	case config.FamilyBeckhoff:
+		// AMS Net ID is critical for Beckhoff
+		if amsNetId := dev.Extra["amsNetId"]; amsNetId != "" {
+			parts = append(parts, "AMS:"+amsNetId)
+		}
+		// Route status is important
+		if hasRoute := dev.Extra["hasRoute"]; hasRoute == "false" {
+			parts = append(parts, "NO ROUTE")
+		}
+		// Hostname if available
+		if hostname := dev.Extra["hostname"]; hostname != "" {
+			parts = append(parts, hostname)
+		}
+		// TwinCAT version
+		if tcVer := dev.Extra["tcVersion"]; tcVer != "" {
+			parts = append(parts, "TC"+tcVer)
+		}
+	case config.FamilyS7:
+		// Rack/Slot is important for S7
+		rack := dev.Extra["rack"]
+		slot := dev.Extra["slot"]
+		if rack != "" || slot != "" {
+			parts = append(parts, fmt.Sprintf("Rack:%s Slot:%s", rack, slot))
+		}
+	case config.FamilyLogix, config.FamilyMicro800:
+		// Serial and revision for Allen-Bradley
+		if serial := dev.Extra["serial"]; serial != "" && serial != "0" {
+			parts = append(parts, "SN:"+serial)
+		}
+		if rev := dev.Extra["revision"]; rev != "" {
+			parts = append(parts, "Rev:"+rev)
+		}
+	case config.FamilyOmron:
+		// Node for FINS
+		if node := dev.Extra["node"]; node != "" {
+			parts = append(parts, "Node:"+node)
+		}
+		// Serial and revision if available (for EIP)
+		if serial := dev.Extra["serial"]; serial != "" && serial != "0" {
+			parts = append(parts, "SN:"+serial)
+		}
+		if rev := dev.Extra["revision"]; rev != "" {
+			parts = append(parts, "Rev:"+rev)
+		}
+	}
+
+	result := strings.Join(parts, ", ")
+	return escapeTviewText(result)
+}
+
 // discoveredDevicesCache holds cached discovered devices
 var discoveredDevicesCache []driver.DiscoveredDevice
 var discoveredDevicesCacheMu sync.Mutex
@@ -401,7 +457,7 @@ func (t *PLCsTab) showDiscoveryModal() {
 	ApplyTableTheme(table)
 
 	// Set up headers
-	headers := []string{"IP Address", "Driver", "Protocol", "Device Identifier"}
+	headers := []string{"IP Address", "Driver", "Protocol", "Device Identifier", "Details"}
 	for i, h := range headers {
 		table.SetCell(0, i, tview.NewTableCell(h).
 			SetTextColor(th.Accent).
@@ -435,15 +491,16 @@ func (t *PLCsTab) showDiscoveryModal() {
 			driverName := escapeTviewText(string(dev.Family))
 			protocol := escapeTviewText(dev.Protocol)
 			deviceId := escapeTviewText(dev.ProductName)
+			details := buildDetailsString(dev)
 
 			DebugLog("Discovery modal: row %d - raw: IP=%q Protocol=%q Family=%q ProductName=%q",
 				i, dev.IP.String(), dev.Protocol, dev.Family, dev.ProductName)
-			DebugLog("Discovery modal: row %d - escaped: ip=%q driver=%q protocol=%q deviceId=%q",
-				i, ip, driverName, protocol, deviceId)
+			DebugLog("Discovery modal: row %d - escaped: ip=%q driver=%q protocol=%q deviceId=%q details=%q",
+				i, ip, driverName, protocol, deviceId, details)
 
 			// Apply filter
 			if filter != "" {
-				searchText := strings.ToLower(ip + driverName + protocol + deviceId + dev.Vendor)
+				searchText := strings.ToLower(ip + driverName + protocol + deviceId + dev.Vendor + details)
 				if !strings.Contains(searchText, filter) {
 					continue
 				}
@@ -456,6 +513,7 @@ func (t *PLCsTab) showDiscoveryModal() {
 			table.SetCell(row, 1, tview.NewTableCell(driverName).SetExpansion(1))
 			table.SetCell(row, 2, tview.NewTableCell(protocol).SetExpansion(1))
 			table.SetCell(row, 3, tview.NewTableCell(deviceId).SetExpansion(2))
+			table.SetCell(row, 4, tview.NewTableCell(details).SetExpansion(2))
 		}
 
 		// Update title with count and scanning status
@@ -516,12 +574,16 @@ func (t *PLCsTab) showDiscoveryModal() {
 		populateTable()
 	})
 
+	// Rescan button
+	rescanBtn := tview.NewButton("Rescan")
+	ApplyButtonTheme(rescanBtn)
+
 	// Close button
 	closeBtn := tview.NewButton("Close")
 	ApplyButtonTheme(closeBtn)
 
 	// Clear cache button
-	clearBtn := tview.NewButton("Clear Cache")
+	clearBtn := tview.NewButton("Clear")
 	ApplyButtonTheme(clearBtn)
 
 	closeModal := func() {
@@ -539,18 +601,102 @@ func (t *PLCsTab) showDiscoveryModal() {
 		t.app.setStatus("Discovery cache cleared")
 	})
 
+	// Rescan function - starts a new scan without closing modal
+	startRescan := func() {
+		// Check if already scanning
+		discoveryInProgressMu.Lock()
+		alreadyScanning := discoveryInProgress
+		discoveryInProgressMu.Unlock()
+		if alreadyScanning {
+			t.app.setStatus("Scan already in progress...")
+			return
+		}
+
+		// Clear cache and start new scan
+		discoveredDevicesCacheMu.Lock()
+		discoveredDevicesCache = nil
+		discoveredDevicesCacheMu.Unlock()
+		populateTable()
+
+		// Mark as scanning
+		discoveryInProgressMu.Lock()
+		discoveryInProgress = true
+		discoveryInProgressMu.Unlock()
+
+		t.app.setStatus("Rescanning network...")
+
+		// Run discovery in background
+		go func() {
+			defer func() {
+				discoveryInProgressMu.Lock()
+				discoveryInProgress = false
+				discoveryInProgressMu.Unlock()
+			}()
+
+			subnets := driver.GetLocalSubnets()
+			logging.DebugLog("tui", "Rescan: found %d local subnets: %v", len(subnets), subnets)
+
+			var wg sync.WaitGroup
+			addToCache := func(devices []driver.DiscoveredDevice) {
+				discoveredDevicesCacheMu.Lock()
+				for _, dev := range devices {
+					key := dev.Key()
+					found := false
+					for _, cached := range discoveredDevicesCache {
+						if cached.Key() == key {
+							found = true
+							break
+						}
+					}
+					if !found {
+						discoveredDevicesCache = append(discoveredDevicesCache, dev)
+					}
+				}
+				discoveredDevicesCacheMu.Unlock()
+			}
+
+			for _, cidr := range subnets {
+				wg.Add(1)
+				go func(cidr string) {
+					defer wg.Done()
+					devices := driver.DiscoverAll("255.255.255.255", cidr, 500*time.Millisecond, 50)
+					addToCache(devices)
+				}(cidr)
+			}
+
+			if len(subnets) == 0 {
+				devices := driver.DiscoverEIPOnly("255.255.255.255", 3*time.Second)
+				addToCache(devices)
+			}
+
+			wg.Wait()
+
+			discoveredDevicesCacheMu.Lock()
+			count := len(discoveredDevicesCache)
+			discoveredDevicesCacheMu.Unlock()
+
+			t.app.QueueUpdateDraw(func() {
+				t.app.setStatus(fmt.Sprintf("Rescan complete - %d device(s) found", count))
+			})
+		}()
+	}
+
+	rescanBtn.SetSelectedFunc(startRescan)
+
 	// Button container
 	buttonFlex := tview.NewFlex().SetDirection(tview.FlexColumn)
 	buttonFlex.SetBackgroundColor(th.Background)
 	buttonFlex.AddItem(nil, 0, 1, false)
-	buttonFlex.AddItem(clearBtn, 14, 0, false)
+	buttonFlex.AddItem(rescanBtn, 10, 0, false)
 	buttonFlex.AddItem(nil, 2, 0, false)
-	buttonFlex.AddItem(closeBtn, 10, 0, false)
+	buttonFlex.AddItem(clearBtn, 9, 0, false)
+	buttonFlex.AddItem(nil, 2, 0, false)
+	buttonFlex.AddItem(closeBtn, 9, 0, false)
 	buttonFlex.AddItem(nil, 0, 1, false)
 
 	// Help text
 	helpText := tview.NewTextView()
-	helpText.SetText(" /: Filter  c: Clear Cache  Enter: Add  Esc: Close")
+	helpText.SetText(" /: Filter  r: Rescan  c: Clear  Enter: Add  Esc: Close")
 	helpText.SetTextColor(th.TextDim)
 	helpText.SetBackgroundColor(th.Background)
 	helpText.SetTextAlign(tview.AlignCenter)
@@ -597,7 +743,7 @@ func (t *PLCsTab) showDiscoveryModal() {
 			closeModal()
 			return nil
 		case tcell.KeyTab:
-			t.app.app.SetFocus(clearBtn)
+			t.app.app.SetFocus(rescanBtn)
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
@@ -620,6 +766,10 @@ func (t *PLCsTab) showDiscoveryModal() {
 				discoveredDevicesCacheMu.Unlock()
 				populateTable()
 				t.app.setStatus("Discovery cache cleared")
+				return nil
+			case 'r', 'R':
+				// Rescan
+				startRescan()
 				return nil
 			}
 		}
@@ -649,6 +799,20 @@ func (t *PLCsTab) showDiscoveryModal() {
 	})
 
 	// Input capture for buttons
+	rescanBtn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			closeModal()
+			return nil
+		case tcell.KeyTab:
+			t.app.app.SetFocus(clearBtn)
+			return nil
+		case tcell.KeyBacktab:
+			t.app.app.SetFocus(table)
+			return nil
+		}
+		return event
+	})
 	clearBtn.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEscape:
@@ -658,7 +822,7 @@ func (t *PLCsTab) showDiscoveryModal() {
 			t.app.app.SetFocus(closeBtn)
 			return nil
 		case tcell.KeyBacktab:
-			t.app.app.SetFocus(table)
+			t.app.app.SetFocus(rescanBtn)
 			return nil
 		}
 		return event
@@ -668,15 +832,18 @@ func (t *PLCsTab) showDiscoveryModal() {
 		case tcell.KeyEscape:
 			closeModal()
 			return nil
-		case tcell.KeyTab, tcell.KeyBacktab:
+		case tcell.KeyTab:
 			t.app.app.SetFocus(table)
+			return nil
+		case tcell.KeyBacktab:
+			t.app.app.SetFocus(clearBtn)
 			return nil
 		}
 		return event
 	})
 
-	// Show modal
-	t.app.showCenteredModal(pageName, flex, 85, 22)
+	// Show modal (wider to accommodate Details column)
+	t.app.showCenteredModal(pageName, flex, 110, 22)
 }
 
 func (t *PLCsTab) showAddDialog() {

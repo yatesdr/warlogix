@@ -542,37 +542,102 @@ func discoverS7(cidr string, timeout time.Duration, concurrency int) []Discovere
 	return results
 }
 
-// discoverADS scans for Beckhoff TwinCAT PLCs.
+// discoverADS scans for Beckhoff TwinCAT PLCs using both UDP broadcast and TCP port scanning.
 func discoverADS(cidr string, timeout time.Duration, concurrency int) []DiscoveredDevice {
-	logging.DebugLog("tui", "discoverADS: calling ads.DiscoverSubnet")
-	devices, err := ads.DiscoverSubnet(cidr, timeout, concurrency)
-	logging.DebugLog("tui", "discoverADS: ads.DiscoverSubnet returned, err=%v, devices=%d", err, len(devices))
-	if err != nil {
-		logging.DebugLog("Discovery", "ADS scan error: %v", err)
-		return nil
+	logging.DebugLog("tui", "discoverADS: starting combined UDP broadcast and TCP scan")
+
+	var (
+		results []DiscoveredDevice
+		seen    = make(map[string]bool)
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+	)
+
+	addResult := func(dev DiscoveredDevice) {
+		mu.Lock()
+		defer mu.Unlock()
+		key := dev.IP.String()
+		if !seen[key] {
+			seen[key] = true
+			results = append(results, dev)
+		}
 	}
 
-	logging.DebugLog("tui", "discoverADS: processing %d devices", len(devices))
-	var results []DiscoveredDevice
-	for i, dev := range devices {
-		logging.DebugLog("tui", "discoverADS: device %d: IP=%s Connected=%v ProductName=%q AmsNetId=%s",
-			i, dev.IP.String(), dev.Connected, dev.ProductName, dev.AmsNetId)
-		// Include all devices that accepted TCP connection on ADS port
-		// Even "unconfirmed" devices are likely TwinCAT systems that need routes configured
-		results = append(results, DiscoveredDevice{
-			IP:          dev.IP,
-			Port:        dev.Port,
-			Family:      config.FamilyBeckhoff,
-			ProductName: dev.ProductName,
-			Protocol:    "ADS",
-			Vendor:      "Beckhoff",
-			Extra: map[string]string{
-				"amsNetId": dev.AmsNetId,
-			},
-		})
-	}
+	// 1. UDP broadcast discovery (finds devices without routes)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logging.DebugLog("tui", "discoverADS: starting UDP broadcast discovery")
 
-	logging.DebugLog("Discovery", "ADS found %d device(s)", len(results))
+		// Get broadcast addresses for UDP discovery
+		broadcastAddrs := GetBroadcastAddresses()
+		logging.DebugLog("tui", "discoverADS: UDP broadcast addresses: %v", broadcastAddrs)
+
+		udpDevices := ads.DiscoverBroadcast(broadcastAddrs, timeout*3)
+		logging.DebugLog("tui", "discoverADS: UDP broadcast found %d devices", len(udpDevices))
+
+		for _, dev := range udpDevices {
+			hasRoute := "false"
+			if dev.HasRoute {
+				hasRoute = "true"
+			}
+
+			addResult(DiscoveredDevice{
+				IP:          dev.IP,
+				Port:        dev.Port,
+				Family:      config.FamilyBeckhoff,
+				ProductName: dev.ProductName,
+				Protocol:    "ADS",
+				Vendor:      "Beckhoff",
+				Extra: map[string]string{
+					"amsNetId":  dev.AmsNetId,
+					"hostname":  dev.Hostname,
+					"tcVersion": dev.TwinCATVersion,
+					"osVersion": dev.OSVersion,
+					"hasRoute":  hasRoute,
+				},
+			})
+		}
+	}()
+
+	// 2. TCP port scan (finds devices that accept TCP on 48898)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logging.DebugLog("tui", "discoverADS: starting TCP port scan")
+		devices, err := ads.DiscoverSubnet(cidr, timeout, concurrency)
+		if err != nil {
+			logging.DebugLog("Discovery", "ADS TCP scan error: %v", err)
+			return
+		}
+		logging.DebugLog("tui", "discoverADS: TCP scan found %d devices", len(devices))
+
+		for _, dev := range devices {
+			hasRoute := "false"
+			if dev.HasRoute {
+				hasRoute = "true"
+			}
+
+			addResult(DiscoveredDevice{
+				IP:          dev.IP,
+				Port:        dev.Port,
+				Family:      config.FamilyBeckhoff,
+				ProductName: dev.ProductName,
+				Protocol:    "ADS",
+				Vendor:      "Beckhoff",
+				Extra: map[string]string{
+					"amsNetId":  dev.AmsNetId,
+					"hostname":  dev.Hostname,
+					"tcVersion": dev.TwinCATVersion,
+					"osVersion": dev.OSVersion,
+					"hasRoute":  hasRoute,
+				},
+			})
+		}
+	}()
+
+	wg.Wait()
+	logging.DebugLog("Discovery", "ADS found %d device(s) total", len(results))
 	return results
 }
 

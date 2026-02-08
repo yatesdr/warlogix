@@ -10,13 +10,21 @@ import (
 	"warlogix/logging"
 )
 
+// Discovery port for TwinCAT UDP broadcast
+const DiscoveryUDPPort = 48899
+
 // DiscoveredDevice contains identity information about a discovered Beckhoff/TwinCAT device.
 type DiscoveredDevice struct {
-	IP          net.IP // Device IP address
-	Port        uint16 // ADS port (48898)
-	AmsNetId    string // AMS Net ID if discovered
-	ProductName string // Product name if available
-	Connected   bool   // True if successfully connected and identified
+	IP             net.IP // Device IP address
+	Port           uint16 // ADS port (48898)
+	AmsNetId       string // AMS Net ID if discovered
+	ProductName    string // Product name if available
+	Connected      bool   // True if successfully connected and identified
+	HasRoute       bool   // True if route is configured (device responded to ADS request)
+	Hostname       string // Device hostname if discovered
+	TwinCATVersion string // TwinCAT version (e.g., "3.1.4024")
+	OSVersion      string // Operating system version
+	Fingerprint    string // Device fingerprint/identifier
 }
 
 // String returns a human-readable summary of the device.
@@ -99,6 +107,251 @@ func DiscoverSubnet(cidr string, timeout time.Duration, concurrency int) ([]Disc
 	return result, nil
 }
 
+// DiscoverBroadcast performs UDP broadcast discovery for TwinCAT devices.
+// This discovers devices without requiring a route to be configured.
+// broadcastAddr should be a broadcast address like "255.255.255.255" or "192.168.1.255".
+func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []DiscoveredDevice {
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+
+	logging.DebugLog("tui", "ADS DiscoverBroadcast: starting UDP discovery on %v", broadcastAddrs)
+
+	var (
+		results []DiscoveredDevice
+		mu      sync.Mutex
+		seen    = make(map[string]bool)
+	)
+
+	// Build the TwinCAT discovery request packet
+	// This is based on the ADS router discovery protocol
+	packet := buildDiscoveryPacket()
+
+	for _, broadcastAddr := range broadcastAddrs {
+		addr := fmt.Sprintf("%s:%d", broadcastAddr, DiscoveryUDPPort)
+
+		conn, err := net.ListenPacket("udp4", ":0")
+		if err != nil {
+			logging.DebugLog("tui", "ADS DiscoverBroadcast: ListenPacket error: %v", err)
+			continue
+		}
+
+		destAddr, err := net.ResolveUDPAddr("udp4", addr)
+		if err != nil {
+			conn.Close()
+			logging.DebugLog("tui", "ADS DiscoverBroadcast: ResolveUDPAddr error: %v", err)
+			continue
+		}
+
+		// Send discovery request
+		logging.DebugLog("tui", "ADS DiscoverBroadcast: sending to %s", addr)
+		_, err = conn.WriteTo(packet, destAddr)
+		if err != nil {
+			conn.Close()
+			logging.DebugLog("tui", "ADS DiscoverBroadcast: WriteTo error: %v", err)
+			continue
+		}
+
+		// Read responses until timeout
+		conn.SetReadDeadline(time.Now().Add(timeout))
+		buf := make([]byte, 2048)
+
+		for {
+			n, srcAddr, err := conn.ReadFrom(buf)
+			if err != nil {
+				// Timeout or error - done with this broadcast
+				break
+			}
+
+			udpAddr, ok := srcAddr.(*net.UDPAddr)
+			if !ok {
+				continue
+			}
+
+			ipStr := udpAddr.IP.String()
+			logging.DebugLog("tui", "ADS DiscoverBroadcast: received %d bytes from %s", n, ipStr)
+
+			// Parse the discovery response
+			device := parseDiscoveryResponse(buf[:n], udpAddr.IP)
+			if device != nil {
+				mu.Lock()
+				if !seen[ipStr] {
+					seen[ipStr] = true
+					results = append(results, *device)
+					logging.DebugLog("tui", "ADS DiscoverBroadcast: found device: AmsNetId=%s Hostname=%s TwinCAT=%s",
+						device.AmsNetId, device.Hostname, device.TwinCATVersion)
+				}
+				mu.Unlock()
+			}
+		}
+
+		conn.Close()
+	}
+
+	logging.DebugLog("tui", "ADS DiscoverBroadcast: complete, found %d devices", len(results))
+	return results
+}
+
+// buildDiscoveryPacket creates a TwinCAT UDP discovery request packet.
+// The discovery protocol uses a specific AMS-based format.
+func buildDiscoveryPacket() []byte {
+	// TwinCAT discovery packet format (simplified):
+	// This is based on the AMS router discovery protocol
+	// The packet triggers devices to respond with their identity info
+
+	// Service ID for discovery request
+	// Format: 4-byte header + request data
+	packet := make([]byte, 24)
+
+	// AMS/UDP header
+	binary.LittleEndian.PutUint32(packet[0:4], 0x71146603) // Discovery request magic
+
+	// Request body - minimal request asking for device info
+	// Set the request type to "identify"
+	binary.LittleEndian.PutUint32(packet[4:8], 1) // Request type: 1 = discovery
+
+	// Remaining bytes can be zero (minimal request)
+	// Some implementations include additional parameters
+
+	return packet
+}
+
+// parseDiscoveryResponse parses a TwinCAT UDP discovery response.
+func parseDiscoveryResponse(data []byte, sourceIP net.IP) *DiscoveredDevice {
+	if len(data) < 24 {
+		logging.DebugLog("tui", "ADS parseDiscoveryResponse: packet too short (%d bytes)", len(data))
+		return nil
+	}
+
+	// Check for discovery response magic
+	magic := binary.LittleEndian.Uint32(data[0:4])
+	logging.DebugLog("tui", "ADS parseDiscoveryResponse: magic=0x%08X", magic)
+
+	// TwinCAT discovery responses have various formats
+	// Try to extract what we can
+
+	device := &DiscoveredDevice{
+		IP:        sourceIP,
+		Port:      DefaultTCPPort,
+		Connected: true,
+	}
+
+	// Try to parse as standard TwinCAT discovery response
+	// Response format varies by TwinCAT version
+
+	// Look for AMS Net ID in the response (6 bytes, often at offset 4 or after header)
+	// The exact offset depends on the response format
+
+	// Try common offsets for AMS Net ID
+	amsNetIdOffsets := []int{4, 8, 12}
+	for _, offset := range amsNetIdOffsets {
+		if offset+6 <= len(data) {
+			// Check if this looks like a valid AMS Net ID (non-zero, reasonable values)
+			b := data[offset : offset+6]
+			if isValidAmsNetIdBytes(b) {
+				device.AmsNetId = fmt.Sprintf("%d.%d.%d.%d.%d.%d", b[0], b[1], b[2], b[3], b[4], b[5])
+				logging.DebugLog("tui", "ADS parseDiscoveryResponse: found AmsNetId at offset %d: %s", offset, device.AmsNetId)
+				break
+			}
+		}
+	}
+
+	// If no AMS Net ID found, derive from IP
+	if device.AmsNetId == "" {
+		ip4 := sourceIP.To4()
+		if ip4 != nil {
+			device.AmsNetId = fmt.Sprintf("%d.%d.%d.%d.1.1", ip4[0], ip4[1], ip4[2], ip4[3])
+		}
+	}
+
+	// Try to extract hostname (usually null-terminated string somewhere in the response)
+	device.Hostname = extractNullString(data, 16, 64)
+	if device.Hostname == "" {
+		device.Hostname = extractNullString(data, 24, 64)
+	}
+
+	// Try to extract version info
+	// TwinCAT version is often at a specific offset
+	if len(data) >= 20 {
+		// Look for version info patterns
+		for offset := 10; offset < len(data)-4 && offset < 100; offset++ {
+			// Check for version pattern (major.minor.build where major is 2 or 3)
+			if data[offset] >= 2 && data[offset] <= 3 {
+				major := data[offset]
+				if offset+4 <= len(data) {
+					minor := data[offset+1]
+					build := binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+					if minor < 50 && build > 1000 && build < 65000 {
+						device.TwinCATVersion = fmt.Sprintf("%d.%d.%d", major, minor, build)
+						logging.DebugLog("tui", "ADS parseDiscoveryResponse: found version at offset %d: %s", offset, device.TwinCATVersion)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Build product name from available info
+	if device.Hostname != "" {
+		device.ProductName = fmt.Sprintf("TwinCAT on %s", device.Hostname)
+	} else if device.TwinCATVersion != "" {
+		device.ProductName = fmt.Sprintf("TwinCAT %s", device.TwinCATVersion)
+	} else {
+		device.ProductName = "Beckhoff TwinCAT"
+	}
+
+	// Try to extract OS info from later in the packet
+	if len(data) > 80 {
+		device.OSVersion = extractNullString(data, 64, 32)
+	}
+
+	return device
+}
+
+// isValidAmsNetIdBytes checks if 6 bytes look like a valid AMS Net ID.
+func isValidAmsNetIdBytes(b []byte) bool {
+	if len(b) != 6 {
+		return false
+	}
+	// AMS Net ID should not be all zeros
+	allZero := true
+	for _, v := range b {
+		if v != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return false
+	}
+	// Last two bytes are usually 1.1 for local devices
+	// But can vary, so just check they're not wildly different
+	// The first 4 bytes often match the IP address
+	return true
+}
+
+// extractNullString extracts a null-terminated string from data.
+func extractNullString(data []byte, offset, maxLen int) string {
+	if offset >= len(data) {
+		return ""
+	}
+	end := offset + maxLen
+	if end > len(data) {
+		end = len(data)
+	}
+	var result []byte
+	for i := offset; i < end; i++ {
+		if data[i] == 0 {
+			break
+		}
+		// Only include printable ASCII
+		if data[i] >= 32 && data[i] < 127 {
+			result = append(result, data[i])
+		}
+	}
+	return string(result)
+}
+
 // probeADS attempts to connect to a Beckhoff device and identify it.
 func probeADS(ip net.IP, timeout time.Duration) *DiscoveredDevice {
 	addr := fmt.Sprintf("%s:%d", ip.String(), DefaultTCPPort)
@@ -122,14 +375,15 @@ func probeADS(ip net.IP, timeout time.Duration) *DiscoveredDevice {
 		return device
 	}
 
-	logging.DebugLog("tui", "ADS probeADS: %s connected but no valid response", addr)
-	// If ReadDeviceInfo failed, but we connected, it might still be ADS
-	// Just mark it as potentially ADS based on port response
+	logging.DebugLog("tui", "ADS probeADS: %s connected but no valid response (no route?)", addr)
+	// If ReadDeviceInfo failed, but we connected, it's an ADS device without a route
+	// The device accepted TCP connection on 48898 but didn't respond to ADS (no route configured)
 	return &DiscoveredDevice{
 		IP:          ip,
 		Port:        DefaultTCPPort,
-		ProductName: "Beckhoff TwinCAT (unconfirmed)",
+		ProductName: "Beckhoff TwinCAT (no route)",
 		Connected:   false,
+		HasRoute:    false, // No route - device didn't respond to ADS request
 	}
 }
 
@@ -230,13 +484,14 @@ func tryADSDeviceInfo(conn net.Conn, ip net.IP) *DiscoveredDevice {
 	errorCode := binary.LittleEndian.Uint32(respData[24:28])
 	logging.DebugLog("tui", "ADS tryADSDeviceInfo: errorCode=%d", errorCode)
 	if errorCode != 0 {
-		// ADS error, but device is ADS-capable
+		// ADS error, but device is ADS-capable and has route (it responded!)
 		return &DiscoveredDevice{
 			IP:          ip,
 			Port:        DefaultTCPPort,
 			AmsNetId:    fmt.Sprintf("%d.%d.%d.%d.%d.%d", targetNetId[0], targetNetId[1], targetNetId[2], targetNetId[3], targetNetId[4], targetNetId[5]),
 			ProductName: "Beckhoff TwinCAT",
 			Connected:   true,
+			HasRoute:    true, // Device responded, so route is configured
 		}
 	}
 
@@ -249,6 +504,7 @@ func tryADSDeviceInfo(conn net.Conn, ip net.IP) *DiscoveredDevice {
 			AmsNetId:    fmt.Sprintf("%d.%d.%d.%d.%d.%d", targetNetId[0], targetNetId[1], targetNetId[2], targetNetId[3], targetNetId[4], targetNetId[5]),
 			ProductName: "Beckhoff TwinCAT",
 			Connected:   true,
+			HasRoute:    true, // Device responded, so route is configured
 		}
 	}
 
@@ -281,11 +537,13 @@ func tryADSDeviceInfo(conn net.Conn, ip net.IP) *DiscoveredDevice {
 	}
 
 	return &DiscoveredDevice{
-		IP:          ip,
-		Port:        DefaultTCPPort,
-		AmsNetId:    fmt.Sprintf("%d.%d.%d.%d.%d.%d", targetNetId[0], targetNetId[1], targetNetId[2], targetNetId[3], targetNetId[4], targetNetId[5]),
-		ProductName: productName,
-		Connected:   true,
+		IP:             ip,
+		Port:           DefaultTCPPort,
+		AmsNetId:       fmt.Sprintf("%d.%d.%d.%d.%d.%d", targetNetId[0], targetNetId[1], targetNetId[2], targetNetId[3], targetNetId[4], targetNetId[5]),
+		ProductName:    productName,
+		Connected:      true,
+		HasRoute:       true, // Device responded with device info, route is configured
+		TwinCATVersion: fmt.Sprintf("%d.%d.%d", majorVersion, minorVersion, buildVersion),
 	}
 }
 
