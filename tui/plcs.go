@@ -222,14 +222,14 @@ func (t *PLCsTab) Refresh() {
 			indicatorCell.SetTextColor(IndicatorGray)
 		}
 
-		// Product name
+		// Product name (escape brackets to avoid tview style tag interpretation)
 		productName := ""
 		if info := plc.GetDeviceInfo(); info != nil {
-			productName = info.Model
+			productName = escapeTviewText(info.Model)
 		}
 
 		t.table.SetCell(row, 0, indicatorCell)
-		t.table.SetCell(row, 1, tview.NewTableCell(plc.Config.Name).SetExpansion(1))
+		t.table.SetCell(row, 1, tview.NewTableCell(escapeTviewText(plc.Config.Name)).SetExpansion(1))
 		t.table.SetCell(row, 2, tview.NewTableCell(plc.Config.Address).SetExpansion(1))
 		t.table.SetCell(row, 3, tview.NewTableCell(plc.Config.GetFamily().String()).SetExpansion(1))
 		t.table.SetCell(row, 4, tview.NewTableCell(plc.GetStatus().String()).SetExpansion(1))
@@ -257,6 +257,13 @@ func (t *PLCsTab) Refresh() {
 		}
 	}
 	t.statusBar.SetText(statusText)
+}
+
+// escapeTviewText removes square brackets that tview interprets as style tags
+func escapeTviewText(s string) string {
+	s = strings.ReplaceAll(s, "[", "(")
+	s = strings.ReplaceAll(s, "]", ")")
+	return s
 }
 
 // discoveredDevicesCache holds cached discovered devices
@@ -364,13 +371,6 @@ func (t *PLCsTab) showDiscoveryModal() {
 			SetAttributes(tcell.AttrBold))
 	}
 
-	// Helper to escape tview style tags (square brackets)
-	escapeText := func(s string) string {
-		s = strings.ReplaceAll(s, "[", "[[")
-		s = strings.ReplaceAll(s, "]", "]]")
-		return s
-	}
-
 	// Track filtered indices to map selection back to original devices
 	var filteredIndices []int
 
@@ -394,7 +394,7 @@ func (t *PLCsTab) showDiscoveryModal() {
 			ip := dev.IP.String()
 			driverName := string(dev.Family)
 			protocol := dev.Protocol
-			deviceId := escapeText(dev.ProductName)
+			deviceId := escapeTviewText(dev.ProductName)
 
 			// Apply filter
 			if filter != "" {
