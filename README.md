@@ -14,29 +14,12 @@ Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwh
 
 No expensive middleware. No vendor lock-in. Just a single binary that runs anywhere.
 
-## Documentation
+## Warnings
 
-### Getting Started
-- [User Interface Guide](docs/ui-tabs.md) - TUI tabs and keyboard shortcuts
-- [Configuration Reference](docs/configuration.md) - Config file format and options
-- [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
-
-### Services
-- [REST API](docs/rest-api.md) - HTTP endpoints for tag values and writes
-- [MQTT](docs/mqtt.md) - Topics, QoS settings, and write-back
-- [Valkey/Redis](docs/valkey.md) - Keys, Pub/Sub, and write-back queue
-- [Kafka](docs/kafka.md) - Topics, authentication, and batching
-
-### Advanced Features
-- [Triggers](docs/triggers.md) - Event-driven data capture to MQTT and Kafka
-- [TagPacks](docs/tagpacks.md) - Aggregate tags for atomic publishing
-- [Multi-Instance Deployment](docs/multi-instance.md) - Namespace isolation for multiple sites
-- [Data Types](docs/data-types.md) - Types, byte order, and UDT support
-- [Performance Guide](docs/performance.md) - Optimization and benchmarking
-
-### Reference
-- [Safety and Intended Use](docs/safety-and-intended-use.md) - **Important limitations and proper use of write-back**
-- [Developer Guide](docs/developer.md) - Using drivers in your own Go applications
+- **WarLogix is not a real-time control system** - See [Safety and Intended Use](docs/safety-and-intended-use.md)
+- Write-back should only be used for acknowledgments on dedicated tags
+- Never use WarLogix for safety-critical functions or machine control
+- This software is provided without warranty - use at your own risk
 
 ## Quick Start
 
@@ -69,6 +52,30 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 - `Q` - Quit
 
 Press `d` to discover PLCs on your network, or `a` to add manually.
+
+## Documentation
+
+### Getting Started
+- [User Interface Guide](docs/ui-tabs.md) - TUI tabs and keyboard shortcuts
+- [Configuration Reference](docs/configuration.md) - Config file format and options
+- [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
+
+### Services
+- [REST API](docs/rest-api.md) - HTTP endpoints for tag values and writes
+- [MQTT](docs/mqtt.md) - Topics, QoS settings, and write-back
+- [Valkey/Redis](docs/valkey.md) - Keys, Pub/Sub, and write-back queue
+- [Kafka](docs/kafka.md) - Topics, authentication, and batching
+
+### Advanced Features
+- [Triggers](docs/triggers.md) - Event-driven data capture to MQTT and Kafka
+- [TagPacks](docs/tagpacks.md) - Aggregate tags for atomic publishing
+- [Multi-Instance Deployment](docs/multi-instance.md) - Namespace isolation for multiple sites
+- [Data Types](docs/data-types.md) - Types, byte order, and UDT support
+- [Performance Guide](docs/performance.md) - Optimization and benchmarking
+
+### Reference
+- [Safety and Intended Use](docs/safety-and-intended-use.md) - **Important limitations and proper use of write-back**
+- [Developer Guide](docs/developer.md) - Using drivers in your own Go applications
 
 ## Features
 
@@ -160,13 +167,6 @@ Run as a background service with SSH access:
 ./warlogix -d -p 2222 --ssh-password "secret"
 ssh -p 2222 localhost
 ```
-
-## Warnings
-
-- **WarLogix is not a real-time control system** - See [Safety and Intended Use](docs/safety-and-intended-use.md)
-- Write-back should only be used for acknowledgments on dedicated tags
-- Never use WarLogix for safety-critical functions or machine control
-- This software is provided without warranty - use at your own risk
 
 ## License
 
