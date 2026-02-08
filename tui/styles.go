@@ -3,6 +3,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -777,6 +779,45 @@ const (
 
 // ASCIIModeEnabled tracks whether ASCII mode is active for terminals without Unicode support.
 var ASCIIModeEnabled = false
+
+// DetectASCIIMode checks the environment to determine if ASCII mode should be enabled.
+// Returns true if the locale appears to not support UTF-8.
+func DetectASCIIMode() bool {
+	// Check common locale environment variables
+	lang := os.Getenv("LANG")
+	lcAll := os.Getenv("LC_ALL")
+	lcCtype := os.Getenv("LC_CTYPE")
+
+	// Check each variable for UTF-8 support
+	for _, loc := range []string{lcAll, lcCtype, lang} {
+		if loc == "" {
+			continue
+		}
+		// If any locale variable contains UTF-8/utf8, we have Unicode support
+		locLower := strings.ToLower(loc)
+		if strings.Contains(locLower, "utf-8") || strings.Contains(locLower, "utf8") {
+			return false // Unicode supported
+		}
+	}
+
+	// If LANG is "C" or "POSIX" or empty, ASCII mode is needed
+	if lang == "" || lang == "C" || lang == "POSIX" {
+		return true
+	}
+
+	// Default to Unicode (most modern systems support it)
+	return false
+}
+
+// AutoDetectAndEnableASCIIMode checks the environment and enables ASCII mode if needed.
+// Returns true if ASCII mode was enabled.
+func AutoDetectAndEnableASCIIMode() bool {
+	if DetectASCIIMode() {
+		EnableASCIIMode()
+		return true
+	}
+	return false
+}
 
 // EnableASCIIMode switches tview to use ASCII box-drawing characters.
 // This is useful for terminals that don't render Unicode properly (e.g., SSH with limited locale settings).
