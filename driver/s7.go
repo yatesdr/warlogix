@@ -2,6 +2,7 @@ package driver
 
 import (
 	"fmt"
+	"strings"
 
 	"warlogix/config"
 	"warlogix/s7"
@@ -158,7 +159,19 @@ func (a *S7Adapter) Write(tag string, value interface{}) error {
 	if a.client == nil {
 		return fmt.Errorf("not connected")
 	}
-	return a.client.Write(tag, value)
+
+	// Look up the tag's configured type
+	typeHint := ""
+	if a.config != nil {
+		for _, t := range a.config.Tags {
+			if strings.EqualFold(t.Name, tag) {
+				typeHint = t.DataType
+				break
+			}
+		}
+	}
+
+	return a.client.WriteWithType(tag, value, typeHint)
 }
 
 // Keepalive is a no-op for S7 (TCP connection is kept alive by OS).

@@ -613,13 +613,48 @@ func (c *Client) readAddressSingle(addr *Address) ([]byte, error) {
 // Write writes a value to an S7 address.
 // The value type is inferred and converted appropriately.
 func (c *Client) Write(address string, value interface{}) error {
+	return c.WriteWithType(address, value, "")
+}
+
+// WriteWithType writes a value to an S7 address with an explicit type hint.
+// The typeHint should be a type name like "DINT", "REAL", "BOOL", etc.
+func (c *Client) WriteWithType(address string, value interface{}, typeHint string) error {
 	if c == nil || c.transport == nil {
 		return fmt.Errorf("Write: nil client")
 	}
 
+	logging.DebugLog("S7", "Write: address=%q value=%v (type %T) typeHint=%q", address, value, value, typeHint)
+
 	addr, err := ParseAddress(address)
 	if err != nil {
+		logging.DebugLog("S7", "Write: ParseAddress failed: %v", err)
 		return fmt.Errorf("Write: %w", err)
+	}
+
+	logging.DebugLog("S7", "Write: parsed addr area=%s db=%d offset=%d dataType=%s size=%d",
+		addr.Area, addr.DBNumber, addr.Offset, TypeName(addr.DataType), addr.Size)
+
+	// If address didn't specify a type (simple format like DB1.0),
+	// use the type hint from config
+	if addr.DataType == 0 && typeHint != "" {
+		if typeCode, ok := TypeCodeFromName(typeHint); ok {
+			addr.DataType = typeCode
+			addr.Size = TypeSize(typeCode)
+			logging.DebugLog("S7", "Write: using type hint: %s (0x%04X) size=%d", typeHint, typeCode, addr.Size)
+		}
+	}
+
+	// If still no type, infer from the Go value
+	if addr.DataType == 0 {
+		addr.DataType = inferTypeFromValue(value)
+		addr.Size = TypeSize(addr.DataType)
+		logging.DebugLog("S7", "Write: inferred type from value: %s size=%d", TypeName(addr.DataType), addr.Size)
+	}
+
+	// For BOOL type without bit number specified, default to bit 0
+	if addr.DataType == TypeBool && addr.BitNum < 0 {
+		addr.BitNum = 0
+		logging.DebugLog("S7", "Write: BOOL type without bit number, defaulting to bit 0")
 	}
 
 	c.mu.Lock()
@@ -627,14 +662,92 @@ func (c *Client) Write(address string, value interface{}) error {
 
 	data, err := c.encodeValue(addr, value)
 	if err != nil {
+		logging.DebugLog("S7", "Write: encodeValue failed: %v", err)
 		return err
 	}
 
-	return c.writeAddress(addr, data)
+	logging.DebugLog("S7", "Write: encoded %d bytes: %x", len(data), data)
+
+	err = c.writeAddress(addr, data)
+	if err != nil {
+		logging.DebugLog("S7", "Write: writeAddress failed: %v", err)
+		return err
+	}
+
+	logging.DebugLog("S7", "Write: success")
+	return nil
 }
 
 // writeAddress writes data to a specific S7 address.
+// For large writes that exceed PDU size, the write is split into multiple chunks.
 func (c *Client) writeAddress(addr *Address, data []byte) error {
+	// Calculate max payload per write based on PDU size
+	// PDU overhead: ~30 bytes (TPKT + COTP + S7 header + params + data header)
+	pduSize := int(c.transport.getPDUSize())
+	maxPayload := pduSize - 35
+	if maxPayload < 20 {
+		maxPayload = 180 // Fallback minimum
+	}
+
+	totalSize := len(data)
+	if totalSize <= maxPayload {
+		// Single write is sufficient
+		return c.writeAddressSingle(addr, data)
+	}
+
+	// Need to split into multiple writes
+	logging.DebugLog("S7", "Large write %d bytes exceeds PDU payload %d, splitting into chunks",
+		totalSize, maxPayload)
+
+	offset := addr.Offset
+	remaining := totalSize
+	dataPos := 0
+
+	// Safety limit to prevent infinite loops
+	maxChunks := (totalSize / maxPayload) + 10
+	chunkCount := 0
+
+	for remaining > 0 {
+		chunkCount++
+		if chunkCount > maxChunks {
+			return fmt.Errorf("chunk write exceeded maximum iterations (%d)", maxChunks)
+		}
+
+		chunkSize := remaining
+		if chunkSize > maxPayload {
+			chunkSize = maxPayload
+		}
+
+		chunkAddr := &Address{
+			Area:     addr.Area,
+			DBNumber: addr.DBNumber,
+			Offset:   offset,
+			BitNum:   -1, // Byte-level access for chunks
+			DataType: TypeByte,
+			Size:     chunkSize,
+		}
+
+		chunkData := data[dataPos : dataPos+chunkSize]
+
+		logging.DebugLog("S7", "Writing chunk %d: offset=%d size=%d remaining=%d",
+			chunkCount, offset, chunkSize, remaining)
+
+		err := c.writeAddressSingle(chunkAddr, chunkData)
+		if err != nil {
+			return fmt.Errorf("chunk write at offset %d failed: %w", offset, err)
+		}
+
+		offset += chunkSize
+		dataPos += chunkSize
+		remaining -= chunkSize
+	}
+
+	logging.DebugLog("S7", "Large write complete: wrote %d bytes in %d chunks", totalSize, chunkCount)
+	return nil
+}
+
+// writeAddressSingle writes data to a specific S7 address in a single request.
+func (c *Client) writeAddressSingle(addr *Address, data []byte) error {
 	// Build write request
 	request := buildWriteRequest(addr, data, c.nextPDURef())
 
@@ -650,12 +763,18 @@ func (c *Client) writeAddress(addr *Address, data []byte) error {
 
 // encodeValue converts a Go value to bytes for the given address type.
 func (c *Client) encodeValue(addr *Address, value interface{}) ([]byte, error) {
-	// For bit writes, we need to do read-modify-write
+	// For bit writes, encode directly as a bit
 	if addr.BitNum >= 0 {
 		return c.encodeBitValue(addr, value)
 	}
 
-	switch addr.DataType {
+	// Check if value is a slice (array write)
+	if isSliceValue(value) {
+		return c.encodeArrayValue(addr, value)
+	}
+
+	baseType := BaseType(addr.DataType)
+	switch baseType {
 	case TypeBool:
 		return encodeBool(value)
 	case TypeByte, TypeSInt:
@@ -676,32 +795,301 @@ func (c *Client) encodeValue(addr *Address, value interface{}) ([]byte, error) {
 		return encodeLInt(value)
 	case TypeULInt:
 		return encodeULInt(value)
+	case TypeString:
+		return c.encodeStringWithRead(addr, value)
+	case TypeWString:
+		return c.encodeWStringWithRead(addr, value)
 	default:
 		return nil, fmt.Errorf("unsupported data type: %s", TypeName(addr.DataType))
 	}
 }
 
-// encodeBitValue handles read-modify-write for individual bits.
-func (c *Client) encodeBitValue(addr *Address, value interface{}) ([]byte, error) {
-	// Read current byte
-	data, err := c.readAddress(&Address{
+// isSliceValue returns true if the value is a slice type.
+func isSliceValue(value interface{}) bool {
+	switch value.(type) {
+	case []int, []int8, []int16, []int32, []int64,
+		[]uint, []uint8, []uint16, []uint32, []uint64,
+		[]float32, []float64, []bool, []string:
+		return true
+	default:
+		return false
+	}
+}
+
+// encodeArrayValue encodes a slice value as an S7 array.
+func (c *Client) encodeArrayValue(addr *Address, value interface{}) ([]byte, error) {
+	baseType := BaseType(addr.DataType)
+	var result []byte
+
+	switch v := value.(type) {
+	case []int32:
+		for _, elem := range v {
+			var encoded []byte
+			var err error
+			switch baseType {
+			case TypeByte, TypeSInt:
+				encoded, err = encodeByte(elem)
+			case TypeWord:
+				encoded, err = encodeWord(elem)
+			case TypeInt:
+				encoded, err = encodeInt(elem)
+			case TypeDWord:
+				encoded, err = encodeDWord(elem)
+			case TypeDInt:
+				encoded, err = encodeDInt(elem)
+			default:
+				return nil, fmt.Errorf("cannot encode []int32 as %s", TypeName(addr.DataType))
+			}
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []int64:
+		for _, elem := range v {
+			var encoded []byte
+			var err error
+			switch baseType {
+			case TypeLInt:
+				encoded, err = encodeLInt(elem)
+			case TypeULInt:
+				encoded, err = encodeULInt(uint64(elem))
+			case TypeDInt:
+				encoded, err = encodeDInt(int32(elem))
+			default:
+				return nil, fmt.Errorf("cannot encode []int64 as %s", TypeName(addr.DataType))
+			}
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []float32:
+		for _, elem := range v {
+			encoded, err := encodeReal(elem)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []float64:
+		for _, elem := range v {
+			var encoded []byte
+			var err error
+			switch baseType {
+			case TypeReal:
+				encoded, err = encodeReal(float32(elem))
+			case TypeLReal:
+				encoded, err = encodeLReal(elem)
+			default:
+				return nil, fmt.Errorf("cannot encode []float64 as %s", TypeName(addr.DataType))
+			}
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []bool:
+		for _, elem := range v {
+			encoded, err := encodeBool(elem)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []string:
+		if baseType != TypeString && baseType != TypeWString {
+			return nil, fmt.Errorf("cannot encode []string as %s", TypeName(addr.DataType))
+		}
+		// For string arrays, read the first element to get maxLen
+		readAddr := &Address{
+			Area:     addr.Area,
+			DBNumber: addr.DBNumber,
+			Offset:   addr.Offset,
+			BitNum:   -1,
+			DataType: TypeByte,
+			Size:     2, // STRING header
+		}
+		if baseType == TypeWString {
+			readAddr.Size = 4 // WSTRING header
+		}
+
+		headerData, err := c.readAddress(readAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read string array header: %w", err)
+		}
+
+		var maxLen int
+		if baseType == TypeWString {
+			if len(headerData) < 4 {
+				return nil, fmt.Errorf("WSTRING header too short")
+			}
+			maxLen = int(binary.BigEndian.Uint16(headerData[0:2]))
+		} else {
+			if len(headerData) < 2 {
+				return nil, fmt.Errorf("STRING header too short")
+			}
+			maxLen = int(headerData[0])
+		}
+
+		logging.DebugLog("S7", "encodeStringArray: %d elements, maxLen=%d per element", len(v), maxLen)
+
+		// Encode each string element
+		for i, s := range v {
+			var encoded []byte
+			if baseType == TypeWString {
+				encoded, err = encodeWStringWithMaxLen(s, maxLen)
+			} else {
+				encoded, err = encodeStringWithMaxLen(s, maxLen)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to encode string element %d: %w", i, err)
+			}
+			result = append(result, encoded...)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported array type: %T", value)
+	}
+
+	return result, nil
+}
+
+// encodeStringWithRead encodes a string value for S7 STRING type.
+// It first reads the current string to get the max length defined in the DB.
+// S7 STRING format: [max_len][actual_len][chars...]
+func (c *Client) encodeStringWithRead(addr *Address, value interface{}) ([]byte, error) {
+	var s string
+	switch v := value.(type) {
+	case string:
+		s = v
+	default:
+		return nil, fmt.Errorf("cannot convert %T to string", value)
+	}
+
+	// Read current string to get max length from DB
+	// STRING header is 2 bytes, read enough to get the structure
+	readAddr := &Address{
 		Area:     addr.Area,
 		DBNumber: addr.DBNumber,
 		Offset:   addr.Offset,
 		BitNum:   -1,
 		DataType: TypeByte,
-		Size:     1,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to read byte for bit write: %w", err)
+		Size:     2, // Just read the header to get max length
 	}
 
-	// Modify the bit
+	currentData, err := c.readAddress(readAddr)
+	if err != nil {
+		logging.DebugLog("S7", "encodeString: failed to read current string header: %v, using default maxLen=254", err)
+		// Fall back to default max length
+		return encodeStringWithMaxLen(s, 254)
+	}
+
+	if len(currentData) < 2 {
+		logging.DebugLog("S7", "encodeString: current data too short (%d bytes), using default maxLen=254", len(currentData))
+		return encodeStringWithMaxLen(s, 254)
+	}
+
+	maxLen := int(currentData[0])
+	logging.DebugLog("S7", "encodeString: read maxLen=%d from DB", maxLen)
+
+	return encodeStringWithMaxLen(s, maxLen)
+}
+
+// encodeStringWithMaxLen encodes a string with the specified max length.
+func encodeStringWithMaxLen(s string, maxLen int) ([]byte, error) {
+	if len(s) > maxLen {
+		s = s[:maxLen]
+	}
+
+	// S7 STRING format: [maxLen][actualLen][chars padded to maxLen]
+	// Must write the full buffer size (maxLen + 2 bytes)
+	totalSize := 2 + maxLen
+	logging.DebugLog("S7", "encodeString: maxLen=%d, actualLen=%d, totalSize=%d", maxLen, len(s), totalSize)
+
+	result := make([]byte, totalSize)
+	result[0] = byte(maxLen)
+	result[1] = byte(len(s))
+	copy(result[2:], []byte(s))
+	// Remaining bytes are zero-padded by make()
+
+	return result, nil
+}
+
+// encodeWStringWithRead encodes a string value for S7 WSTRING type.
+// It first reads the current string to get the max length defined in the DB.
+// S7 WSTRING format: [max_len(2)][actual_len(2)][UTF-16BE chars...]
+func (c *Client) encodeWStringWithRead(addr *Address, value interface{}) ([]byte, error) {
+	var s string
+	switch v := value.(type) {
+	case string:
+		s = v
+	default:
+		return nil, fmt.Errorf("cannot convert %T to wstring", value)
+	}
+
+	// Read current wstring to get max length from DB
+	// WSTRING header is 4 bytes
+	readAddr := &Address{
+		Area:     addr.Area,
+		DBNumber: addr.DBNumber,
+		Offset:   addr.Offset,
+		BitNum:   -1,
+		DataType: TypeByte,
+		Size:     4, // Just read the header to get max length
+	}
+
+	currentData, err := c.readAddress(readAddr)
+	if err != nil {
+		logging.DebugLog("S7", "encodeWString: failed to read current wstring header: %v, using default maxLen=254", err)
+		return encodeWStringWithMaxLen(s, 254)
+	}
+
+	if len(currentData) < 4 {
+		logging.DebugLog("S7", "encodeWString: current data too short (%d bytes), using default maxLen=254", len(currentData))
+		return encodeWStringWithMaxLen(s, 254)
+	}
+
+	maxLen := int(binary.BigEndian.Uint16(currentData[0:2]))
+	logging.DebugLog("S7", "encodeWString: read maxLen=%d from DB", maxLen)
+
+	return encodeWStringWithMaxLen(s, maxLen)
+}
+
+// encodeWStringWithMaxLen encodes a wide string with the specified max length.
+func encodeWStringWithMaxLen(s string, maxLen int) ([]byte, error) {
+	runes := []rune(s)
+	if len(runes) > maxLen {
+		runes = runes[:maxLen]
+	}
+
+	// S7 WSTRING format: [maxLen(2)][actualLen(2)][UTF-16BE chars padded to maxLen]
+	// Must write the full buffer size (4 + maxLen*2 bytes)
+	totalSize := 4 + maxLen*2
+	logging.DebugLog("S7", "encodeWString: maxLen=%d, actualLen=%d, totalSize=%d", maxLen, len(runes), totalSize)
+
+	result := make([]byte, totalSize)
+	binary.BigEndian.PutUint16(result[0:2], uint16(maxLen))
+	binary.BigEndian.PutUint16(result[2:4], uint16(len(runes)))
+
+	// UTF-16BE encoded characters
+	for i, r := range runes {
+		binary.BigEndian.PutUint16(result[4+i*2:], uint16(r))
+	}
+	// Remaining bytes are zero-padded by make()
+
+	return result, nil
+}
+
+// encodeBitValue encodes a bit value for S7 bit writes.
+// S7 bit writes send just the bit value (0 or 1), not a full byte.
+func (c *Client) encodeBitValue(addr *Address, value interface{}) ([]byte, error) {
 	var boolVal bool
 	switch v := value.(type) {
 	case bool:
 		boolVal = v
 	case int:
+		boolVal = v != 0
+	case int32:
 		boolVal = v != 0
 	case int64:
 		boolVal = v != 0
@@ -709,13 +1097,11 @@ func (c *Client) encodeBitValue(addr *Address, value interface{}) ([]byte, error
 		return nil, fmt.Errorf("cannot convert %T to bool", value)
 	}
 
+	// S7 bit write: just send the bit value as a single byte
 	if boolVal {
-		data[0] |= (1 << addr.BitNum)
-	} else {
-		data[0] &^= (1 << addr.BitNum)
+		return []byte{0x01}, nil
 	}
-
-	return data, nil
+	return []byte{0x00}, nil
 }
 
 func encodeBool(value interface{}) ([]byte, error) {
@@ -724,6 +1110,8 @@ func encodeBool(value interface{}) ([]byte, error) {
 	case bool:
 		v = val
 	case int:
+		v = val != 0
+	case int32:
 		v = val != 0
 	case int64:
 		v = val != 0
@@ -744,6 +1132,8 @@ func encodeByte(value interface{}) ([]byte, error) {
 		return []byte{byte(v)}, nil
 	case int:
 		return []byte{byte(v)}, nil
+	case int32:
+		return []byte{byte(v)}, nil
 	case int64:
 		return []byte{byte(v)}, nil
 	case uint64:
@@ -762,6 +1152,8 @@ func encodeWord(value interface{}) ([]byte, error) {
 		binary.BigEndian.PutUint16(buf, uint16(v))
 	case int:
 		binary.BigEndian.PutUint16(buf, uint16(v))
+	case int32:
+		binary.BigEndian.PutUint16(buf, uint16(v))
 	case int64:
 		binary.BigEndian.PutUint16(buf, uint16(v))
 	case uint64:
@@ -778,6 +1170,8 @@ func encodeInt(value interface{}) ([]byte, error) {
 	case int16:
 		binary.BigEndian.PutUint16(buf, uint16(v))
 	case int:
+		binary.BigEndian.PutUint16(buf, uint16(v))
+	case int32:
 		binary.BigEndian.PutUint16(buf, uint16(v))
 	case int64:
 		binary.BigEndian.PutUint16(buf, uint16(v))
@@ -873,6 +1267,35 @@ func encodeULInt(value interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("cannot convert %T to ulint", value)
 	}
 	return buf, nil
+}
+
+// inferTypeFromValue infers the S7 data type from a Go value.
+func inferTypeFromValue(value interface{}) uint16 {
+	switch value.(type) {
+	case bool:
+		return TypeBool
+	case int8, uint8:
+		return TypeByte
+	case int16:
+		return TypeInt
+	case uint16:
+		return TypeWord
+	case int32, int:
+		return TypeDInt
+	case uint32:
+		return TypeDWord
+	case int64:
+		return TypeLInt
+	case uint64:
+		return TypeULInt
+	case float32:
+		return TypeReal
+	case float64:
+		return TypeLReal
+	default:
+		// Default to DINT for unknown types
+		return TypeDInt
+	}
 }
 
 // GetCPUInfo returns information about the connected CPU.

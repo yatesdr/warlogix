@@ -12,7 +12,8 @@ const (
 
 	// Message Types
 	s7MsgJob     = 0x01
-	s7MsgAckData = 0x03
+	s7MsgAck     = 0x02 // Acknowledgement without data
+	s7MsgAckData = 0x03 // Acknowledgement with data
 
 	// Functions
 	s7FuncSetupComm = 0xF0
@@ -322,16 +323,23 @@ func buildWriteRequest(addr *Address, writeData []byte, pduRef uint16) []byte {
 	}
 	params = append(params, addressToS7Any(addr)...)
 
-	// Data
-	transportSize := getTransportSize(addr.DataType, addr.BitNum >= 0)
-	bitLen := len(writeData) * 8
+	// Data section transport size differs from parameter section:
+	// - 0x03 for BIT access (length in bits)
+	// - 0x04 for BYTE/WORD/DWORD access (length in bits)
+	// - 0x09 for OCTET STRING (length in bytes)
+	var dataTransportSize byte
+	var bitLen int
 	if addr.BitNum >= 0 {
-		bitLen = 1 // Single bit
+		dataTransportSize = 0x03 // BIT
+		bitLen = 1
+	} else {
+		dataTransportSize = 0x04 // BYTE/WORD/DWORD
+		bitLen = len(writeData) * 8
 	}
 
 	dataSection := []byte{
 		0x00,                                // Return code placeholder
-		transportSize,                       // Transport size
+		dataTransportSize,                   // Transport size for data section
 		byte(bitLen >> 8), byte(bitLen),     // Bit length
 	}
 	dataSection = append(dataSection, writeData...)
@@ -358,17 +366,25 @@ func parseWriteResponse(data []byte) error {
 		return fmt.Errorf("invalid protocol ID: 0x%02X", data[0])
 	}
 
-	// Check message type
-	if data[1] != s7MsgAckData {
-		return fmt.Errorf("unexpected message type: 0x%02X", data[1])
+	// Check message type - accept both Ack (0x02) and AckData (0x03)
+	msgType := data[1]
+	if msgType != s7MsgAckData && msgType != s7MsgAck {
+		return fmt.Errorf("unexpected message type: 0x%02X", msgType)
 	}
 
-	// Check error class/code
+	// Check error class/code (same position for both Ack and AckData)
 	if data[10] != 0 || data[11] != 0 {
-		return S7Error{Class: data[10], Code: data[11]}
+		err := S7Error{Class: data[10], Code: data[11]}
+		logging.DebugLog("S7", "parseWriteResponse: S7 error class=0x%02X code=0x%02X: %v", data[10], data[11], err)
+		return err
 	}
 
-	// Get parameter length to find data section
+	// For Ack messages (0x02), no data section - success if no error
+	if msgType == s7MsgAck {
+		return nil
+	}
+
+	// For AckData messages (0x03), check the data item return code
 	paramLen := binary.BigEndian.Uint16(data[6:8])
 	dataStart := 12 + int(paramLen)
 

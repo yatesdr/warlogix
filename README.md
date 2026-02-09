@@ -50,6 +50,7 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 
 ### Getting Started
 - [User Interface Guide](docs/ui-tabs.md) - TUI tabs and keyboard shortcuts
+- [Writing Values](docs/writing.md) - Writing to PLC tags (status codes, acknowledgments)
 - [Configuration Reference](docs/configuration.md) - Config file format and options
 - [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
 

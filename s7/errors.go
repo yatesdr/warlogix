@@ -15,12 +15,13 @@ const (
 
 // S7 Data Item Return Codes
 const (
-	dataItemSuccess       = 0xFF
-	dataItemHardwareFault = 0x01
-	dataItemAccessDenied  = 0x03
-	dataItemAddressError  = 0x05
-	dataItemTypeError     = 0x06
-	dataItemNotExist      = 0x0A
+	dataItemSuccess         = 0xFF
+	dataItemHardwareFault   = 0x01
+	dataItemAccessDenied    = 0x03
+	dataItemAddressError    = 0x05
+	dataItemTypeError       = 0x06
+	dataItemTypeInconsistent = 0x07 // Data type/size mismatch
+	dataItemNotExist        = 0x0A
 )
 
 // S7Error represents an S7 protocol error.
@@ -69,6 +70,8 @@ func dataItemError(code byte) string {
 		return "invalid address"
 	case dataItemTypeError:
 		return "data type not supported"
+	case dataItemTypeInconsistent:
+		return "data type/size mismatch"
 	case dataItemNotExist:
 		return "object does not exist"
 	default:

@@ -226,7 +226,7 @@ if err == nil {
 
 **Package:** `warlogix/s7`
 
-Supports S7-300, S7-400, S7-1200, and S7-1500 PLCs via S7comm.
+Supports S7-300, S7-400, S7-1200, and S7-1500 PLCs via native S7comm protocol implementation.
 
 ### Basic Usage
 
@@ -241,19 +241,21 @@ import (
 )
 
 func main() {
-    // Connect to S7-1500 (slot 0)
-    client, err := s7.Connect("192.168.1.102", 0, 0)
+    // Connect to S7-1500 (rack 0, slot 0)
+    client, err := s7.Connect("192.168.1.102", s7.WithRackSlot(0, 0))
     if err != nil {
         log.Fatal(err)
     }
     defer client.Close()
 
-    // Read a DINT from DB1 at byte offset 0
-    value, err := client.Read("DB1.DBD0", "DINT")
+    // Read addresses with type hints
+    values, err := client.ReadWithTypes([]s7.TagRequest{
+        {Address: "DB1.DBD0", TypeHint: "DINT"},
+    })
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Printf("Value = %v\n", value.Value)
+    fmt.Printf("Value = %v\n", values[0].GoValue())
 
     // Write a REAL to DB1 at byte offset 4
     err = client.Write("DB1.DBD4", float32(72.5))
@@ -275,48 +277,60 @@ func main() {
 
 Type suffixes: `X` (bit), `B` (byte), `W` (word), `D` (dword)
 
-### Connection Parameters
+### Connection Options
 
 ```go
 // S7-300/400 (typically slot 2)
-client, _ := s7.Connect("192.168.1.100", 0, 2)
+client, _ := s7.Connect("192.168.1.100", s7.WithRackSlot(0, 2))
 
 // S7-1200/1500 (always slot 0)
-client, _ := s7.Connect("192.168.1.100", 0, 0)
+client, _ := s7.Connect("192.168.1.100", s7.WithRackSlot(0, 0))
 
 // With custom rack
-client, _ := s7.Connect("192.168.1.100", 1, 2) // Rack 1, Slot 2
+client, _ := s7.Connect("192.168.1.100", s7.WithRackSlot(1, 2)) // Rack 1, Slot 2
+
+// With timeout
+client, _ := s7.Connect("192.168.1.100", s7.WithRackSlot(0, 0), s7.WithTimeout(5*time.Second))
 ```
 
 ### Batch Reading
 
 ```go
 // Read multiple addresses (automatically batched by PDU size)
-requests := []s7.ReadRequest{
-    {Address: "DB1.DBD0", DataType: "DINT"},
-    {Address: "DB1.DBD4", DataType: "REAL"},
-    {Address: "DB1.DBD8", DataType: "DINT"},
+requests := []s7.TagRequest{
+    {Address: "DB1.DBD0", TypeHint: "DINT"},
+    {Address: "DB1.DBD4", TypeHint: "REAL"},
+    {Address: "DB1.DBD8", TypeHint: "DINT"},
 }
 
-values, err := client.ReadMultiple(requests)
+values, err := client.ReadWithTypes(requests)
 if err != nil {
     log.Fatal(err)
 }
 
 for _, val := range values {
-    fmt.Printf("%s = %v\n", val.Name, val.Value)
+    fmt.Printf("%s = %v\n", val.Name, val.GoValue())
 }
+```
+
+### Writing with Type Hints
+
+```go
+// Write using explicit type (for simple addresses like DB1.0)
+err := client.WriteWithType("DB1.0", int32(42), "DINT")
+
+// Write using address format (type inferred from address)
+err = client.Write("DB1.DBD4", float32(72.5))  // DBD = DWORD/DINT/REAL
 ```
 
 ### String Reading
 
 ```go
 // Read a STRING (S7 format: 2-byte header + chars)
-value, err := client.Read("DB10.DBB0", "STRING")
-fmt.Printf("String: %s\n", value.Value)
-
-// Read a WSTRING (wide string)
-value, err = client.Read("DB10.DBB100", "WSTRING")
+values, err := client.ReadWithTypes([]s7.TagRequest{
+    {Address: "DB10.0", TypeHint: "STRING"},
+})
+fmt.Printf("String: %s\n", values[0].GoValue())
 ```
 
 ---
@@ -766,14 +780,19 @@ go func() {
 
 ## Dependencies
 
-Each driver package has minimal dependencies:
+All PLC driver packages are pure Go implementations with no external dependencies:
 
 | Package | External Dependencies |
 |---------|----------------------|
-| `warlogix/logix` | None (pure Go) |
-| `warlogix/s7` | `github.com/robinson/gos7` |
-| `warlogix/ads` | None (pure Go) |
-| `warlogix/omron` | `github.com/xiaotushaoxia/fins` |
+| `warlogix/logix` | None (native EtherNet/IP + CIP) |
+| `warlogix/s7` | None (native S7comm) |
+| `warlogix/ads` | None (native ADS/AMS) |
+| `warlogix/omron` | None (native FINS) |
+
+Broker/publisher packages have external dependencies:
+
+| Package | External Dependencies |
+|---------|----------------------|
 | `warlogix/mqtt` | `github.com/eclipse/paho.mqtt.golang` |
 | `warlogix/kafka` | `github.com/segmentio/kafka-go` |
 | `warlogix/valkey` | `github.com/redis/go-redis/v9` |
