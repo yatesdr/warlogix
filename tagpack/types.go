@@ -16,13 +16,13 @@ type PackValue struct {
 
 // TagData holds the value and metadata for a single tag.
 // When a tag has an alias, the alias is used in the map key and the original
-// tag name/address is stored in the Offset field.
+// tag name/address is stored in the MemLoc field.
 // The map key format is "plc.tag" (e.g., "s7.test_wstring" or "logix_L7.Counter").
 type TagData struct {
 	Value  interface{} `json:"value"`
 	Type   string      `json:"type"`
-	PLC    string      `json:"plc"`              // PLC name for easy filtering
-	Offset string      `json:"offset,omitempty"` // Original tag name/address when alias is used
+	PLC    string      `json:"plc"`               // PLC name for easy filtering
+	MemLoc string      `json:"memloc,omitempty"` // Memory location (S7/Omron address) when alias is used
 }
 
 // PLCMetadata holds information about a PLC's connection state.

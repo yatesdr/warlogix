@@ -13,11 +13,11 @@ import (
 )
 
 // TagMessage is the JSON structure published to Kafka for tag changes.
-// When a tag has an alias, Tag contains the alias and Offset contains the original address.
+// When a tag has an alias, Tag contains the alias and MemLoc contains the original address.
 type TagMessage struct {
 	PLC       string      `json:"plc"`
 	Tag       string      `json:"tag"`
-	Offset    string      `json:"offset,omitempty"` // Original tag name/address when alias is used
+	MemLoc    string      `json:"memloc,omitempty"` // Memory location (S7/Omron address) when alias is used
 	Value     interface{} `json:"value"`
 	Type      string      `json:"type,omitempty"`
 	Writable  bool        `json:"writable"`
@@ -496,8 +496,15 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 			continue
 		}
 
-		// Check if value changed
-		cacheKey := fmt.Sprintf("%s/%s/%s", p.config.Name, plcName, tagName)
+		// For S7/Omron with alias, use alias as "tag" and include address in payload
+		// If alias is provided, it supersedes the raw address in keys and topics
+		displayTag := tagName
+		if alias != "" {
+			displayTag = alias
+		}
+
+		// Check if value changed - use displayTag for consistent caching
+		cacheKey := fmt.Sprintf("%s/%s/%s", p.config.Name, plcName, displayTag)
 
 		m.lastMu.RLock()
 		lastValue, exists := m.lastValues[cacheKey]
@@ -507,16 +514,10 @@ func (m *Manager) Publish(plcName, tagName, alias, address, typeName string, val
 			continue // No change
 		}
 
-		// Build message - use alias as tag name if provided
-		displayTag := tagName
-		if alias != "" {
-			displayTag = alias
-		}
-
 		msg := TagMessage{
 			PLC:       plcName,
 			Tag:       displayTag,
-			Offset:    address, // Original tag name/address when alias is used
+			MemLoc:    address, // Memory location (S7/Omron address) when alias is used
 			Value:     value,
 			Type:      typeName,
 			Writable:  writable,

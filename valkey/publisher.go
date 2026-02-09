@@ -21,7 +21,7 @@ type TagMessage struct {
 	Factory   string      `json:"factory"`
 	PLC       string      `json:"plc"`
 	Tag       string      `json:"tag"`
-	Offset    string      `json:"offset,omitempty"` // Original tag name/address when alias is used
+	MemLoc    string      `json:"memloc,omitempty"` // Memory location (S7/Omron address) when alias is used
 	Value     interface{} `json:"value"`
 	Type      string      `json:"type"`
 	Writable  bool        `json:"writable"`
@@ -245,21 +245,22 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 	builder := p.builder
 	p.mu.RUnlock()
 
-	// Build key using namespace builder
-	key := builder.ValkeyTagKey(plcName, tagName)
-
-	// For S7 with alias, use alias as "tag" and include address
+	// For S7/Omron with alias, use alias as "tag" and include address in payload
+	// If alias is provided, it supersedes the raw address in keys and topics
 	displayTag := tagName
 	if alias != "" {
 		displayTag = alias
 	}
+
+	// Build key using namespace builder - use alias if available
+	key := builder.ValkeyTagKey(plcName, displayTag)
 
 	// Build message
 	msg := TagMessage{
 		Factory:   builder.ValkeyFactory(),
 		PLC:       plcName,
 		Tag:       displayTag,
-		Offset:    address, // Original tag name/address when alias is used
+		MemLoc:    address, // Memory location (S7/Omron address) when alias is used
 		Value:     value,
 		Type:      typeName,
 		Writable:  writable,
@@ -325,18 +326,20 @@ func (p *Publisher) PublishBatch(items []TagPublishItem) error {
 
 	factory := builder.ValkeyFactory()
 	for _, item := range items {
-		key := builder.ValkeyTagKey(item.PLCName, item.TagName)
-
+		// For S7/Omron with alias, use alias for key and message
 		displayTag := item.TagName
 		if item.Alias != "" {
 			displayTag = item.Alias
 		}
 
+		// Build key using alias if available
+		key := builder.ValkeyTagKey(item.PLCName, displayTag)
+
 		msg := TagMessage{
 			Factory:   factory,
 			PLC:       item.PLCName,
 			Tag:       displayTag,
-			Offset:    item.Address, // Original tag name/address when alias is used
+			MemLoc:    item.Address, // Memory location (S7/Omron address) when alias is used
 			Value:     item.Value,
 			Type:      item.TypeName,
 			Writable:  item.Writable,

@@ -147,11 +147,11 @@ type PLCResponse struct {
 }
 
 // TagResponse is the JSON response for a tag value.
-// When a tag has an alias, Name contains the alias and Offset contains the original address.
+// When a tag has an alias, Name contains the alias and MemLoc contains the original address.
 type TagResponse struct {
 	PLC       string      `json:"plc"`
 	Name      string      `json:"name"`
-	Offset    string      `json:"offset,omitempty"` // Original tag name/address when alias is used
+	MemLoc    string      `json:"memloc,omitempty"` // Memory location (S7/Omron address) when alias is used
 	Type      string      `json:"type"`
 	Value     interface{} `json:"value"`
 	Error     string      `json:"error,omitempty"`
@@ -354,7 +354,7 @@ func (s *Server) handleProgramTags(w http.ResponseWriter, plc *plcman.ManagedPLC
 		resp := TagResponse{
 			PLC:    plc.Config.Name,
 			Name:   tagPart,
-			Offset: offset,
+			MemLoc: offset,
 		}
 
 		if v, ok := values[sel.Name]; ok {
@@ -396,7 +396,7 @@ func (s *Server) handleAllTags(w http.ResponseWriter, plc *plcman.ManagedPLC) {
 		resp := TagResponse{
 			PLC:    plc.Config.Name,
 			Name:   tagPart,
-			Offset: offset,
+			MemLoc: offset,
 		}
 
 		if v, ok := values[sel.Name]; ok {
@@ -415,10 +415,18 @@ func (s *Server) handleAllTags(w http.ResponseWriter, plc *plcman.ManagedPLC) {
 
 func (s *Server) handleSingleTag(w http.ResponseWriter, plc *plcman.ManagedPLC, tagName string) {
 	// Check if this tag is enabled for republishing and not excluded from REST
+	// Support lookup by either tag name (address) or alias
 	var sel *config.TagSelection
+	var actualTagName string // The real tag name/address to use for PLC lookups
 	for i := range plc.Config.Tags {
-		if plc.Config.Tags[i].Name == tagName && plc.Config.Tags[i].Enabled && !plc.Config.Tags[i].NoREST {
-			sel = &plc.Config.Tags[i]
+		tag := &plc.Config.Tags[i]
+		if !tag.Enabled || tag.NoREST {
+			continue
+		}
+		// Match by name (address) or alias
+		if tag.Name == tagName || (tag.Alias != "" && tag.Alias == tagName) {
+			sel = tag
+			actualTagName = tag.Name // Always use the real name for PLC lookups
 			break
 		}
 	}
@@ -428,21 +436,21 @@ func (s *Server) handleSingleTag(w http.ResponseWriter, plc *plcman.ManagedPLC, 
 		return
 	}
 
-	// Use alias as name if available, store original as offset
-	name := tagName
-	offset := ""
+	// Use alias as display name if available, store address as memloc
+	name := actualTagName
+	memloc := ""
 	if sel.Alias != "" {
 		name = sel.Alias
-		offset = tagName
+		memloc = actualTagName
 	}
 
 	// Check cached values first
 	values := plc.GetValues()
-	if v, ok := values[tagName]; ok {
+	if v, ok := values[actualTagName]; ok {
 		resp := TagResponse{
 			PLC:    plc.Config.Name,
 			Name:   name,
-			Offset: offset,
+			MemLoc: memloc,
 			Type:   v.TypeName(),
 			Value:  v.GoValue(),
 		}
@@ -454,7 +462,7 @@ func (s *Server) handleSingleTag(w http.ResponseWriter, plc *plcman.ManagedPLC, 
 	}
 
 	// Try reading from PLC directly
-	v, err := s.manager.ReadTag(plc.Config.Name, tagName)
+	v, err := s.manager.ReadTag(plc.Config.Name, actualTagName)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -467,7 +475,7 @@ func (s *Server) handleSingleTag(w http.ResponseWriter, plc *plcman.ManagedPLC, 
 	resp := TagResponse{
 		PLC:    plc.Config.Name,
 		Name:   name,
-		Offset: offset,
+		MemLoc: memloc,
 		Type:   v.TypeName(),
 		Value:  v.GoValue(),
 	}
