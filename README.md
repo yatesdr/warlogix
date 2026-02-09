@@ -89,7 +89,7 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 
 | Family | Models | Tag Discovery | Protocol | Support Level |
 |--------|--------|---------------|----------|---------------|
-| Allen-Bradley | ControlLogix, CompactLogix, Micro800 | Automatic | EtherNet/IP | Tested on Micro82, L7, L8 |
+| Allen-Bradley | ControlLogix, CompactLogix, Micro800 | Automatic | EtherNet/IP | Tested on Micro820, L7, L8 |
 | Siemens | S7-300/400/1200/1500 | Manual | S7comm | Tested on S7-1200 |
 | Beckhoff | TwinCAT 2/3 | Automatic | ADS | Tested on CX9020 |
 | Omron (FINS) | CS1, CJ1/2, CP1 | Manual | FINS TCP/UDP | Tested on CP1 |
