@@ -217,8 +217,8 @@ func (t *RESTTab) GetPrimitive() tview.Primitive {
 
 // GetFocusable returns the element that should receive focus.
 func (t *RESTTab) GetFocusable() tview.Primitive {
-	t.focusIndex = 0
-	return t.hostInput
+	t.focusIndex = 2 // Start button - avoid input fields to keep hotkeys active
+	return t.startBtn
 }
 
 // Refresh updates the display.

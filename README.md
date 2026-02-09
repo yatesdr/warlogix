@@ -63,6 +63,7 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 - [Kafka](docs/kafka.md) - Topics, authentication, and batching
 
 ### Advanced Features
+- [Daemon Mode](docs/daemon-mode.md) - Background service with SSH access
 - [Triggers](docs/triggers.md) - Event-driven data capture to MQTT and Kafka
 - [TagPacks](docs/tagpacks.md) - Aggregate tags for atomic publishing
 - [Multi-Instance Deployment](docs/multi-instance.md) - Namespace isolation for multiple sites
@@ -170,6 +171,8 @@ Run as a background service with SSH access:
 ./warlogix -d -p 2222 --ssh-password "secret"
 ssh -p 2222 localhost
 ```
+
+See [Daemon Mode](docs/daemon-mode.md) for systemd setup, Docker deployment, and security options.
 
 ## License
 
