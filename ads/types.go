@@ -381,6 +381,10 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			if v != 0 {
 				b = 1
 			}
+		case float64:
+			if v != 0 {
+				b = 1
+			}
 		default:
 			return nil, fmt.Errorf("cannot convert %T to BOOL", value)
 		}
@@ -396,6 +400,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			return []byte{byte(v)}, nil
 		case int64:
 			return []byte{byte(v)}, nil
+		case float64:
+			return []byte{byte(int64(v))}, nil
 		default:
 			return nil, fmt.Errorf("cannot convert %T to BYTE", value)
 		}
@@ -410,6 +416,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			return []byte{byte(v)}, nil
 		case int64:
 			return []byte{byte(v)}, nil
+		case float64:
+			return []byte{byte(int8(v))}, nil
 		default:
 			return nil, fmt.Errorf("cannot convert %T to SINT", value)
 		}
@@ -425,6 +433,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint16(buf, uint16(v))
 		case int64:
 			binary.LittleEndian.PutUint16(buf, uint16(v))
+		case float64:
+			binary.LittleEndian.PutUint16(buf, uint16(int64(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to WORD", value)
 		}
@@ -441,6 +451,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint16(buf, uint16(v))
 		case int64:
 			binary.LittleEndian.PutUint16(buf, uint16(v))
+		case float64:
+			binary.LittleEndian.PutUint16(buf, uint16(int16(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to INT", value)
 		}
@@ -457,6 +469,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint32(buf, uint32(v))
 		case int64:
 			binary.LittleEndian.PutUint32(buf, uint32(v))
+		case float64:
+			binary.LittleEndian.PutUint32(buf, uint32(int64(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to DWORD", value)
 		}
@@ -471,6 +485,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint32(buf, uint32(v))
 		case int64:
 			binary.LittleEndian.PutUint32(buf, uint32(v))
+		case float64:
+			binary.LittleEndian.PutUint32(buf, uint32(int32(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to DINT", value)
 		}
@@ -487,6 +503,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint64(buf, uint64(v))
 		case int64:
 			binary.LittleEndian.PutUint64(buf, uint64(v))
+		case float64:
+			binary.LittleEndian.PutUint64(buf, uint64(int64(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to LWORD", value)
 		}
@@ -501,6 +519,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint64(buf, uint64(v))
 		case int32:
 			binary.LittleEndian.PutUint64(buf, uint64(v))
+		case float64:
+			binary.LittleEndian.PutUint64(buf, uint64(int64(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to LINT", value)
 		}

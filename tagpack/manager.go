@@ -268,7 +268,7 @@ func (m *Manager) publishPack(packName string) {
 				Value:  value,
 				Type:   typeName,
 				PLC:    member.PLC,
-				Offset: offset,
+				MemLoc: offset,
 			}
 		} else {
 			// Tag has no value - include with null value and note PLC may have issues
@@ -276,7 +276,7 @@ func (m *Manager) publishPack(packName string) {
 				Value:  nil,
 				Type:   "",
 				PLC:    member.PLC,
-				Offset: offset,
+				MemLoc: offset,
 			}
 			plcErrors[member.PLC] = true
 		}
@@ -351,14 +351,14 @@ func (m *Manager) GetPackValue(packName string) *PackValue {
 				Value:  value,
 				Type:   typeName,
 				PLC:    member.PLC,
-				Offset: offset,
+				MemLoc: offset,
 			}
 		} else {
 			pv.Tags[key] = TagData{
 				Value:  nil,
 				Type:   "",
 				PLC:    member.PLC,
-				Offset: offset,
+				MemLoc: offset,
 			}
 			plcErrors[member.PLC] = true
 		}

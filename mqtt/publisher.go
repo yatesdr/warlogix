@@ -67,7 +67,7 @@ type TagMessage struct {
 	Topic     string      `json:"topic"`
 	PLC       string      `json:"plc"`
 	Tag       string      `json:"tag"`
-	Offset    string      `json:"offset,omitempty"` // Original tag name/address when alias is used
+	MemLoc    string      `json:"memloc,omitempty"` // Memory location (S7/Omron address) when alias is used
 	Value     interface{} `json:"value"`
 	Type      string      `json:"type,omitempty"`
 	Writable  bool        `json:"writable"`
@@ -323,7 +323,14 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 		return false
 	}
 
-	cacheKey := fmt.Sprintf("%s/%s", plcName, tagName)
+	// For S7/Omron with alias, use alias as "tag" and include address in payload
+	// If alias is provided, it supersedes the raw address in keys and topics
+	displayTag := tagName
+	if alias != "" {
+		displayTag = alias
+	}
+
+	cacheKey := fmt.Sprintf("%s/%s", plcName, displayTag)
 
 	p.lastMu.RLock()
 	lastValue, exists := p.lastValues[cacheKey]
@@ -333,17 +340,11 @@ func (p *Publisher) Publish(plcName, tagName, alias, address, typeName string, v
 		return false
 	}
 
-	// For S7 with alias, use alias as "tag" and include address
-	displayTag := tagName
-	if alias != "" {
-		displayTag = alias
-	}
-
 	msg := TagMessage{
 		Topic:     p.builder.MQTTBase(),
 		PLC:       plcName,
 		Tag:       displayTag,
-		Offset:    address, // Original tag name/address when alias is used
+		MemLoc:    address, // Memory location (S7/Omron address) when alias is used
 		Value:     value,
 		Type:      typeName,
 		Writable:  writable,
@@ -403,7 +404,7 @@ func (p *Publisher) PublishSync(plcName, tagName, alias, address, typeName strin
 		Topic:     p.builder.MQTTBase(),
 		PLC:       plcName,
 		Tag:       displayTag,
-		Offset:    address, // Original tag name/address when alias is used
+		MemLoc:    address, // Memory location (S7/Omron address) when alias is used
 		Value:     value,
 		Type:      typeName,
 		Writable:  writable,

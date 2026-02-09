@@ -1138,6 +1138,8 @@ func encodeByte(value interface{}) ([]byte, error) {
 		return []byte{byte(v)}, nil
 	case uint64:
 		return []byte{byte(v)}, nil
+	case float64:
+		return []byte{byte(int64(v))}, nil
 	default:
 		return nil, fmt.Errorf("cannot convert %T to byte", value)
 	}
@@ -1158,6 +1160,8 @@ func encodeWord(value interface{}) ([]byte, error) {
 		binary.BigEndian.PutUint16(buf, uint16(v))
 	case uint64:
 		binary.BigEndian.PutUint16(buf, uint16(v))
+	case float64:
+		binary.BigEndian.PutUint16(buf, uint16(int64(v)))
 	default:
 		return nil, fmt.Errorf("cannot convert %T to word", value)
 	}
@@ -1175,6 +1179,8 @@ func encodeInt(value interface{}) ([]byte, error) {
 		binary.BigEndian.PutUint16(buf, uint16(v))
 	case int64:
 		binary.BigEndian.PutUint16(buf, uint16(v))
+	case float64:
+		binary.BigEndian.PutUint16(buf, uint16(int16(v)))
 	default:
 		return nil, fmt.Errorf("cannot convert %T to int", value)
 	}
@@ -1194,6 +1200,8 @@ func encodeDWord(value interface{}) ([]byte, error) {
 		binary.BigEndian.PutUint32(buf, uint32(v))
 	case uint64:
 		binary.BigEndian.PutUint32(buf, uint32(v))
+	case float64:
+		binary.BigEndian.PutUint32(buf, uint32(int64(v)))
 	default:
 		return nil, fmt.Errorf("cannot convert %T to dword", value)
 	}
@@ -1209,6 +1217,8 @@ func encodeDInt(value interface{}) ([]byte, error) {
 		binary.BigEndian.PutUint32(buf, uint32(v))
 	case int64:
 		binary.BigEndian.PutUint32(buf, uint32(v))
+	case float64:
+		binary.BigEndian.PutUint32(buf, uint32(int32(v)))
 	default:
 		return nil, fmt.Errorf("cannot convert %T to dint", value)
 	}
@@ -1248,6 +1258,8 @@ func encodeLInt(value interface{}) ([]byte, error) {
 		binary.BigEndian.PutUint64(buf, uint64(v))
 	case int:
 		binary.BigEndian.PutUint64(buf, uint64(v))
+	case float64:
+		binary.BigEndian.PutUint64(buf, uint64(int64(v)))
 	default:
 		return nil, fmt.Errorf("cannot convert %T to lint", value)
 	}
@@ -1262,6 +1274,8 @@ func encodeULInt(value interface{}) ([]byte, error) {
 	case int64:
 		binary.BigEndian.PutUint64(buf, uint64(v))
 	case int:
+		binary.BigEndian.PutUint64(buf, uint64(v))
+	case float64:
 		binary.BigEndian.PutUint64(buf, uint64(v))
 	default:
 		return nil, fmt.Errorf("cannot convert %T to ulint", value)

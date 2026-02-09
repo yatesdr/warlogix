@@ -583,8 +583,8 @@ func (w *PLCWorker) poll() {
 					NoKafka:  noKafkaMap[lookupKey],
 					NoValkey: noValkeyMap[lookupKey],
 				}
-				// For S7, set Address to uppercase version of TagName
-				if family == config.FamilyS7 {
+				// For S7/Omron, set Address to uppercase version of TagName for troubleshooting
+				if family == config.FamilyS7 || family == config.FamilyOmron {
 					vc.Address = strings.ToUpper(v.Name)
 				}
 				changes = append(changes, vc)
@@ -1552,8 +1552,8 @@ func (m *Manager) GetTagValueChange(plcName, tagName string) *ValueChange {
 		NoValkey: noValkey,
 	}
 
-	// For S7, set Address to uppercase version of TagName
-	if family == config.FamilyS7 {
+	// For S7/Omron, set Address to uppercase version of TagName for troubleshooting
+	if family == config.FamilyS7 || family == config.FamilyOmron {
 		vc.Address = strings.ToUpper(tagName)
 	}
 
@@ -1616,8 +1616,8 @@ func (m *Manager) GetAllCurrentValues() []ValueChange {
 					NoKafka:  noKafkaMap[lookupKey],
 					NoValkey: noValkeyMap[lookupKey],
 				}
-				// For S7, set Address to uppercase version of TagName
-				if family == config.FamilyS7 {
+				// For S7/Omron, set Address to uppercase version of TagName for troubleshooting
+				if family == config.FamilyS7 || family == config.FamilyOmron {
 					vc.Address = strings.ToUpper(tagName)
 				}
 				results = append(results, vc)

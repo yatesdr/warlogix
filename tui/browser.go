@@ -703,20 +703,27 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *driver.TagInfo, e
 		shortName = tag.Name[idx+1:]
 	}
 
-	// For address-based PLCs (S7, Omron FINS), show alias as primary name if set, with address in gray
+	// For address-based PLCs (S7, Omron FINS), show alias or memloc as name, with (memloc) type
 	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg != nil {
 		family := cfg.GetFamily()
 		if family == config.FamilyS7 || (family == config.FamilyOmron && cfg.IsOmronFINS()) {
 			// Look up the alias for this tag
+			alias := ""
 			for _, sel := range cfg.Tags {
-				if sel.Name == tag.Name && sel.Alias != "" {
-					// Show: checkbox [indicators] Alias  (address) type
-					shortName = sel.Alias
-					typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
+				if sel.Name == tag.Name {
+					alias = sel.Alias
 					break
 				}
 			}
+			// Use alias if set, otherwise use full memloc as name
+			if alias != "" {
+				shortName = alias
+			} else {
+				shortName = tag.Name
+			}
+			// Always show (memloc) type format
+			typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
 		}
 	}
 
@@ -1705,20 +1712,27 @@ func (t *BrowserTab) createTagNodeWithError(tag *driver.TagInfo, enabled, writab
 		shortName = tag.Name[idx+1:]
 	}
 
-	// For address-based PLCs (S7, Omron FINS), show alias as primary name if set, with address in gray
+	// For address-based PLCs (S7, Omron FINS), show alias or memloc as name, with (memloc) type
 	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg != nil {
 		family := cfg.GetFamily()
 		if family == config.FamilyS7 || (family == config.FamilyOmron && cfg.IsOmronFINS()) {
 			// Look up the alias for this tag
+			alias := ""
 			for _, sel := range cfg.Tags {
-				if sel.Name == tag.Name && sel.Alias != "" {
-					// Show: checkbox [indicators] Alias  (address) type
-					shortName = sel.Alias
-					typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
+				if sel.Name == tag.Name {
+					alias = sel.Alias
 					break
 				}
 			}
+			// Use alias if set, otherwise use full memloc as name
+			if alias != "" {
+				shortName = alias
+			} else {
+				shortName = tag.Name
+			}
+			// Always show (memloc) type format
+			typeName = fmt.Sprintf("(%s) %s", tag.Name, typeName)
 		}
 	}
 
