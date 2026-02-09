@@ -6,6 +6,7 @@ import (
 
 	"warlogix/cip"
 	"warlogix/eip"
+	"warlogix/logging"
 )
 
 // PLC is a thin Logix-specific wrapper over the generic eip client.
@@ -339,6 +340,9 @@ func (p *PLC) WriteTagCount(tagName string, dataType uint16, value []byte, count
 		return fmt.Errorf("WriteTag: empty tag name")
 	}
 
+	logging.DebugLog("logix", "WriteTagCount %s: dataType=0x%04X (%s), count=%d, data=%X",
+		tagName, dataType, TypeName(dataType), count, value)
+
 	// Build the symbolic EPath for the tag name.
 	path, err := cip.EPath().Symbol(tagName).Build()
 	if err != nil {
@@ -355,13 +359,19 @@ func (p *PLC) WriteTagCount(tagName string, dataType uint16, value []byte, count
 	reqData = binary.LittleEndian.AppendUint16(reqData, count)    // Element count
 	reqData = append(reqData, value...)                           // Tag data
 
+	logging.DebugLog("logix", "WriteTagCount %s: CIP request=%X", tagName, reqData)
+
 	// Send request and get response
 	cipResp, err := p.sendCipRequest(reqData)
 	if err != nil {
+		logging.DebugLog("logix", "WriteTagCount %s: sendCipRequest error: %v", tagName, err)
 		return fmt.Errorf("WriteTag: %w", err)
 	}
 
+	logging.DebugLog("logix", "WriteTagCount %s: CIP response=%X", tagName, cipResp)
+
 	if err := parseWriteTagResponse(cipResp); err != nil {
+		logging.DebugLog("logix", "WriteTagCount %s: response parse error: %v", tagName, err)
 		return fmt.Errorf("WriteTag: %w", err)
 	}
 

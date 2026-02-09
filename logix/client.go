@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"warlogix/logging"
 )
 
 // Client is a high-level wrapper that manages connection lifecycle
@@ -834,6 +836,107 @@ func (c *Client) ReadAll() ([]*TagValue, error) {
 	return c.Read(tagNames...)
 }
 
+// getMemberTypeFromTemplate looks up a UDT member's type from its template definition.
+// For a path like "Program:MainProgram.MyUDT.Member1", it finds the MyUDT template
+// and returns Member1's type code. Returns 0 if not a UDT member or not found.
+func (c *Client) getMemberTypeFromTemplate(tagName string) uint16 {
+	// Find the base tag (before any member access)
+	// Handle both controller-scope and program-scope tags:
+	// - "MyUDT.Member" -> base="MyUDT", member="Member"
+	// - "Program:MainProgram.MyUDT.Member" -> base="Program:MainProgram.MyUDT", member="Member"
+
+	// First, check if this path has any member access
+	dotIdx := strings.LastIndex(tagName, ".")
+	if dotIdx == -1 {
+		return 0 // No dot, not a member access
+	}
+
+	// Try progressively shorter base paths to find a UDT
+	path := tagName
+	for {
+		dotIdx = strings.LastIndex(path, ".")
+		if dotIdx == -1 {
+			break
+		}
+
+		basePath := path[:dotIdx]
+		memberPath := tagName[dotIdx+1:] // Everything after this dot
+
+		// Check if basePath is a known UDT
+		baseInfo, ok := c.tagInfo[basePath]
+		if ok && IsStructure(baseInfo.TypeCode) {
+			// Found a UDT, get its template
+			tmpl, err := c.GetTemplate(baseInfo.TypeCode)
+			if err != nil {
+				logging.DebugLog("logix", "getMemberTypeFromTemplate: failed to get template for %s: %v", basePath, err)
+				path = basePath
+				continue
+			}
+
+			// Find the member in the template
+			memberType := c.findMemberType(tmpl, strings.TrimPrefix(tagName, basePath+"."))
+			if memberType != 0 {
+				logging.DebugLog("logix", "getMemberTypeFromTemplate: found %s member type 0x%04X (%s)",
+					tagName, memberType, TypeName(memberType))
+				return memberType
+			}
+		}
+
+		// Try a shorter base path
+		path = basePath
+		_ = memberPath // Used in next iteration conceptually
+	}
+
+	return 0
+}
+
+// findMemberType recursively finds a member's type in a template.
+// memberPath can be simple ("Member1") or nested ("NestedUDT.Member1").
+func (c *Client) findMemberType(tmpl *Template, memberPath string) uint16 {
+	if tmpl == nil {
+		return 0
+	}
+
+	// Split into first component and rest
+	dotIdx := strings.Index(memberPath, ".")
+	var firstName, restPath string
+	if dotIdx == -1 {
+		firstName = memberPath
+	} else {
+		firstName = memberPath[:dotIdx]
+		restPath = memberPath[dotIdx+1:]
+	}
+
+	// Handle array index in member name (e.g., "Member[0]")
+	if bracketIdx := strings.Index(firstName, "["); bracketIdx != -1 {
+		firstName = firstName[:bracketIdx]
+	}
+
+	// Look up the member index
+	memberIdx, ok := tmpl.MemberMap[firstName]
+	if !ok || memberIdx < 0 || memberIdx >= len(tmpl.Members) {
+		return 0
+	}
+	member := &tmpl.Members[memberIdx]
+
+	// If no more path components, return this member's type
+	if restPath == "" {
+		return member.Type
+	}
+
+	// Need to recurse into nested structure
+	if !IsStructure(member.Type) {
+		return 0 // Not a structure, can't recurse
+	}
+
+	nestedTmpl, err := c.GetTemplate(member.Type)
+	if err != nil {
+		return 0
+	}
+
+	return c.findMemberType(nestedTmpl, restPath)
+}
+
 // Write writes a value to a tag. If the tag's type is known from discovery,
 // the value is converted to match. Otherwise, the type is inferred from the Go value type.
 func (c *Client) Write(tagName string, value interface{}) error {
@@ -841,12 +944,23 @@ func (c *Client) Write(tagName string, value interface{}) error {
 		return fmt.Errorf("Write: nil client")
 	}
 
-	// Look up the tag's actual type if available
+	// For UDT member access (path contains dot after base tag), look up type from template
+	// This is more reliable than tagInfo which may have incorrect types for UDT members
+	if memberType := c.getMemberTypeFromTemplate(tagName); memberType != 0 {
+		logging.DebugLog("logix", "Write %s: found member type from template, TypeCode=0x%04X (%s), value=%v (%T)",
+			tagName, memberType, TypeName(memberType), value, value)
+		return c.writeTyped(tagName, value, memberType)
+	}
+
+	// Look up the tag's actual type from discovery
 	if info, ok := c.tagInfo[tagName]; ok && info.TypeCode != 0 {
+		logging.DebugLog("logix", "Write %s: found type info, TypeCode=0x%04X (%s), value=%v (%T)",
+			tagName, info.TypeCode, TypeName(info.TypeCode), value, value)
 		return c.writeTyped(tagName, value, info.TypeCode)
 	}
 
 	// Fall back to inferring type from value
+	logging.DebugLog("logix", "Write %s: no type info, inferring from value=%v (%T)", tagName, value, value)
 	return c.writeInferred(tagName, value)
 }
 
@@ -856,6 +970,14 @@ func (c *Client) writeTyped(tagName string, value interface{}, targetType uint16
 	baseType := targetType & 0x0FFF
 	isArray := (targetType & TypeArrayMask) != 0
 
+	// Also check if value is a slice - for UDT members, the array flag may not be in the type code
+	if !isArray {
+		isArray = isSliceType(value)
+	}
+
+	logging.DebugLog("logix", "writeTyped %s: targetType=0x%04X, baseType=0x%04X (%s), isArray=%v",
+		tagName, targetType, baseType, TypeName(baseType), isArray)
+
 	// Handle arrays
 	if isArray {
 		return c.writeArrayTyped(tagName, value, baseType)
@@ -864,10 +986,27 @@ func (c *Client) writeTyped(tagName string, value interface{}, targetType uint16
 	// Convert value to target type
 	data, err := c.convertToType(value, baseType)
 	if err != nil {
+		logging.DebugLog("logix", "writeTyped %s: conversion failed: %v", tagName, err)
 		return fmt.Errorf("Write %s: %w", tagName, err)
 	}
 
-	return c.plc.WriteTag(tagName, baseType, data)
+	logging.DebugLog("logix", "writeTyped %s: sending %d bytes: %X", tagName, len(data), data)
+	err = c.plc.WriteTag(tagName, baseType, data)
+	if err != nil {
+		logging.DebugLog("logix", "writeTyped %s: WriteTag failed: %v", tagName, err)
+	}
+	return err
+}
+
+// isSliceType returns true if the value is a slice type that should be written as an array.
+func isSliceType(value interface{}) bool {
+	switch value.(type) {
+	case []int32, []int64, []float32, []float64, []bool, []string,
+		[]int, []int8, []int16, []uint, []byte, []uint16, []uint32, []uint64:
+		return true
+	default:
+		return false
+	}
 }
 
 // convertToType converts a Go value to bytes for the specified CIP type.
