@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/subtle"
@@ -11,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gliderlabs/ssh"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -21,20 +21,27 @@ type AuthConfig struct {
 	AuthorizedKeys string // Path to authorized_keys file
 }
 
-// PasswordHandler returns an ssh.PasswordHandler that validates against the configured password.
+// passwordCallback returns a gossh.PasswordCallback that validates against the configured password.
 // Uses constant-time comparison to prevent timing attacks.
-func PasswordHandler(password string) ssh.PasswordHandler {
+func passwordCallback(password string) func(conn gossh.ConnMetadata, pass []byte) (*gossh.Permissions, error) {
 	if password == "" {
 		return nil
 	}
-	return func(ctx ssh.Context, pass string) bool {
+	return func(conn gossh.ConnMetadata, pass []byte) (*gossh.Permissions, error) {
 		// Use constant-time comparison to prevent timing attacks
-		return subtle.ConstantTimeCompare([]byte(pass), []byte(password)) == 1
+		if subtle.ConstantTimeCompare(pass, []byte(password)) == 1 {
+			return nil, nil
+		}
+		user := ""
+		if conn != nil {
+			user = conn.User()
+		}
+		return nil, fmt.Errorf("password rejected for %q", user)
 	}
 }
 
-// PublicKeyHandler returns an ssh.PublicKeyHandler that validates against authorized_keys.
-func PublicKeyHandler(authorizedKeysPath string) ssh.PublicKeyHandler {
+// publicKeyCallback returns a gossh.PublicKeyCallback that validates against authorized_keys.
+func publicKeyCallback(authorizedKeysPath string) func(conn gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
 	if authorizedKeysPath == "" {
 		return nil
 	}
@@ -51,18 +58,27 @@ func PublicKeyHandler(authorizedKeysPath string) ssh.PublicKeyHandler {
 		return nil
 	}
 
-	return func(ctx ssh.Context, key ssh.PublicKey) bool {
+	return func(conn gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
 		for _, authorizedKey := range authorizedKeys {
-			if ssh.KeysEqual(key, authorizedKey) {
-				return true
+			if keysEqual(key, authorizedKey) {
+				return nil, nil
 			}
 		}
-		return false
+		user := ""
+		if conn != nil {
+			user = conn.User()
+		}
+		return nil, fmt.Errorf("unknown public key for %q", user)
 	}
 }
 
+// keysEqual compares two public keys for equality.
+func keysEqual(a, b gossh.PublicKey) bool {
+	return bytes.Equal(a.Marshal(), b.Marshal())
+}
+
 // loadAuthorizedKeys loads public keys from an authorized_keys file or directory.
-func loadAuthorizedKeys(path string) ([]ssh.PublicKey, error) {
+func loadAuthorizedKeys(path string) ([]gossh.PublicKey, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -75,14 +91,14 @@ func loadAuthorizedKeys(path string) ([]ssh.PublicKey, error) {
 }
 
 // loadAuthorizedKeysFromFile loads public keys from a single authorized_keys file.
-func loadAuthorizedKeysFromFile(path string) ([]ssh.PublicKey, error) {
+func loadAuthorizedKeysFromFile(path string) ([]gossh.PublicKey, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	var keys []ssh.PublicKey
+	var keys []gossh.PublicKey
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -106,13 +122,13 @@ func loadAuthorizedKeysFromFile(path string) ([]ssh.PublicKey, error) {
 }
 
 // loadAuthorizedKeysFromDir loads public keys from all files in a directory.
-func loadAuthorizedKeysFromDir(dir string) ([]ssh.PublicKey, error) {
+func loadAuthorizedKeysFromDir(dir string) ([]gossh.PublicKey, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
 
-	var keys []ssh.PublicKey
+	var keys []gossh.PublicKey
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue

@@ -10,33 +10,35 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-func TestPasswordHandler(t *testing.T) {
+func TestPasswordCallback(t *testing.T) {
 	t.Run("returns nil for empty password", func(t *testing.T) {
-		handler := PasswordHandler("")
+		handler := passwordCallback("")
 		if handler != nil {
 			t.Error("expected nil handler for empty password")
 		}
 	})
 
 	t.Run("validates correct password", func(t *testing.T) {
-		handler := PasswordHandler("secret123")
+		handler := passwordCallback("secret123")
 		if handler == nil {
 			t.Fatal("expected non-nil handler")
 		}
 
-		if !handler(nil, "secret123") {
-			t.Error("expected true for correct password")
+		_, err := handler(nil, []byte("secret123"))
+		if err != nil {
+			t.Error("expected nil error for correct password")
 		}
 	})
 
 	t.Run("rejects incorrect password", func(t *testing.T) {
-		handler := PasswordHandler("secret123")
+		handler := passwordCallback("secret123")
 		if handler == nil {
 			t.Fatal("expected non-nil handler")
 		}
 
-		if handler(nil, "wrong") {
-			t.Error("expected false for incorrect password")
+		_, err := handler(nil, []byte("wrong"))
+		if err == nil {
+			t.Error("expected error for incorrect password")
 		}
 	})
 }
@@ -272,7 +274,7 @@ func TestGenerateAndLoadHostKey(t *testing.T) {
 	})
 }
 
-func TestPublicKeyHandler(t *testing.T) {
+func TestPublicKeyCallback(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Generate a test key pair
@@ -281,14 +283,14 @@ func TestPublicKeyHandler(t *testing.T) {
 	authorizedKey := string(gossh.MarshalAuthorizedKey(sshPubKey))
 
 	t.Run("returns nil for empty path", func(t *testing.T) {
-		handler := PublicKeyHandler("")
+		handler := publicKeyCallback("")
 		if handler != nil {
 			t.Error("expected nil handler for empty path")
 		}
 	})
 
 	t.Run("returns nil for nonexistent path", func(t *testing.T) {
-		handler := PublicKeyHandler("/nonexistent/path")
+		handler := publicKeyCallback("/nonexistent/path")
 		if handler != nil {
 			t.Error("expected nil handler for nonexistent path")
 		}
@@ -298,7 +300,7 @@ func TestPublicKeyHandler(t *testing.T) {
 		path := filepath.Join(tmpDir, "empty_keys")
 		os.WriteFile(path, []byte(""), 0644)
 
-		handler := PublicKeyHandler(path)
+		handler := publicKeyCallback(path)
 		if handler != nil {
 			t.Error("expected nil handler for empty authorized_keys")
 		}
@@ -308,21 +310,23 @@ func TestPublicKeyHandler(t *testing.T) {
 		path := filepath.Join(tmpDir, "valid_keys")
 		os.WriteFile(path, []byte(authorizedKey), 0644)
 
-		handler := PublicKeyHandler(path)
+		handler := publicKeyCallback(path)
 		if handler == nil {
 			t.Fatal("expected non-nil handler")
 		}
 
 		// Test with matching key
-		if !handler(nil, sshPubKey) {
-			t.Error("expected true for authorized key")
+		_, err := handler(nil, sshPubKey)
+		if err != nil {
+			t.Error("expected nil error for authorized key")
 		}
 
 		// Test with different key
 		otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
 		otherSSHPub, _ := gossh.NewPublicKey(otherPub)
-		if handler(nil, otherSSHPub) {
-			t.Error("expected false for unauthorized key")
+		_, err = handler(nil, otherSSHPub)
+		if err == nil {
+			t.Error("expected error for unauthorized key")
 		}
 	})
 }

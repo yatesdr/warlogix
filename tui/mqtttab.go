@@ -48,7 +48,7 @@ func (t *MQTTTab) setupUI() {
 	t.table.SetSelectedFunc(t.onSelect)
 
 	// Set up headers (themed)
-	headers := []string{"", "Name", "Broker", "Port", "TLS", "Root Topic", "Status"}
+	headers := []string{"", "Name", "Broker", "Port", "TLS", "Selector", "Status"}
 	for i, h := range headers {
 		t.table.SetCell(0, i, tview.NewTableCell(h).
 			SetTextColor(CurrentTheme.Accent).

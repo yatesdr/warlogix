@@ -1311,6 +1311,97 @@ func (t *BrowserTab) RefreshTheme() {
 	t.loadTags() // Refresh tree nodes with new theme colors
 }
 
+// ReloadConfigState reloads the enabled/writable/ignored state from config.
+// This is called when config changes from another TUI session.
+func (t *BrowserTab) ReloadConfigState() {
+	if t.selectedPLC == "" {
+		return
+	}
+
+	// Find the PLC config
+	var cfg *config.PLCConfig
+	for i := range t.app.config.PLCs {
+		if t.app.config.PLCs[i].Name == t.selectedPLC {
+			cfg = &t.app.config.PLCs[i]
+			break
+		}
+	}
+	if cfg == nil {
+		return
+	}
+
+	// Check if any config values actually changed
+	changed := false
+	for _, sel := range cfg.Tags {
+		if t.enabledTags[sel.Name] != sel.Enabled {
+			t.enabledTags[sel.Name] = sel.Enabled
+			changed = true
+		}
+		if t.writableTags[sel.Name] != sel.Writable {
+			t.writableTags[sel.Name] = sel.Writable
+			changed = true
+		}
+		if len(sel.IgnoreChanges) > 0 {
+			if t.ignoredMembers[sel.Name] == nil {
+				t.ignoredMembers[sel.Name] = make(map[string]bool)
+				changed = true
+			}
+			for _, member := range sel.IgnoreChanges {
+				if !t.ignoredMembers[sel.Name][member] {
+					t.ignoredMembers[sel.Name][member] = true
+					changed = true
+				}
+			}
+		}
+	}
+
+	// Only refresh if something actually changed
+	if !changed {
+		return
+	}
+
+	// Save current selection
+	currentNode := t.tree.GetCurrentNode()
+	var currentTagName string
+	if currentNode != nil {
+		if ref := currentNode.GetReference(); ref != nil {
+			if tagInfo, ok := ref.(*driver.TagInfo); ok {
+				currentTagName = tagInfo.Name
+			}
+		}
+	}
+
+	// Refresh the tree to show updated state
+	t.loadTags()
+
+	// Restore selection if we had one
+	if currentTagName != "" {
+		t.selectTagByName(currentTagName)
+	}
+}
+
+// selectTagByName finds and selects a tag node by its name.
+func (t *BrowserTab) selectTagByName(tagName string) {
+	var findNode func(node *tview.TreeNode) *tview.TreeNode
+	findNode = func(node *tview.TreeNode) *tview.TreeNode {
+		if ref := node.GetReference(); ref != nil {
+			if tagInfo, ok := ref.(*driver.TagInfo); ok && tagInfo.Name == tagName {
+				return node
+			}
+		}
+		for _, child := range node.GetChildren() {
+			if found := findNode(child); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+
+	if found := findNode(t.treeRoot); found != nil {
+		t.tree.SetCurrentNode(found)
+	}
+}
+
 // Refresh updates the PLC dropdown and reloads tags.
 func (t *BrowserTab) Refresh() {
 	// Update PLC dropdown

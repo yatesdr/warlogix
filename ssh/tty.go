@@ -12,6 +12,7 @@ import (
 // This allows tcell to use an SSH channel as a terminal.
 type SSHChannelTty struct {
 	channel  gossh.Channel
+	term     string
 	width    int
 	height   int
 	mu       sync.RWMutex
@@ -22,13 +23,23 @@ type SSHChannelTty struct {
 }
 
 // NewSSHChannelTty creates a new SSHChannelTty wrapping the given SSH channel.
-func NewSSHChannelTty(channel gossh.Channel, initialWidth, initialHeight int) *SSHChannelTty {
+func NewSSHChannelTty(channel gossh.Channel, term string, initialWidth, initialHeight int) *SSHChannelTty {
+	// Default to xterm-256color if no term specified
+	if term == "" {
+		term = "xterm-256color"
+	}
 	return &SSHChannelTty{
 		channel:  channel,
+		term:     term,
 		width:    initialWidth,
 		height:   initialHeight,
 		stopChan: make(chan struct{}),
 	}
+}
+
+// Term returns the terminal type.
+func (t *SSHChannelTty) Term() string {
+	return t.term
 }
 
 // Start initializes the tty for use.

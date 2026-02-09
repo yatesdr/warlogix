@@ -5,10 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// ConfigListenerID is a unique identifier for a config change listener.
+type ConfigListenerID string
 
 // PLCFamily represents the type/protocol family of a PLC.
 type PLCFamily string
@@ -66,6 +71,11 @@ type Config struct {
 	TagPacks  []TagPackConfig  `yaml:"tag_packs,omitempty"`
 	PollRate  time.Duration    `yaml:"poll_rate"`
 	UI        UIConfig         `yaml:"ui,omitempty"`
+
+	// Change listeners (not serialized)
+	changeListeners map[ConfigListenerID]func() `yaml:"-"`
+	listenersMu     sync.RWMutex                `yaml:"-"`
+	listenerCounter uint64                      `yaml:"-"`
 }
 
 // TagPackConfig holds configuration for a Tag Pack.
@@ -481,7 +491,45 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Save writes configuration to a YAML file.
+// AddOnChangeListener registers a callback to be called when the config is saved.
+// Returns an ID that can be used to remove the listener later.
+func (c *Config) AddOnChangeListener(cb func()) ConfigListenerID {
+	c.listenersMu.Lock()
+	defer c.listenersMu.Unlock()
+
+	if c.changeListeners == nil {
+		c.changeListeners = make(map[ConfigListenerID]func())
+	}
+
+	id := ConfigListenerID(fmt.Sprintf("listener-%d", atomic.AddUint64(&c.listenerCounter, 1)))
+	c.changeListeners[id] = cb
+	return id
+}
+
+// RemoveOnChangeListener removes a previously registered listener.
+func (c *Config) RemoveOnChangeListener(id ConfigListenerID) {
+	c.listenersMu.Lock()
+	defer c.listenersMu.Unlock()
+
+	delete(c.changeListeners, id)
+}
+
+// notifyChangeListeners calls all registered change listeners.
+func (c *Config) notifyChangeListeners() {
+	c.listenersMu.RLock()
+	listeners := make([]func(), 0, len(c.changeListeners))
+	for _, cb := range c.changeListeners {
+		listeners = append(listeners, cb)
+	}
+	c.listenersMu.RUnlock()
+
+	// Call listeners outside the lock to avoid deadlocks
+	for _, cb := range listeners {
+		go cb() // Run in goroutine to avoid blocking
+	}
+}
+
+// Save writes configuration to a YAML file and notifies change listeners.
 func (c *Config) Save(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -493,7 +541,13 @@ func (c *Config) Save(path string) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0644)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return err
+	}
+
+	// Notify listeners after successful save
+	c.notifyChangeListeners()
+	return nil
 }
 
 // FindPLC returns the PLC config with the given name, or nil if not found.

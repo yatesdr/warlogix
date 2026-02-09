@@ -132,9 +132,24 @@ The username is ignored - any username works. Only the password or key matters f
 
 ## Session Behavior
 
-### Shared View
+### Independent Sessions
 
-All connected SSH sessions share the same TUI view. This is a PTY multiplexing design - everyone sees the same screen and can interact with it. This is useful for collaborative troubleshooting or monitoring.
+Each SSH connection gets its own independent TUI instance. Multiple users can connect simultaneously and each sees their own view - they can navigate to different tabs, select different PLCs, and work independently without interfering with each other.
+
+All sessions share the same backend:
+- **PLC connections** - All sessions see the same PLC connection states and tag values
+- **Broker connections** - MQTT, Kafka, and Valkey connections are shared
+- **Configuration** - Changes made in one session are synced to all other sessions in real-time
+
+### Real-Time Sync
+
+When you make changes in one session, they automatically appear in other connected sessions:
+- Enabling/disabling tags syncs across all sessions
+- Starting/stopping the REST server updates all sessions
+- Connecting/disconnecting PLCs is visible to all sessions
+- Trigger state changes sync across sessions
+
+The cursor position and current tab are **not** synced - each session maintains its own navigation state.
 
 ### Keyboard Shortcuts
 
@@ -142,9 +157,9 @@ Most keyboard shortcuts work the same as local mode, with one exception:
 
 | Key | Local Mode | Daemon Mode |
 |-----|------------|-------------|
-| `Shift+Q` | Quit application | Disconnect SSH session |
+| `Shift+Q` | Quit application | Disconnect your SSH session |
 
-In daemon mode, `Shift+Q` disconnects your SSH session (and all other connected sessions) but leaves the daemon running. The daemon continues polling PLCs and publishing data.
+In daemon mode, `Shift+Q` disconnects only **your** SSH session. Other connected sessions continue working, and the daemon keeps running. The daemon continues polling PLCs and publishing data regardless of how many sessions are connected.
 
 ## Stopping the Daemon
 
@@ -770,16 +785,17 @@ This means a properly configured WarLink can start publishing data immediately o
 
 | Platform | Daemon Mode |
 |----------|-------------|
-| Linux | Supported |
-| macOS | Supported |
+| Linux | Fully supported |
+| macOS | Fully supported |
 | Windows | Not supported |
 
-Windows does not support the PTY functionality required for daemon mode. On Windows, run WarLink in local mode or use WSL.
+Windows does not support daemon mode due to differences in terminal handling. On Windows, run WarLink in local mode or use WSL.
 
 ## Security Considerations
 
 - Use strong passwords or key-based authentication
 - Consider firewall rules to restrict SSH access
 - The SSH server uses a new host key on each start (no persistent key)
-- All sessions share the same view - don't connect untrusted users
-- Configuration changes made via SSH are saved to disk
+- All authenticated users have full access to view and modify configuration
+- Configuration changes made via SSH are saved to disk and synced to all sessions
+- Each session is independent but shares access to PLCs and brokers

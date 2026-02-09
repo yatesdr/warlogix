@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/gdamore/tcell/v2/terminfo"
 	gossh "golang.org/x/crypto/ssh"
 	"warlink/api"
 	"warlink/config"
@@ -352,11 +353,13 @@ func (s *Server) handleSession(conn *gossh.ServerConn, channel gossh.Channel, re
 // runSession runs the main session loop with an independent TUI.
 func (s *Server) runSession(session *Session) {
 	remoteAddr := session.RemoteAddr().String()
-	tui.DebugLogSSH("Session connected from %s", remoteAddr)
+	tui.DebugLogSSH("Session started from %s (term=%s, size=%dx%d)",
+		remoteAddr, session.ptyReq.Term, session.ptyReq.Width, session.ptyReq.Height)
 
 	// Create SSHChannelTty from session's channel
 	tty := NewSSHChannelTty(
 		session.channel,
+		session.ptyReq.Term,
 		int(session.ptyReq.Width),
 		int(session.ptyReq.Height),
 	)
@@ -371,16 +374,10 @@ func (s *Server) runSession(session *Session) {
 		s.onSessionConnect(remoteAddr)
 	}
 
-	// Create tcell screen from the tty
-	screen, err := tcell.NewTerminfoScreenFromTty(tty)
+	// Create tcell screen from the tty with proper terminfo
+	screen, err := createScreenFromTty(tty)
 	if err != nil {
 		tui.DebugLogSSH("Failed to create screen for %s: %v", remoteAddr, err)
-		s.cleanupSession(session, remoteAddr)
-		return
-	}
-
-	if err := screen.Init(); err != nil {
-		tui.DebugLogSSH("Failed to init screen for %s: %v", remoteAddr, err)
 		s.cleanupSession(session, remoteAddr)
 		return
 	}
@@ -389,7 +386,6 @@ func (s *Server) runSession(session *Session) {
 	app, err := tui.NewAppWithSharedBackend(screen, s.managers)
 	if err != nil {
 		tui.DebugLogSSH("Failed to create TUI for %s: %v", remoteAddr, err)
-		screen.Fini()
 		s.cleanupSession(session, remoteAddr)
 		return
 	}
@@ -401,6 +397,7 @@ func (s *Server) runSession(session *Session) {
 	})
 
 	// Run TUI (blocks until session ends)
+	// tview.Run() handles screen initialization internally
 	if err := app.Run(); err != nil {
 		tui.DebugLogSSH("TUI error for %s: %v", remoteAddr, err)
 	}
@@ -465,6 +462,29 @@ func parseWindowChange(payload []byte) (Window, error) {
 		Width:  int(width),
 		Height: int(height),
 	}, nil
+}
+
+// createScreenFromTty creates a tcell screen from an SSHChannelTty.
+// It looks up the terminfo based on the terminal type from the SSH session.
+func createScreenFromTty(tty *SSHChannelTty) (tcell.Screen, error) {
+	term := tty.Term()
+
+	// Try to look up terminfo for the terminal type
+	ti, err := terminfo.LookupTerminfo(term)
+	if err != nil {
+		// Fall back to xterm-256color if the requested term isn't found
+		tui.DebugLogSSH("Terminfo not found for %s, falling back to xterm-256color", term)
+		ti, err = terminfo.LookupTerminfo("xterm-256color")
+		if err != nil {
+			// Last resort: try xterm
+			ti, err = terminfo.LookupTerminfo("xterm")
+			if err != nil {
+				return nil, fmt.Errorf("failed to find terminfo: %w", err)
+			}
+		}
+	}
+
+	return tcell.NewTerminfoScreenFromTtyTerminfo(tty, ti)
 }
 
 // Stop stops the SSH server gracefully.

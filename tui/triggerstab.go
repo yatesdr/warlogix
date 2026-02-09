@@ -285,7 +285,7 @@ func (t *TriggersTab) Refresh() {
 		case trigger.StatusFiring:
 			indicatorCell.SetTextColor(tcell.ColorYellow)
 		case trigger.StatusCooldown:
-			indicatorCell.SetTextColor(tcell.ColorBlue)
+			indicatorCell.SetTextColor(tcell.ColorOrange)
 		case trigger.StatusError:
 			indicatorCell.SetTextColor(IndicatorRed)
 		default:

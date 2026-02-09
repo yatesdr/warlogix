@@ -226,6 +226,17 @@ func (t *RESTTab) Refresh() {
 	th := CurrentTheme
 	running := t.app.apiServer.IsRunning()
 
+	// Sync input fields from config if they differ (for multi-session sync)
+	// Only update if the field doesn't have focus to avoid disrupting user input
+	focused := t.app.app.GetFocus()
+	if focused != t.hostInput && t.hostInput.GetText() != t.app.config.REST.Host {
+		t.hostInput.SetText(t.app.config.REST.Host)
+	}
+	portStr := fmt.Sprintf("%d", t.app.config.REST.Port)
+	if focused != t.portInput && t.portInput.GetText() != portStr {
+		t.portInput.SetText(portStr)
+	}
+
 	var status string
 	if running {
 		status = fmt.Sprintf(" %s● Running%s on %s  %s│%s  %s?%s help  %sShift+Tab%s next tab",

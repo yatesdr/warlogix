@@ -61,6 +61,7 @@ type App struct {
 	changeListenerID      plcman.ListenerID
 	valueChangeListenerID plcman.ListenerID
 	debugListenerID       DebugStoreListenerID
+	configListenerID      config.ConfigListenerID
 }
 
 // NewApp creates a new TUI application.
@@ -207,6 +208,31 @@ func (a *App) registerListeners() {
 			})
 		})
 	}
+
+	// Register for config changes to sync state across sessions
+	a.configListenerID = a.config.AddOnChangeListener(func() {
+		a.app.QueueUpdateDraw(func() {
+			if a.browserTab != nil {
+				a.browserTab.ReloadConfigState()
+			}
+			// Refresh tabs that have start/stop state tied to config
+			if a.restTab != nil {
+				a.restTab.Refresh()
+			}
+			if a.mqttTab != nil {
+				a.mqttTab.Refresh()
+			}
+			if a.valkeyTab != nil {
+				a.valkeyTab.Refresh()
+			}
+			if a.kafkaTab != nil {
+				a.kafkaTab.Refresh()
+			}
+			if a.triggersTab != nil {
+				a.triggersTab.Refresh()
+			}
+		})
+	})
 }
 
 // unregisterListeners removes this app's listeners from shared managers.
@@ -225,6 +251,10 @@ func (a *App) unregisterListeners() {
 			store.Unsubscribe(a.debugListenerID)
 		}
 		a.debugListenerID = ""
+	}
+	if a.configListenerID != "" {
+		a.config.RemoveOnChangeListener(a.configListenerID)
+		a.configListenerID = ""
 	}
 }
 
@@ -980,6 +1010,11 @@ func (a *App) Shutdown() {
 // Stop halts the TUI application.
 func (a *App) Stop() {
 	a.app.Stop()
+}
+
+// ForceDraw forces an immediate draw of the application.
+func (a *App) ForceDraw() {
+	a.app.ForceDraw()
 }
 
 // ShutdownDaemon performs a full daemon shutdown.

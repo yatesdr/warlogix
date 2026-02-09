@@ -147,6 +147,8 @@ func (t *KafkaTab) updateInfo(name string) {
 
 	if cfg.Selector != "" {
 		info += th.Label("Selector", cfg.Selector) + "\n"
+	} else {
+		info += th.Label("Selector", "(none)") + "\n"
 	}
 
 	// Auto-create topics (default true if nil)
