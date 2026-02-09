@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2026-02-09
+
+### Changed
+- **Independent SSH Sessions**: Each SSH connection now gets its own independent TUI instance
+  - Multiple users can navigate different tabs and work independently
+  - Replaces previous shared-screen PTY multiplexing architecture
+- **Real-Time Config Sync**: Configuration changes sync across all connected sessions
+  - Tag enable/disable and writable state syncs instantly
+  - REST, MQTT, Valkey, Kafka service state syncs across sessions
+  - Trigger enable/disable syncs across sessions
+  - Cursor position preserved when syncing browser tab state
+- **Trigger Cooldown Indicator**: Changed from blue to orange for better visual clarity
+- **MQTT Tab**: Renamed "Root Topic" column to "Selector" for consistency
+- **Kafka Tab**: Selector now always shown in Cluster Info pane (displays "(none)" when empty)
+- **REST Tab**: Host and Port fields now sync across sessions
+
+### Removed
+- PTY multiplexing dependency (creack/pty) - no longer required
+
+### Fixed
+- Blank screen on SSH connect due to double screen initialization
+- REST tab input fields not syncing across sessions
+
 ## [0.2.0] - 2026-02-09
 
 ### Added
