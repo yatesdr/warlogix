@@ -25,7 +25,7 @@ TagPack topics and keys are automatically derived from the `namespace` and `sele
 |---------|-----------|-------------|---------|
 | **MQTT** | `{namespace}[/{selector}]/packs/{packname}` | - | `factory/line1/packs/ProductionMetrics` |
 | **Kafka** | `{namespace}[-{selector}]` (same as tags) | `pack:{packname}` | Topic: `factory-line1`, Key: `pack:ProductionMetrics` |
-| **Valkey** | `{namespace}[:{selector}]:packs:{packname}` | - | `factory:line1:packs:ProductionMetrics` |
+| **Valkey** | `{namespace}[:{selector}]:packs:{packname}` | - | Key: `factory:line1:packs:ProductionMetrics` |
 
 ## Storage and Delivery
 
@@ -52,7 +52,7 @@ The pack is published with a flat `plc.tag` key structure for easy access and to
       "value": 1234,
       "type": "DINT",
       "plc": "MainPLC",
-      "offset": "ProductCount"
+      "memloc": "DB1.0"
     },
     "MainPLC.Temperature": {
       "value": 72.5,
@@ -76,7 +76,7 @@ The pack is published with a flat `plc.tag` key structure for easy access and to
 ### Key Structure
 
 - **Map key format**: `plc.tag` (e.g., `MainPLC.Counter`, `s7.test_wstring`)
-- **Alias handling**: When a tag has an alias, the alias is used in the key and the original tag name/address is stored in the `offset` field
+- **Alias handling**: When a tag has an alias, the alias is used in the key and the original tag name/address is stored in the `memloc` field
 - **PLC field**: Each tag entry includes the PLC name for easy filtering by consumer applications
 
 ### Tag Entry Fields
@@ -86,7 +86,7 @@ The pack is published with a flat `plc.tag` key structure for easy access and to
 | `value` | Current tag value |
 | `type` | PLC data type (e.g., DINT, REAL, STRING) |
 | `plc` | PLC name (for filtering when consuming) |
-| `offset` | Original tag name/address when alias is used (omitted otherwise) |
+| `memloc` | Memory location (original address like `DB1.0`) when alias is used (omitted otherwise) |
 
 ### PLC Metadata (Error Handling)
 

@@ -6,7 +6,7 @@ import (
 	"math"
 	"strings"
 
-	"warlogix/logging"
+	"warlink/logging"
 )
 
 // Client is a high-level wrapper that manages connection lifecycle

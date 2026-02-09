@@ -8,14 +8,14 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlogix/api"
-	"warlogix/config"
-	"warlogix/kafka"
-	"warlogix/mqtt"
-	"warlogix/plcman"
-	"warlogix/tagpack"
-	"warlogix/trigger"
-	"warlogix/valkey"
+	"warlink/api"
+	"warlink/config"
+	"warlink/kafka"
+	"warlink/mqtt"
+	"warlink/plcman"
+	"warlink/tagpack"
+	"warlink/trigger"
+	"warlink/valkey"
 )
 
 // App is the main TUI application.
@@ -595,7 +595,7 @@ func (a *App) showMandatoryNamespaceModal() {
 	explanation := tview.NewTextView().
 		SetDynamicColors(true).
 		SetWordWrap(true).
-		SetText(CurrentTheme.TagText + `A namespace is required to run WarLogix.
+		SetText(CurrentTheme.TagText + `A namespace is required to run WarLink.
 
 The namespace isolates this instance's data when publishing to MQTT, Kafka, or Valkey. It is often a location, factory name, or process name, but can be any unique identifier you prefer.
 

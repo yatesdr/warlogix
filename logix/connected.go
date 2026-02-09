@@ -4,9 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"warlogix/cip"
-	"warlogix/eip"
-	"warlogix/logging"
+	"warlink/cip"
+	"warlink/eip"
+	"warlink/logging"
 )
 
 var verboseLogging bool // Controls detailed template/parsing logs

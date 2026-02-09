@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/config"
-	"warlogix/kafka"
-	"warlogix/namespace"
-	"warlogix/tagpack"
+	"warlink/config"
+	"warlink/kafka"
+	"warlink/namespace"
+	"warlink/tagpack"
 )
 
 // Status represents the current state of a trigger.

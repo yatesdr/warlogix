@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/logging"
+	"warlink/logging"
 )
 
 const (

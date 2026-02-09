@@ -22,9 +22,9 @@ No special configuration required - EtherNet/IP is enabled by default.
 
 **Requirements:**
 - PLC has an IP address (via RSLogix/Studio 5000 or DHCP)
-- TCP port 44818 accessible from WarLogix host
+- TCP port 44818 accessible from WarLink host
 
-### WarLogix Configuration
+### WarLink Configuration
 
 ```yaml
 - name: MainPLC
@@ -60,7 +60,7 @@ Tags are discovered automatically. Use the Tag Browser to select which to publis
 
 Same as ControlLogix - EtherNet/IP enabled by default.
 
-### WarLogix Configuration
+### WarLink Configuration
 
 ```yaml
 - name: Micro850
@@ -103,7 +103,7 @@ The S7 driver defaults to **Rack 0, Slot 2** (common for S7-300/400). Configure 
    - Uncheck **Optimized block access** (required for absolute addressing)
 5. Download project to PLC
 
-### WarLogix Configuration
+### WarLink Configuration
 
 ```yaml
 - name: SiemensPLC
@@ -156,7 +156,7 @@ Tags must be configured manually with byte offsets:
 
 No special configuration typically required.
 
-### WarLogix Configuration
+### WarLink Configuration
 
 ```yaml
 - name: S7-300
@@ -179,18 +179,18 @@ No special configuration typically required.
 ### PLC-Side Setup
 
 1. **Note your AMS Net ID** (in TwinCAT System Manager, usually `<IP>.1.1`)
-2. **Add a route** for the WarLogix machine (see below)
+2. **Add a route** for the WarLink machine (see below)
 3. **Open firewall** for TCP port 48898
 4. **PLC must be in RUN mode** for symbol access
 
 ### Adding a Route (Required)
 
-Since WarLogix runs without a local TwinCAT installation, you must add a route:
+Since WarLink runs without a local TwinCAT installation, you must add a route:
 
 1. Open TwinCAT XAE and connect to your PLC
 2. Go to **SYSTEM > Routes** and click **Add**
 3. Configure:
-   - **Route Name:** WarLogix
+   - **Route Name:** WarLink
    - **AMS Net Id:** Your machine's IP + `.1.1` (e.g., `192.168.1.50.1.1`)
    - **Transport Type:** TCP/IP
    - **Address Info:** Your machine's IP (e.g., `192.168.1.50`)
@@ -199,7 +199,7 @@ Since WarLogix runs without a local TwinCAT installation, you must add a route:
    - Do **not** select Secure ADS
 4. Click **Add Route**
 
-### WarLogix Configuration
+### WarLink Configuration
 
 ```yaml
 - name: TwinCAT
@@ -225,7 +225,7 @@ Tags are discovered automatically from the symbol table.
 | Issue | Solution |
 |-------|----------|
 | Connection reset | Route not configured or wrong AMS Net ID |
-| No route | Add route in TwinCAT for WarLogix machine |
+| No route | Add route in TwinCAT for WarLink machine |
 | Port not found | Check AMS port (851 vs 801) |
 | No symbols | Ensure PLC is in RUN mode with project activated |
 | Security error | TwinCAT 3.1 Build 4024+ has stricter defaults |
@@ -236,7 +236,7 @@ Tags are discovered automatically from the symbol table.
 
 ### Overview
 
-FINS (Factory Interface Network Service) is Omron's proprietary protocol for older PLC series. WarLogix supports both FINS/TCP and FINS/UDP transports with automatic fallback and optimized batching.
+FINS (Factory Interface Network Service) is Omron's proprietary protocol for older PLC series. WarLink supports both FINS/TCP and FINS/UDP transports with automatic fallback and optimized batching.
 
 **Supported PLC Series:**
 | Series | Models | Transport | Notes |
@@ -254,7 +254,7 @@ FINS (Factory Interface Network Service) is Omron's proprietary protocol for old
 3. **Note the node address** (often matches last IP octet, or set via rotary switches)
 4. **Open firewall** for TCP and UDP port 9600
 
-### WarLogix Configuration
+### WarLink Configuration
 
 ```yaml
 - name: OmronPLC
@@ -283,7 +283,7 @@ FINS (Factory Interface Network Service) is Omron's proprietary protocol for old
 
 ### Transport Selection
 
-WarLogix automatically selects the optimal transport:
+WarLink automatically selects the optimal transport:
 
 | Transport | When Used | Advantages |
 |-----------|-----------|------------|
@@ -312,7 +312,7 @@ Tags must be configured manually with memory area and address:
 
 ### Performance Optimization
 
-WarLogix implements several FINS optimizations:
+WarLink implements several FINS optimizations:
 
 1. **Contiguous Address Grouping** - Sequential addresses in the same memory area are read in a single bulk request (up to 998 words per request)
 
@@ -341,7 +341,7 @@ WarLogix implements several FINS optimizations:
 
 ### Overview
 
-Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Protocol), providing symbolic tag addressing and automatic tag discovery—similar to Allen-Bradley Logix PLCs. WarLogix implements high-performance batching and connected messaging for optimal throughput.
+Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Protocol), providing symbolic tag addressing and automatic tag discovery—similar to Allen-Bradley Logix PLCs. WarLink implements high-performance batching and connected messaging for optimal throughput.
 
 **Supported PLC Series:**
 | Series | Models | Features |
@@ -360,7 +360,7 @@ Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Prot
 3. **Open firewall** for TCP port 44818 (EtherNet/IP)
 4. **Publish tags** - tags must be published/exposed for external access in Sysmac Studio
 
-### WarLogix Configuration
+### WarLink Configuration
 
 ```yaml
 - name: OmronNJ
@@ -406,7 +406,7 @@ tags:
 
 ### Performance Optimization
 
-WarLogix implements several EIP/CIP optimizations for NJ/NX series:
+WarLink implements several EIP/CIP optimizations for NJ/NX series:
 
 1. **Efficient Tag Discovery** - Uses CIP Get Instance Attribute List (service 0x55) with pagination to discover tags in batches, instead of instance-by-instance queries. This significantly reduces discovery time for projects with many tags.
 
@@ -422,7 +422,7 @@ WarLogix implements several EIP/CIP optimizations for NJ/NX series:
 
 ### Connected Messaging
 
-For maximum performance, WarLogix can establish a CIP Forward Open connection:
+For maximum performance, WarLink can establish a CIP Forward Open connection:
 
 ```yaml
 - name: OmronNJ
@@ -476,7 +476,7 @@ All PLC families support these common data types:
 | Allen-Bradley | Little-endian |
 | Beckhoff | Little-endian |
 
-WarLogix automatically handles byte order conversion for known types. Unknown types (UDTs without templates) are returned as raw byte arrays in the PLC's native order.
+WarLink automatically handles byte order conversion for known types. Unknown types (UDTs without templates) are returned as raw byte arrays in the PLC's native order.
 
 ---
 
@@ -501,7 +501,7 @@ The alias appears in all published messages instead of the raw address.
 For troubleshooting PLC communication problems, use the `--log-debug` flag:
 
 ```bash
-./warlogix --log-debug
+./warlink --log-debug
 ```
 
 This creates a `debug.log` file with detailed protocol information:

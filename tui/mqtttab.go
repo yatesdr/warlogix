@@ -7,8 +7,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlogix/config"
-	"warlogix/mqtt"
+	"warlink/config"
+	"warlink/mqtt"
 )
 
 // MQTTTab handles the MQTT configuration tab.

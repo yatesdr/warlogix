@@ -33,11 +33,11 @@ Multi-dimensional arrays are flattened to a single dimension.
 
 ## Writing Values
 
-WarLogix supports writing values to PLC tags through the Browser tab. Press `W` on any writable tag to open the write dialog.
+WarLink supports writing values to PLC tags through the Browser tab. Press `W` on any writable tag to open the write dialog.
 
 ### Type-Aware Writes
 
-When writing to a tag, WarLogix uses the tag's actual data type discovered from the PLC. This ensures the correct CIP type code is sent, preventing type mismatch errors.
+When writing to a tag, WarLink uses the tag's actual data type discovered from the PLC. This ensures the correct CIP type code is sent, preventing type mismatch errors.
 
 ### Scalar Value Formats
 
@@ -114,7 +114,7 @@ To decode manually:
 
 ## UDT/Structure Support
 
-WarLogix automatically unpacks UDT (User-Defined Type) members when the template is known on supported PLCs. You can publish the entire UDT as a JSON object, or publish individual members separately using dot-notation.
+WarLink automatically unpacks UDT (User-Defined Type) members when the template is known on supported PLCs. You can publish the entire UDT as a JSON object, or publish individual members separately using dot-notation.
 
 **PLC Structure:**
 ```
@@ -166,7 +166,7 @@ Press `i` on a UDT member to toggle ignore status. Ignored members show `[I]` in
 
 ### Auto-Detection
 
-When you enable a UDT tag, WarLogix automatically ignores common volatile types:
+When you enable a UDT tag, WarLink automatically ignores common volatile types:
 - TIMER, COUNTER
 - TIME, LTIME
 - DATE, DATE_AND_TIME

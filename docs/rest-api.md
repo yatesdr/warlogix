@@ -1,6 +1,6 @@
 # REST API Reference
 
-The REST API exposes PLC data over HTTP for integration with other systems and debugging.   This can be useful if the other systems reside on a routable subnet and need a simple polling check, but the other publishing options are much more performant and should be preferred.   Namespaces are not used for the REST server since read and write requests are targeted at a specific WarLogix instance already.
+The REST API exposes PLC data over HTTP for integration with other systems and debugging.   This can be useful if the other systems reside on a routable subnet and need a simple polling check, but the other publishing options are much more performant and should be preferred.   Namespaces are not used for the REST server since read and write requests are targeted at a specific WarLink instance already.
 
 <img width="1118" height="667" alt="image" src="https://github.com/user-attachments/assets/d7acb0d7-c245-48ea-abb0-a77956c4aaa6" />
 
@@ -154,8 +154,8 @@ Returns all configured TagPacks.
 **Response:**
 ```json
 [
-  {"name": "ProductionMetrics", "enabled": true, "topic": "packs/production", "members": 4, "url": "/tagpack/ProductionMetrics"},
-  {"name": "Alarm Pack", "enabled": false, "topic": "packs/alarms", "members": 8, "url": "/tagpack/Alarm%20Pack"}
+  {"name": "ProductionMetrics", "enabled": true, "members": 4, "url": "/tagpack/ProductionMetrics"},
+  {"name": "Alarm Pack", "enabled": false, "members": 8, "url": "/tagpack/Alarm%20Pack"}
 ]
 ```
 

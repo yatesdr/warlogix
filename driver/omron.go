@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"warlogix/config"
-	"warlogix/omron"
+	"warlink/config"
+	"warlink/omron"
 )
 
 // OmronAdapter wraps omron.Client to implement the Driver interface.

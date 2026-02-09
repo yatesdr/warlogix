@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"warlogix/cip"
+	"warlink/cip"
 )
 
 // TagInfo contains metadata about a tag from the PLC's symbol table.

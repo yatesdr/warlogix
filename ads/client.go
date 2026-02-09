@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/logging"
+	"warlink/logging"
 )
 
 // Client provides high-level access to a Beckhoff TwinCAT PLC via ADS protocol.

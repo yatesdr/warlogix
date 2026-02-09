@@ -8,7 +8,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlogix/config"
+	"warlink/config"
 )
 
 // ValkeyTab handles the Valkey configuration tab.

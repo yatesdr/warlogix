@@ -11,10 +11,10 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlogix/config"
-	"warlogix/driver"
-	"warlogix/logging"
-	"warlogix/plcman"
+	"warlink/config"
+	"warlink/driver"
+	"warlink/logging"
+	"warlink/plcman"
 )
 
 // PLCsTab handles the PLCs management tab.

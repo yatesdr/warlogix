@@ -1,6 +1,6 @@
 # Developer Guide
 
-This guide covers how to use WarLogix's underlying drivers in your own Go applications. Each PLC driver can be imported and used independently.
+This guide covers how to use WarLink's underlying drivers in your own Go applications. Each PLC driver can be imported and used independently.
 
 ## Driver Interface
 
@@ -88,7 +88,7 @@ type DeviceInfo struct {
 
 ## Allen-Bradley Logix Driver
 
-**Package:** `warlogix/logix`
+**Package:** `warlink/logix`
 
 Supports ControlLogix, CompactLogix, and Micro800 series PLCs via EtherNet/IP.
 
@@ -101,7 +101,7 @@ import (
     "fmt"
     "log"
 
-    "warlogix/logix"
+    "warlink/logix"
 )
 
 func main() {
@@ -224,7 +224,7 @@ if err == nil {
 
 ## Siemens S7 Driver
 
-**Package:** `warlogix/s7`
+**Package:** `warlink/s7`
 
 Supports S7-300, S7-400, S7-1200, and S7-1500 PLCs via native S7comm protocol implementation.
 
@@ -237,7 +237,7 @@ import (
     "fmt"
     "log"
 
-    "warlogix/s7"
+    "warlink/s7"
 )
 
 func main() {
@@ -337,7 +337,7 @@ fmt.Printf("String: %s\n", values[0].GoValue())
 
 ## Beckhoff ADS Driver
 
-**Package:** `warlogix/ads`
+**Package:** `warlink/ads`
 
 Supports TwinCAT 2 and TwinCAT 3 PLCs via ADS protocol.
 
@@ -350,7 +350,7 @@ import (
     "fmt"
     "log"
 
-    "warlogix/ads"
+    "warlink/ads"
 )
 
 func main() {
@@ -435,7 +435,7 @@ client.Unsubscribe(handle)
 
 ## Omron FINS Driver
 
-**Package:** `warlogix/omron`
+**Package:** `warlink/omron`
 
 Supports CS/CJ/CP series PLCs via FINS/UDP protocol.
 
@@ -448,7 +448,7 @@ import (
     "fmt"
     "log"
 
-    "warlogix/omron"
+    "warlink/omron"
 )
 
 func main() {
@@ -513,7 +513,7 @@ import (
     "fmt"
     "log"
 
-    "warlogix/omron"
+    "warlink/omron"
 )
 
 func main() {
@@ -550,8 +550,8 @@ import (
     "log"
     "time"
 
-    "warlogix/config"
-    "warlogix/plcman"
+    "warlink/config"
+    "warlink/plcman"
 )
 
 func main() {
@@ -615,17 +615,17 @@ func main() {
 package main
 
 import (
-    "warlogix/config"
-    "warlogix/mqtt"
+    "warlink/config"
+    "warlink/mqtt"
 )
 
 func main() {
     cfg := &config.MQTTConfig{
-        Name:      "broker1",
-        Broker:    "localhost",
-        Port:      1883,
-        RootTopic: "factory",
-        ClientID:  "myapp",
+        Name:     "broker1",
+        Broker:   "localhost",
+        Port:     1883,
+        Selector: "line1",    // Optional sub-namespace (combined with global namespace)
+        ClientID: "myapp",
     }
 
     pub := mqtt.NewPublisher(cfg)
@@ -652,7 +652,7 @@ func main() {
 package main
 
 import (
-    "warlogix/kafka"
+    "warlink/kafka"
 )
 
 func main() {
@@ -688,15 +688,15 @@ func main() {
 package main
 
 import (
-    "warlogix/config"
-    "warlogix/valkey"
+    "warlink/config"
+    "warlink/valkey"
 )
 
 func main() {
     cfg := &config.ValkeyConfig{
         Name:           "redis1",
         Address:        "localhost:6379",
-        Factory:        "factory",
+        Selector:       "line1",    // Optional sub-namespace (combined with global namespace)
         PublishChanges: true,
     }
 
@@ -784,15 +784,15 @@ All PLC driver packages are pure Go implementations with no external dependencie
 
 | Package | External Dependencies |
 |---------|----------------------|
-| `warlogix/logix` | None (native EtherNet/IP + CIP) |
-| `warlogix/s7` | None (native S7comm) |
-| `warlogix/ads` | None (native ADS/AMS) |
-| `warlogix/omron` | None (native FINS) |
+| `warlink/logix` | None (native EtherNet/IP + CIP) |
+| `warlink/s7` | None (native S7comm) |
+| `warlink/ads` | None (native ADS/AMS) |
+| `warlink/omron` | None (native FINS) |
 
 Broker/publisher packages have external dependencies:
 
 | Package | External Dependencies |
 |---------|----------------------|
-| `warlogix/mqtt` | `github.com/eclipse/paho.mqtt.golang` |
-| `warlogix/kafka` | `github.com/segmentio/kafka-go` |
-| `warlogix/valkey` | `github.com/redis/go-redis/v9` |
+| `warlink/mqtt` | `github.com/eclipse/paho.mqtt.golang` |
+| `warlink/kafka` | `github.com/segmentio/kafka-go` |
+| `warlink/valkey` | `github.com/redis/go-redis/v9` |

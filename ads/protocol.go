@@ -9,7 +9,7 @@ import (
 	"net"
 	"sync/atomic"
 
-	"warlogix/logging"
+	"warlink/logging"
 )
 
 // ADS TCP Header (6 bytes)

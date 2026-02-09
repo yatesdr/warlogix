@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
-	"warlogix/logging"
-	"warlogix/namespace"
+	"warlink/logging"
+	"warlink/namespace"
 )
 
 // TagMessage is the JSON structure published to Kafka for tag changes.

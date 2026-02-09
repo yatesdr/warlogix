@@ -1,6 +1,6 @@
 # User Interface Guide
 
-WarLogix uses a tabbed terminal interface (TUI) for managing PLCs, tags, and data brokers. Each tab displays its hotkey integrated into the name (e.g., **P**LCs, Repu**B**lisher, Tri**G**gers). Press `?` on any tab to see available keyboard shortcuts.
+WarLink uses a tabbed terminal interface (TUI) for managing PLCs, tags, and data brokers. Each tab displays its hotkey integrated into the name (e.g., **P**LCs, Repu**B**lisher, Tri**G**gers). Press `?` on any tab to see available keyboard shortcuts.
 
 ## Global Shortcuts
 
@@ -171,7 +171,7 @@ Press `s` on an enabled tag to configure which services receive that tag's updat
 - **Kafka** - Published to Kafka topics
 - **Valkey** - Stored in Redis/Valkey keys
 
-By default, all services are enabled. Disable services to reduce network traffic for specific tags if they are not needed.   Per-broker selection is not possible - it's all or none for a given service that's been configured.   A typical use case would be to publish tag states to Valkey or MQTT, and traceability or other defined packages of data to Kafka or MQTT QoS2.   For more granularity around specific tags and brokers you can run multiple warlogix instances if they are properly namespaced and on separate IP Links.   You can't typically run multiple WarLogix on the same IP address as the PLC's will often disconnect (ADS driver, in particular - protocol limited.)
+By default, all services are enabled. Disable services to reduce network traffic for specific tags if they are not needed.   Per-broker selection is not possible - it's all or none for a given service that's been configured.   A typical use case would be to publish tag states to Valkey or MQTT, and traceability or other defined packages of data to Kafka or MQTT QoS2.   For more granularity around specific tags and brokers you can run multiple warlink instances if they are properly namespaced and on separate IP Links.   You can't typically run multiple WarLink on the same IP address as the PLC's will often disconnect (ADS driver, in particular - protocol limited.)
 
 ### UDT/Structure Handling
 
@@ -423,13 +423,13 @@ The MQTT tab manages connections to MQTT brokers.
 
 ### Publishing to Topics
 
-Every WarLogix instance requieres a Namespace at first launch.   It can be a city, factory, process line, or any other url-safe string, and will form the basis for publishing MQTT, Redis, and Kafka messages.   The 'Selector' will be appended to it for a per-server topic configuration.
+Every WarLink instance requieres a Namespace at first launch.   It can be a city, factory, process line, or any other url-safe string, and will form the basis for publishing MQTT, Redis, and Kafka messages.   The 'Selector' will be appended to it for a per-server topic configuration.
 
-Namespace:  warlogix1
+Namespace:  warlink1
 Selector: processData
-MQTT Topic: /warlogix1/processData/{messages}
-Kafka Topic: warlogix1-processData-{data}
-Valkey Topic: warlogix1:processData:{key}-->{data}
+MQTT Topic: /warlink1/processData/{messages}
+Kafka Topic: warlink1-processData-{data}
+Valkey Topic: warlink1:processData:{key}-->{data}
 
 ---
 
@@ -448,7 +448,7 @@ The Valkey tab manages connections to Redis/Valkey servers.
 | Name | Server identifier |
 | Address | host:port |
 | TLS | Yes/No |
-| Factory | Key prefix |
+| Selector | Sub-namespace for key prefixes |
 | Status | Connection state |
 
 ### Keyboard Shortcuts
@@ -468,7 +468,7 @@ The Valkey tab manages connections to Redis/Valkey servers.
 - **Address** - host:port (default: localhost:6379)
 - **Password** - Optional authentication
 - **Database** - Redis database number (0-15)
-- **Factory** - Key prefix for all keys
+- **Selector** - Sub-namespace appended to the global namespace for key prefixes
 - **Key TTL** - Key expiration in seconds (0 = no expiry)
 - **Use TLS** - Enable encrypted connection
 - **Publish Changes** - Enable Pub/Sub notifications
@@ -477,13 +477,13 @@ The Valkey tab manages connections to Redis/Valkey servers.
 
 ### Publishing to Topics
 
-Every WarLogix instance requieres a Namespace at first launch.   It can be a city, factory, process line, or any other url-safe string, and will form the basis for publishing MQTT, Redis, and Kafka messages.   The 'Selector' will be appended to it for a per-server topic configuration.
+Every WarLink instance requieres a Namespace at first launch.   It can be a city, factory, process line, or any other url-safe string, and will form the basis for publishing MQTT, Redis, and Kafka messages.   The 'Selector' will be appended to it for a per-server topic configuration.
 
-Namespace:  warlogix1
+Namespace:  warlink1
 Selector: processData
-MQTT Topic: /warlogix1/processData/{messages}
-Kafka Topic: warlogix1-processData-{data}
-Valkey Topic: warlogix1:processData:{key}-->{data}
+MQTT Topic: /warlink1/processData/{messages}
+Kafka Topic: warlink1-processData-{data}
+Valkey Topic: warlink1:processData:{key}-->{data}
 ---
 
 ## Kafka Tab
@@ -557,16 +557,16 @@ Messages are color-coded by category:
 
 ### File Logging
 
-To log debug messages to a file, start WarLogix with:
+To log debug messages to a file, start WarLink with:
 
 ```bash
-./warlogix --log /path/to/logfile.log
+./warlink --log /path/to/logfile.log
 ```
 
 For verbose protocol debugging with hex dumps:
 
 ```bash
-./warlogix --log-debug
+./warlink --log-debug
 ```
 
 This creates `debug.log` with detailed protocol-level information.

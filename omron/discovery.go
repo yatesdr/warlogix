@@ -20,8 +20,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"warlogix/cip"
-	"warlogix/logging"
+	"warlink/cip"
+	"warlink/logging"
 )
 
 // CIP service codes for symbol discovery.

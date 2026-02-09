@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/config"
+	"warlink/config"
 )
 
 // Batching configuration for Valkey

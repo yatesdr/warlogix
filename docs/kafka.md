@@ -1,6 +1,6 @@
 # Kafka Integration
 
-WarLogix publishes tag changes, health status, and event triggers to Apache Kafka. Optional writeback support allows external systems to write values to PLC tags via Kafka. Configure clusters in the Kafka tab or see [Configuration Reference](configuration.md) for YAML options.
+WarLink publishes tag changes, health status, and event triggers to Apache Kafka. Optional writeback support allows external systems to write values to PLC tags via Kafka. Configure clusters in the Kafka tab or see [Configuration Reference](configuration.md) for YAML options.
 
 ## Namespace and Topics
 
@@ -12,7 +12,7 @@ Kafka topics are built from the global `namespace` setting and optional per-clus
 
 ## Topics
 
-WarLogix uses the following topics based on your configured `namespace` and optional `selector`:
+WarLink uses the following topics based on your configured `namespace` and optional `selector`:
 
 | Topic | Direction | Content |
 |-------|-----------|---------|
@@ -154,14 +154,14 @@ Event triggers publish to their configured topic (see [Triggers](triggers.md)):
 
 ## Writeback
 
-When `enable_writeback: true`, WarLogix consumes write requests from Kafka and writes values to PLC tags. This enables bidirectional control via Kafka.
+When `enable_writeback: true`, WarLink consumes write requests from Kafka and writes values to PLC tags. This enables bidirectional control via Kafka.
 
 ### Configuration
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enable_writeback` | `false` | Enable consuming write requests |
-| `consumer_group` | `warlogix-{name}-writers` | Kafka consumer group ID |
+| `consumer_group` | `warlink-{name}-writers` | Kafka consumer group ID |
 | `write_max_age` | `2s` | Maximum age of requests to process |
 
 Topics are derived from namespace:
@@ -183,7 +183,7 @@ Publish JSON messages to `{namespace}[-{selector}]-writes`:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `plc` | Yes | PLC name as configured in WarLogix |
+| `plc` | Yes | PLC name as configured in WarLink |
 | `tag` | Yes | Tag name (must be marked as `writable: true`) |
 | `value` | Yes | Value to write (JSON type is auto-converted) |
 | `request_id` | No | Correlation ID echoed in response |
@@ -283,7 +283,7 @@ When multiple writes to the same tag arrive within a batch window, only the **la
 This behavior is intentional for PLC safety:
 
 1. **Prevents PLC hammering** - Rapid writes to the same tag are coalesced
-2. **Startup protection** - If WarLogix restarts with a backlog of queued writes, only the latest value per tag is written
+2. **Startup protection** - If WarLink restarts with a backlog of queued writes, only the latest value per tag is written
 3. **Network hiccups** - Burst of retried writes won't cause rapid PLC writes
 4. **Final value wins** - The PLC ends up with the most recent intended value
 5. **Full visibility** - Every request gets a response so you know exactly what happened
@@ -302,7 +302,7 @@ If your application requires every write to be executed (not just the latest):
 Requests older than `write_max_age` (default 2 seconds) are marked as expired and not executed.
 
 **Why requests expire:**
-- WarLogix was stopped and restarted with old messages in Kafka
+- WarLink was stopped and restarted with old messages in Kafka
 - Network delay caused messages to arrive late
 - Kafka consumer fell behind due to processing delays
 
@@ -326,7 +326,7 @@ Increase `write_max_age` if network latency is high (default: 2s).
 Enable debug logging to diagnose deduplication issues:
 
 ```bash
-warlogix --log-debug=kafka
+warlink --log-debug=kafka
 ```
 
 **Key log messages:**
@@ -350,13 +350,13 @@ warlogix --log-debug=kafka
 
 ### Consumer Group Behavior
 
-WarLogix uses Kafka consumer groups for coordinated consumption:
+WarLink uses Kafka consumer groups for coordinated consumption:
 
-- **Single consumer** - Only one WarLogix instance processes each write request
+- **Single consumer** - Only one WarLink instance processes each write request
 - **High availability** - Multiple instances share the consumer group for failover
 - **Offset tracking** - Processed messages are committed to Kafka
 
-If you run multiple WarLogix instances, they will share write processing (each request processed once). Use different consumer group names if you need separate instances.
+If you run multiple WarLink instances, they will share write processing (each request processed once). Use different consumer group names if you need separate instances.
 
 ### Producer Example
 
@@ -441,7 +441,7 @@ Set `tls_skip_verify: true` for self-signed certificates.
 
 ## Performance
 
-WarLogix uses batched publishing for high-throughput Kafka delivery. Messages are collected per topic and flushed together, reducing round-trips and improving throughput.
+WarLink uses batched publishing for high-throughput Kafka delivery. Messages are collected per topic and flushed together, reducing round-trips and improving throughput.
 
 ### Batching Behavior
 
@@ -458,7 +458,7 @@ Messages are batched at two levels:
 
 ### Topic Auto-Creation
 
-When `auto_create_topics` is enabled (default: true), topics are created automatically before the first publish. WarLogix explicitly creates topics via the Kafka Admin API rather than relying on broker-side `auto.create.topics.enable`, which may be disabled on production clusters.
+When `auto_create_topics` is enabled (default: true), topics are created automatically before the first publish. WarLink explicitly creates topics via the Kafka Admin API rather than relying on broker-side `auto.create.topics.enable`, which may be disabled on production clusters.
 
 Topics are created with:
 - 1 partition (default)
@@ -507,10 +507,10 @@ kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic factory-line
 Use the built-in stress test to benchmark your Kafka broker and detect publishing regressions:
 
 ```bash
-warlogix --stress-test-republishing
+warlink --stress-test-republishing
 ```
 
-This runs a 10-second stress test against all enabled Kafka clusters in your configuration, publishing simulated PLC tag data to a test topic (`warlogix-test-stress`).
+This runs a 10-second stress test against all enabled Kafka clusters in your configuration, publishing simulated PLC tag data to a test topic (`warlink-test-stress`).
 
 ### Options
 

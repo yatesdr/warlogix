@@ -9,8 +9,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlogix/config"
-	"warlogix/trigger"
+	"warlink/config"
+	"warlink/trigger"
 )
 
 // TriggersTab handles the Triggers configuration tab.

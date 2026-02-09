@@ -74,7 +74,9 @@ Trigger messages are published to both MQTT and Kafka with the same JSON format.
 | Service | Topic Pattern |
 |---------|---------------|
 | MQTT | `{namespace}[/{selector}]/triggers/{trigger-name}` |
-| Kafka | `{namespace}[-{selector}]-triggers` |
+| Kafka | `{namespace}-triggers` (without selector) or `{namespace}-{selector}` (with selector) |
+
+**Note:** When a trigger has a selector configured, the selector becomes part of the Kafka topic name (replacing `-triggers`). This allows different triggers to publish to different topics based on their selector configuration.
 
 MQTT publishes with **QoS 2** (exactly-once delivery) for reliable event capture.
 
@@ -94,7 +96,7 @@ See [TagPacks](tagpacks.md) for more details on TagPack configuration.
 
 ## Acknowledgment
 
-When `ack_tag` is configured, WarLogix writes to the PLC after publishing:
+When `ack_tag` is configured, WarLink writes to the PLC after publishing:
 
 | Value | Meaning |
 |-------|---------|
@@ -147,6 +149,6 @@ The Triggers tab uses context-sensitive hotkeys based on which pane has focus:
 
 - Triggers fire on **rising edge** only (condition becoming true)
 - All data tags are read atomically at trigger time
-- Sequence numbers reset when WarLogix restarts
+- Sequence numbers reset when WarLink restarts
 - Failed Kafka publishes are retried per Kafka cluster settings
 - Ack writes fail silently if PLC is disconnected

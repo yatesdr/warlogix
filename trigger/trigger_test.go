@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"warlogix/config"
+	"warlink/config"
 )
 
 func TestStatus_String(t *testing.T) {
@@ -212,7 +212,7 @@ func TestNewMessage(t *testing.T) {
 	metadata := map[string]string{"line": "Line1"}
 	data := map[string]interface{}{"Counter": 100, "Status": true}
 
-	msg := NewMessage("TestTrigger", "MainPLC", metadata, data)
+	msg := NewMessage("TestTrigger", "MainPLC", metadata, data, nil)
 
 	if msg.Trigger != "TestTrigger" {
 		t.Errorf("expected Trigger 'TestTrigger', got %s", msg.Trigger)
@@ -234,8 +234,23 @@ func TestNewMessage(t *testing.T) {
 	}
 }
 
+func TestNewMessage_WithPacks(t *testing.T) {
+	data := map[string]interface{}{"Counter": 100}
+	packs := map[string]interface{}{"pack1": map[string]interface{}{"tag1": 50}}
+
+	msg := NewMessage("Test", "PLC1", nil, data, packs)
+
+	// Verify packs are merged into data
+	if _, ok := msg.Data["pack1"]; !ok {
+		t.Error("pack not merged into data")
+	}
+	if msg.Data["Counter"] != 100 {
+		t.Error("original data not preserved")
+	}
+}
+
 func TestMessage_ToJSON(t *testing.T) {
-	msg := NewMessage("Test", "PLC1", nil, map[string]interface{}{"value": 42})
+	msg := NewMessage("Test", "PLC1", nil, map[string]interface{}{"value": 42}, nil)
 
 	jsonData, err := msg.ToJSON()
 	if err != nil {
@@ -257,10 +272,10 @@ func TestMessage_ToJSON(t *testing.T) {
 }
 
 func TestMessage_Key(t *testing.T) {
-	msg := NewMessage("ProductComplete", "MainPLC", nil, nil)
+	msg := NewMessage("ProductComplete", "MainPLC", nil, nil, nil)
 
 	key := msg.Key()
-	expected := "MainPLC:ProductComplete"
+	expected := "ProductComplete"
 
 	if string(key) != expected {
 		t.Errorf("expected key %q, got %q", expected, string(key))

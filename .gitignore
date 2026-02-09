@@ -1,6 +1,7 @@
 # Binaries (only at root level)
+/warlink
+/warlink.exe
 /warlogix
-/warlogix.exe
 *.exe
 *.exe~
 *.dll

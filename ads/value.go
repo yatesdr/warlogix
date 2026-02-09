@@ -6,7 +6,7 @@ import (
 )
 
 // TagValue holds the result of a tag read operation.
-// This structure is designed to be compatible with the warlogix plcman package.
+// This structure is designed to be compatible with the warlink plcman package.
 type TagValue struct {
 	Name     string // Symbol name
 	DataType uint16 // ADS type code

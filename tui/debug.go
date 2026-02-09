@@ -7,7 +7,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-	"warlogix/logging"
+	"warlink/logging"
 )
 
 // DebugTab displays debug log messages.

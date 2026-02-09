@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/config"
-	"warlogix/kafka"
-	"warlogix/tagpack"
+	"warlink/config"
+	"warlink/kafka"
+	"warlink/tagpack"
 )
 
 // Manager manages all configured triggers.

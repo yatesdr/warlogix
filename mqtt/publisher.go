@@ -11,9 +11,9 @@ import (
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 
-	"warlogix/config"
-	"warlogix/logging"
-	"warlogix/namespace"
+	"warlink/config"
+	"warlink/logging"
+	"warlink/namespace"
 )
 
 func logMQTT(format string, args ...interface{}) {

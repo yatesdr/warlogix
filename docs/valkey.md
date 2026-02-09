@@ -1,6 +1,6 @@
 # Valkey/Redis Integration
 
-WarLogix stores tag values in Valkey/Redis with optional Pub/Sub notifications and write-back queue support. Configure servers in the Valkey tab or see [Configuration Reference](configuration.md) for YAML options.
+WarLink stores tag values in Valkey/Redis with optional Pub/Sub notifications and write-back queue support. Configure servers in the Valkey tab or see [Configuration Reference](configuration.md) for YAML options.
 
 <img width="911" height="541" alt="image" src="https://github.com/user-attachments/assets/80851e84-b122-4718-b0a5-c3e858017371" />
 
@@ -137,9 +137,11 @@ TagPacks are stored as keys and published to channels, just like regular tags.
 
 ### Key Format
 
-Pattern: `{namespace}:packs:{packname}`
+Pattern: `{namespace}[:{selector}]:packs:{packname}`
 
-Example: `factory:packs:ProductionMetrics`
+Example (no selector): `factory:packs:ProductionMetrics`
+
+Example (with selector): `factory:line1:packs:ProductionMetrics`
 
 ### Value Format
 
@@ -207,10 +209,10 @@ redis-cli RPUSH factory:line1:writes '{"factory":"factory:line1","plc":"MainPLC"
 Use the built-in stress test to benchmark your Valkey/Redis server:
 
 ```bash
-warlogix --stress-test-republishing
+warlink --stress-test-republishing
 ```
 
-This runs a 10-second stress test against all enabled Valkey servers, writing simulated PLC tag data to test keys (`warlogix-test-stress:*`).
+This runs a 10-second stress test against all enabled Valkey servers, writing simulated PLC tag data to test keys (`warlink-test-stress:*`).
 
 ### Options
 

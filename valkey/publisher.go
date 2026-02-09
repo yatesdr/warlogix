@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"warlogix/config"
-	"warlogix/logging"
-	"warlogix/namespace"
+	"warlink/config"
+	"warlink/logging"
+	"warlink/namespace"
 )
 
 // TagMessage represents a tag value message stored in Valkey.
@@ -567,7 +567,7 @@ func (p *Publisher) PublishRaw(channel string, data []byte) error {
 	// Use pipeline to SET (store) and PUBLISH (notify) in one round-trip
 	pipe := client.Pipeline()
 
-	// Store as a key (same path as channel, e.g., "warlogix:packs:pack1")
+	// Store as a key (same path as channel, e.g., "warlink:packs:pack1")
 	if cfg.KeyTTL > 0 {
 		pipe.Set(ctx, channel, data, cfg.KeyTTL)
 	} else {

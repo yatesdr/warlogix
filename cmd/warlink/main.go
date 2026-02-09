@@ -1,4 +1,4 @@
-// Warlogix - PLC Gateway TUI Application
+// Warlink - PLC Gateway TUI Application
 //
 // A text user interface for managing PLC connections, browsing tags,
 // and republishing data via REST API and MQTT.
@@ -15,18 +15,18 @@ import (
 	"syscall"
 	"time"
 
-	"warlogix/api"
-	"warlogix/brokertest"
-	"warlogix/config"
-	"warlogix/kafka"
-	"warlogix/logging"
-	"warlogix/mqtt"
-	"warlogix/plcman"
-	"warlogix/ssh"
-	"warlogix/tagpack"
-	"warlogix/trigger"
-	"warlogix/tui"
-	"warlogix/valkey"
+	"warlink/api"
+	"warlink/brokertest"
+	"warlink/config"
+	"warlink/kafka"
+	"warlink/logging"
+	"warlink/mqtt"
+	"warlink/plcman"
+	"warlink/ssh"
+	"warlink/tagpack"
+	"warlink/trigger"
+	"warlink/tui"
+	"warlink/valkey"
 )
 
 // Version is set at build time via -ldflags
@@ -81,7 +81,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("warlogix %s\n", Version)
+		fmt.Printf("warlink %s\n", Version)
 		os.Exit(0)
 	}
 
@@ -185,7 +185,7 @@ func runBrokerTests(cfg *config.Config) {
 		fmt.Println("The test will send significant traffic that may saturate these servers.")
 		fmt.Println("Do not run in a production environment unless it is safe to do so.")
 		fmt.Println()
-		fmt.Println("Test topics/keys are prefixed with 'warlogix-test-stress'.")
+		fmt.Println("Test topics/keys are prefixed with 'warlink-test-stress'.")
 		fmt.Println()
 		fmt.Print("Continue? [y/N]: ")
 
@@ -399,7 +399,7 @@ func runLocalMode(cfg *config.Config) {
 
 // runDaemonMode runs the TUI in daemon mode, serving it over SSH.
 func runDaemonMode(cfg *config.Config) {
-	fmt.Printf("Starting warlogix daemon on port %d...\n", *sshPort)
+	fmt.Printf("Starting warlink daemon on port %d...\n", *sshPort)
 
 	// Create PLC manager
 	manager := plcman.NewManager(cfg.PollRate)

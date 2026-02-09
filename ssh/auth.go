@@ -135,15 +135,15 @@ func loadAuthorizedKeysFromDir(dir string) ([]ssh.PublicKey, error) {
 }
 
 // GetOrCreateHostKey returns the host key signer, creating one if it doesn't exist.
-// The key is stored at ~/.warlogix/host_key
+// The key is stored at ~/.warlink/host_key
 func GetOrCreateHostKey() (gossh.Signer, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	warlogixDir := filepath.Join(homeDir, ".warlogix")
-	keyPath := filepath.Join(warlogixDir, "host_key")
+	warlinkDir := filepath.Join(homeDir, ".warlink")
+	keyPath := filepath.Join(warlinkDir, "host_key")
 
 	// Check if key exists
 	if _, err := os.Stat(keyPath); err == nil {
@@ -151,7 +151,7 @@ func GetOrCreateHostKey() (gossh.Signer, error) {
 	}
 
 	// Create directory if needed
-	if err := os.MkdirAll(warlogixDir, 0700); err != nil {
+	if err := os.MkdirAll(warlinkDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 

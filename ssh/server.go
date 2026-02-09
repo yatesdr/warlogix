@@ -10,7 +10,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
-	"warlogix/tui"
+	"warlink/tui"
 )
 
 // Server handles SSH connections and multiplexes them to a shared PTY.

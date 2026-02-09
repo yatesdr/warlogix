@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/cip"
-	"warlogix/eip"
-	"warlogix/logging"
+	"warlink/cip"
+	"warlink/eip"
+	"warlink/logging"
 )
 
 // CIP service codes for Read/Write Tag operations.
