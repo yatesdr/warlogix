@@ -1,16 +1,16 @@
 # Multi-Instance Deployment
 
-This guide explains how to safely run multiple WarLogix instances that connect to shared message brokers (MQTT, Valkey/Redis, Kafka). Proper configuration prevents write requests from being processed by the wrong instance.
+This guide explains how to safely run multiple WarLink instances that connect to shared message brokers (MQTT, Valkey/Redis, Kafka). Proper configuration prevents write requests from being processed by the wrong instance.
 
 ## The Problem
 
-Consider two factories, each with a WarLogix instance:
+Consider two factories, each with a WarLink instance:
 
 ```
 ┌─────────────────────┐         ┌─────────────────────┐
 │     Factory A       │         │     Factory B       │
 │  ┌───────────────┐  │         │  ┌───────────────┐  │
-│  │  WarLogix #1  │  │         │  │  WarLogix #2  │  │
+│  │  WarLink #1  │  │         │  │  WarLink #2  │  │
 │  └───────┬───────┘  │         │  └───────┬───────┘  │
 │          │          │         │          │          │
 │  ┌───────▼───────┐  │         │  ┌───────▼───────┐  │
@@ -41,7 +41,7 @@ Both PLCs are named "Main PLC" and have IP 192.168.1.100 (common behind NAT). Bo
 
 ## The Solution: Unified Namespace
 
-WarLogix uses a single `namespace` field at the top level of the configuration to identify each instance. This namespace is used consistently across all services:
+WarLink uses a single `namespace` field at the top level of the configuration to identify each instance. This namespace is used consistently across all services:
 
 ```yaml
 namespace: factory-a    # Unique per instance
@@ -59,7 +59,7 @@ Optional `selector` fields on individual service configurations provide addition
 ### Factory A (Instance 1)
 
 ```yaml
-# /etc/warlogix/config.yaml on Factory A
+# /etc/warlink/config.yaml on Factory A
 
 namespace: factory-a                    # <-- UNIQUE per instance
 
@@ -92,7 +92,7 @@ kafka:
 ### Factory B (Instance 2)
 
 ```yaml
-# /etc/warlogix/config.yaml on Factory B
+# /etc/warlink/config.yaml on Factory B
 
 namespace: factory-b                    # <-- UNIQUE per instance
 
@@ -343,7 +343,7 @@ kafkacat -b kafka.colo.example.com:9092 -t factory-a -C
 
 **Debug:** Enable debug logging on the target instance:
 ```bash
-warlogix --log-debug=mqtt,valkey,kafka
+warlink --log-debug=mqtt,valkey,kafka
 ```
 
 ### Duplicate tag publications

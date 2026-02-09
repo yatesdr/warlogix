@@ -1,11 +1,11 @@
-# WarLogix
+# WarLink
 
 
 **WAR** stands for *"Whispers Across Realms"* - bridging the gap between industrial automation and modern IT infrastructure.
 
-Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwhile, your data platforms expect REST, MQTT, Kafka, and Redis. WarLogix translates between these worlds, letting you stream PLC data to dashboards, databases, and analytics pipelines without writing custom integration code.  No expensive middleware. No vendor lock-in. Just a single binary that runs anywhere.
+Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwhile, your data platforms expect REST, MQTT, Kafka, and Redis. WarLink translates between these worlds, letting you stream PLC data to dashboards, databases, and analytics pipelines without writing custom integration code.  No expensive middleware. No vendor lock-in. Just a single binary that runs anywhere.
 
-At its heart WarLogix is a TUI (Text User Interface) gateway for industrial PLCs, and can connect and read / write data from Allen-Bradley, Siemens, Beckhoff, and Omron PLCs.  It will then republish that data via REST API, MQTT, Kafka, and Redis/Valkey for use in the wider factory infrastructure.   It includes advanced features for grouping tags into 'Soft-UDTs' and for publishing tags or groups of tags when specific trigger condition are met.   It is optimized for high-performance read from PLCs and writing to upstream services, with write-back functionality for discrete types.
+At its heart WarLink is a TUI (Text User Interface) gateway for industrial PLCs, and can connect and read / write data from Allen-Bradley, Siemens, Beckhoff, and Omron PLCs.  It will then republish that data via REST API, MQTT, Kafka, and Redis/Valkey for use in the wider factory infrastructure.   It includes advanced features for grouping tags into 'Soft-UDTs' and for publishing tags or groups of tags when specific trigger condition are met.   It is optimized for high-performance read from PLCs and writing to upstream services, with write-back functionality for discrete types.
 
 
 
@@ -15,37 +15,37 @@ At its heart WarLogix is a TUI (Text User Interface) gateway for industrial PLCs
 <img width="916" height="548" alt="image" src="https://github.com/user-attachments/assets/26355fa0-95bc-4987-b6c1-2420e5c60d71" />
 
 
-War was originally designed as an "Edge" application to simplify pushing data out of NAT'd process networks, but is found to also work well in the server room for aggregating and monitoring data factory-wide.   It has been designed for easy configuration and back up (single-file config), and works well for distribution with Ansible and other distribution managers.   WarLogix runs on most modern terminals, and includes a built-in SSH server and daemon-mode for when you prefer to run it in the background on existing computers or servers, while connecting to it remotely to refine the configuration or monitor conditions.
+War was originally designed as an "Edge" application to simplify pushing data out of NAT'd process networks, but is found to also work well in the server room for aggregating and monitoring data factory-wide.   It has been designed for easy configuration and back up (single-file config), and works well for distribution with Ansible and other distribution managers.   WarLink runs on most modern terminals, and includes a built-in SSH server and daemon-mode for when you prefer to run it in the background on existing computers or servers, while connecting to it remotely to refine the configuration or monitor conditions.
 
 
 ## Warnings
 
-- **WarLogix is not a real-time control system** - See [Safety and Intended Use](docs/safety-and-intended-use.md)
+- **WarLink is not a real-time control system** - See [Safety and Intended Use](docs/safety-and-intended-use.md)
 - Write-back should only be used for acknowledgments on dedicated tags
-- Never use WarLogix for safety-critical functions or machine control
+- Never use WarLink for safety-critical functions or machine control
 - This software is provided without warranty - use at your own risk
 
 ## Quick Start
 
 ### Download
 
-Pre-built binaries are available on the [Releases](https://github.com/yatesdr/warlogix/releases) page for Linux, macOS, and Windows.
+Pre-built binaries are available on the [Releases](https://github.com/yatesdr/warlink/releases) page for Linux, macOS, and Windows.
 
 ### Build from Source (Optional)
 
 ```bash
-git clone https://github.com/yatesdr/warlogix.git
-cd warlogix
-go build -o warlogix ./cmd/warlogix
+git clone https://github.com/yatesdr/warlink.git
+cd warlink
+go build -o warlink ./cmd/warlink
 ```
 
 ### Run
 
 ```bash
-./warlogix
+./warlink
 ```
 
-Configuration is stored at `~/.warlogix/config.yaml` and created automatically on first run.
+Configuration is stored at `~/.warlink/config.yaml` and created automatically on first run.
 
 
 ## Documentation
@@ -61,6 +61,7 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 - [MQTT](docs/mqtt.md) - Topics, QoS settings, and write-back
 - [Valkey/Redis](docs/valkey.md) - Keys, Pub/Sub, and write-back queue
 - [Kafka](docs/kafka.md) - Topics, authentication, and batching
+- [API Consumer Examples](docs/api-examples.md) - Code samples for Python, Node.js, Go, C#
 
 ### Advanced Features
 - [Daemon Mode](docs/daemon-mode.md) - Background service with SSH access
@@ -70,9 +71,16 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 - [Data Types](docs/data-types.md) - Types, byte order, and UDT support
 - [Performance Guide](docs/performance.md) - Optimization and benchmarking
 
+### Operations
+- [Best Practices](docs/best-practices.md) - Namespace design, tag selection, security
+- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
+- [Architecture Overview](docs/architecture.md) - Data flow and system design
+
 ### Reference
 - [Safety and Intended Use](docs/safety-and-intended-use.md) - **Important limitations and proper use of write-back**
 - [Developer Guide](docs/developer.md) - Using drivers in your own Go applications
+- [Use Case Examples](docs/use-cases.md) - Production tracking, alarm aggregation, cross-site monitoring
+- [Migration Guide](docs/migration.md) - Migrating from Kepware, Ignition, or custom solutions
 
 ## Features
 
@@ -101,7 +109,7 @@ Configuration is stored at `~/.warlogix/config.yaml` and created automatically o
 
 ## Performance
 
-WarLogix is designed for high-throughput industrial data streaming with batched PLC reads, change filtering, and efficient broker publishing.
+WarLink is designed for high-throughput industrial data streaming with batched PLC reads, change filtering, and efficient broker publishing.
 
 ### Republishing Throughput
 
@@ -123,7 +131,7 @@ Simulated publishing test with 50 PLCs × 100 tags (5,000 total tags) on localho
 | Omron FINS | Yes (Multi-read) | 300-1,500 tags/sec |
 | Omron EIP | Yes (MSP) | 500-2,000 tags/sec |
 
-Run `warlogix --stress-test-republishing` to benchmark your system.
+Run `warlink --stress-test-republishing` to benchmark your system.
 
 ## Keyboard Shortcuts
 
@@ -147,7 +155,7 @@ Run `warlogix --stress-test-republishing` to benchmark your system.
 ## Command Line Options
 
 ```
---config <path>              Path to config file (default: ~/.warlogix/config.yaml)
+--config <path>              Path to config file (default: ~/.warlink/config.yaml)
 --namespace <name>           Set instance namespace (saved to config)
 --log <path>                 Write debug messages to a file
 --log-debug [filter]         Enable protocol debugging (omron,ads,logix,s7,mqtt,kafka,valkey,tui)
@@ -168,7 +176,7 @@ Run `warlogix --stress-test-republishing` to benchmark your system.
 Run as a background service with SSH access:
 
 ```bash
-./warlogix -d -p 2222 --ssh-password "secret"
+./warlink -d -p 2222 --ssh-password "secret"
 ssh -p 2222 localhost
 ```
 

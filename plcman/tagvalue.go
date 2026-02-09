@@ -1,11 +1,11 @@
 package plcman
 
 import (
-	"warlogix/ads"
-	"warlogix/driver"
-	"warlogix/logix"
-	"warlogix/omron"
-	"warlogix/s7"
+	"warlink/ads"
+	"warlink/driver"
+	"warlink/logix"
+	"warlink/omron"
+	"warlink/s7"
 )
 
 // TagValue is a unified wrapper that holds tag data from any PLC family.

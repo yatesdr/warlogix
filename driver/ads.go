@@ -3,8 +3,8 @@ package driver
 import (
 	"fmt"
 
-	"warlogix/ads"
-	"warlogix/config"
+	"warlink/ads"
+	"warlink/config"
 )
 
 // ADSAdapter wraps ads.Client to implement the Driver interface.

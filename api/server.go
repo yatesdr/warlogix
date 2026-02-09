@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/config"
-	"warlogix/plcman"
-	"warlogix/tagpack"
+	"warlink/config"
+	"warlink/plcman"
+	"warlink/tagpack"
 )
 
 // Server is the REST API server.

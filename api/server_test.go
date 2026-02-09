@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"warlogix/config"
-	"warlogix/plcman"
+	"warlink/config"
+	"warlink/plcman"
 )
 
 func TestNewServer(t *testing.T) {
@@ -436,7 +436,8 @@ func TestServer_HandleAllTags(t *testing.T) {
 		t.Errorf("expected status 200, got %d", rec.Code)
 	}
 
-	var result []TagResponse
+	// Response is now a map with "plc.tag" keys (matching TagPack format)
+	var result map[string]TagResponse
 	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
 		t.Fatalf("failed to decode JSON: %v", err)
 	}
@@ -445,7 +446,110 @@ func TestServer_HandleAllTags(t *testing.T) {
 	if len(result) != 1 {
 		t.Errorf("expected 1 enabled tag, got %d", len(result))
 	}
-	if len(result) > 0 && result[0].Name != "Counter" {
-		t.Errorf("expected tag 'Counter', got %s", result[0].Name)
+
+	// Key is "TestPLC.Counter"
+	expectedKey := "TestPLC.Counter"
+	if tag, ok := result[expectedKey]; !ok {
+		t.Errorf("expected key '%s' in result", expectedKey)
+	} else if tag.Name != "Counter" {
+		t.Errorf("expected tag name 'Counter', got %s", tag.Name)
+	}
+}
+
+func TestServer_HandleAllTags_WithAlias(t *testing.T) {
+	manager := plcman.NewManager(time.Second)
+	cfg := &config.RESTConfig{}
+	server := NewServer(manager, cfg)
+
+	manager.AddPLC(&config.PLCConfig{
+		Name:    "s7",
+		Address: "192.168.1.100",
+		Enabled: true,
+		Tags: []config.TagSelection{
+			{Name: "DB1.0", Alias: "sensor_temp", Enabled: true},
+			{Name: "Counter", Enabled: true},
+		},
+	})
+
+	req := httptest.NewRequest("GET", "/s7/tags", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleRoot(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var result map[string]TagResponse
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+
+	// Should have 2 tags
+	if len(result) != 2 {
+		t.Errorf("expected 2 tags, got %d", len(result))
+	}
+
+	// Aliased tag should use alias as key
+	if tag, ok := result["s7.sensor_temp"]; !ok {
+		t.Error("expected key 's7.sensor_temp' for aliased tag")
+	} else {
+		if tag.Name != "sensor_temp" {
+			t.Errorf("expected name 'sensor_temp', got %s", tag.Name)
+		}
+		if tag.MemLoc != "DB1.0" {
+			t.Errorf("expected memloc 'DB1.0', got %s", tag.MemLoc)
+		}
+	}
+
+	// Non-aliased tag should use tag name as key
+	if tag, ok := result["s7.Counter"]; !ok {
+		t.Error("expected key 's7.Counter' for non-aliased tag")
+	} else {
+		if tag.MemLoc != "" {
+			t.Errorf("expected empty memloc for non-aliased tag, got %s", tag.MemLoc)
+		}
+	}
+}
+
+func TestServer_HandleAllTags_NoRESTExclusion(t *testing.T) {
+	manager := plcman.NewManager(time.Second)
+	cfg := &config.RESTConfig{}
+	server := NewServer(manager, cfg)
+
+	manager.AddPLC(&config.PLCConfig{
+		Name:    "TestPLC",
+		Address: "192.168.1.100",
+		Enabled: true,
+		Tags: []config.TagSelection{
+			{Name: "Visible", Enabled: true},
+			{Name: "Hidden", Enabled: true, NoREST: true},
+		},
+	})
+
+	req := httptest.NewRequest("GET", "/TestPLC/tags", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleRoot(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var result map[string]TagResponse
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode JSON: %v", err)
+	}
+
+	// Should only return tags without NoREST flag
+	if len(result) != 1 {
+		t.Errorf("expected 1 tag (NoREST excluded), got %d", len(result))
+	}
+
+	if _, ok := result["TestPLC.Visible"]; !ok {
+		t.Error("expected 'TestPLC.Visible' in result")
+	}
+	if _, ok := result["TestPLC.Hidden"]; ok {
+		t.Error("'TestPLC.Hidden' should be excluded (NoREST=true)")
 	}
 }

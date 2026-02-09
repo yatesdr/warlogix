@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"warlogix/config"
-	"warlogix/s7"
+	"warlink/config"
+	"warlink/s7"
 )
 
 // S7Adapter wraps s7.Client to implement the Driver interface.

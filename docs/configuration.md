@@ -2,7 +2,7 @@
 
 In normal use the config file will not need to be edited by hand, but for pre-configuring automation or BigFix/Ansible deployments it is useful to document the format.  
 
-WarLogix uses a YAML configuration file stored at `~/.warlogix/config.yaml` by default. Use `-config /path/to/file` to specify an alternate location.
+WarLink uses a YAML configuration file stored at `~/.warlink/config.yaml` by default. Use `-config /path/to/file` to specify an alternate location.
 
 ## Complete Example
 
@@ -93,7 +93,7 @@ mqtt:
     enabled: true
     broker: localhost
     port: 1883
-    client_id: warlogix-main
+    client_id: warlink-main
     selector: line1                   # Optional sub-namespace
     # username: user              # Optional authentication
     # password: pass
@@ -347,7 +347,7 @@ tags:
 | `retry_backoff` | duration | No | Retry backoff interval |
 | `auto_create_topics` | bool | No | Auto-create topics if missing (default: true) |
 | `enable_writeback` | bool | No | Enable consuming write requests |
-| `consumer_group` | string | No | Consumer group ID (default: warlogix-{name}-writers) |
+| `consumer_group` | string | No | Consumer group ID (default: warlink-{name}-writers) |
 | `write_max_age` | duration | No | Max age of write requests to process (default: 2s) |
 
 ## TagPack Configuration

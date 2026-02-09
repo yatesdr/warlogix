@@ -8,8 +8,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlogix/config"
-	"warlogix/kafka"
+	"warlink/config"
+	"warlink/kafka"
 )
 
 // KafkaTab handles the Kafka configuration tab.

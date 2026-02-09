@@ -4,10 +4,10 @@ This guide covers republishing performance, PLC read optimization, and tuning re
 
 ## Republishing Performance
 
-WarLogix republishes PLC tag values to Kafka, MQTT, and Valkey/Redis. Use the built-in stress test to measure your broker throughput:
+WarLink republishes PLC tag values to Kafka, MQTT, and Valkey/Redis. Use the built-in stress test to measure your broker throughput:
 
 ```bash
-warlogix --stress-test-republishing
+warlink --stress-test-republishing
 ```
 
 ### Benchmark Results
@@ -20,15 +20,15 @@ Test conditions: 50 PLCs × 100 tags = 5,000 total tags, 10-second duration, loc
 | MQTT | 32,521 msg/s | 325,210 | 30µs | PASS |
 | Valkey | 44,912 msg/s | 449,127 | 22µs | PASS |
 
-**Important:** These throughput differences reflect WarLogix's publishing implementation, not inherent broker capabilities:
+**Important:** These throughput differences reflect WarLink's publishing implementation, not inherent broker capabilities:
 
-| Broker | WarLogix Implementation | Why Different |
+| Broker | WarLink Implementation | Why Different |
 |--------|------------------------|---------------|
 | **Kafka** | Batched async (100 msgs or 20ms) | Batching amortizes network overhead |
 | **MQTT** | Synchronous QoS 1 per message | Waits for broker ACK each message |
 | **Valkey** | Synchronous SET per message | Waits for Redis response each message |
 
-All three technologies can handle much higher throughput with different client implementations. These numbers represent WarLogix's confirmed-delivery publishing rate for each broker type, ensuring no messages are lost.
+All three technologies can handle much higher throughput with different client implementations. These numbers represent WarLink's confirmed-delivery publishing rate for each broker type, ensuring no messages are lost.
 
 **Detailed Results:**
 
@@ -58,7 +58,7 @@ Valkey/ValkeyServer1:
 
 With change filtering (only publishing when values change), real-world message rates are typically much lower than stress test maximums.
 
-**Note:** WarLogix enforces a minimum poll rate of 250ms (4Hz max) to protect PLCs. The default is 1000ms (1Hz), with 500ms (2Hz) being typical for active monitoring.
+**Note:** WarLink enforces a minimum poll rate of 250ms (4Hz max) to protect PLCs. The default is 1000ms (1Hz), with 500ms (2Hz) being typical for active monitoring.
 
 | Scenario | Tag Changes/sec | Kafka | MQTT | Valkey |
 |----------|----------------|-------|------|--------|
@@ -89,7 +89,7 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 **Optimization Tips:**
 
-1. **Enable Connected Messaging** - WarLogix attempts Forward Open automatically. Connected mode is ~10x faster than unconnected.
+1. **Enable Connected Messaging** - WarLink attempts Forward Open automatically. Connected mode is ~10x faster than unconnected.
 
 2. **Prefer Scalars Over UDTs** - While UDT members are batched, reading individual scalar tags is slightly more efficient than UDT member expansion.
 
@@ -139,7 +139,7 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 2. **Multi-Memory Area Read** - Non-contiguous addresses are batched using FINS command 0x0104, which reads multiple areas in a single request (up to 64 areas per request, model-dependent).
 
-3. **Automatic Optimization** - WarLogix automatically groups and batches addresses for optimal performance.
+3. **Automatic Optimization** - WarLink automatically groups and batches addresses for optimal performance.
 
 **Transport Selection:**
 
@@ -172,7 +172,7 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 **How Batching Works:**
 
-1. **Multiple Service Packet (MSP)** - Multiple CIP Read Tag requests are combined into a single request using service 0x0A. Up to 200 services per packet (CIP limit), but WarLogix uses 50 for connected and 20 for unconnected to ensure reliability.
+1. **Multiple Service Packet (MSP)** - Multiple CIP Read Tag requests are combined into a single request using service 0x0A. Up to 200 services per packet (CIP limit), but WarLink uses 50 for connected and 20 for unconnected to ensure reliability.
 
 2. **Connected Messaging** - Forward Open establishes a persistent CIP connection with larger payload sizes (4002 bytes vs 504 bytes), enabling more tags per batch.
 
@@ -214,13 +214,13 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 **Optimization Tips:**
 
-1. **Let Batching Work** - WarLogix uses SumUp Read (IndexGroup 0xF080) automatically. No configuration needed.
+1. **Let Batching Work** - WarLink uses SumUp Read (IndexGroup 0xF080) automatically. No configuration needed.
 
 2. **Symbol Discovery** - First connection discovers all symbols. Subsequent reads use cached handles.
 
 3. **Minimize Symbol Count** - While batching is efficient, fewer symbols means faster discovery.
 
-4. **Direct Addressing** - WarLogix uses direct addressing (0x4040) for maximum compatibility.
+4. **Direct Addressing** - WarLink uses direct addressing (0x4040) for maximum compatibility.
 
 **Performance Note:** ADS has the largest gap between batched and individual reads. A 33-tag read improved from ~300ms to ~6ms with SumUp Read optimization.
 
@@ -238,7 +238,7 @@ PLC reads are typically the bottleneck, not republishing. Each PLC family has di
 
 ### Poll Rate Selection
 
-WarLogix enforces a minimum poll rate of 250ms to protect PLCs from excessive polling. The default is 1000ms (1 second).
+WarLink enforces a minimum poll rate of 250ms to protect PLCs from excessive polling. The default is 1000ms (1 second).
 
 | Use Case | Recommended Poll Rate |
 |----------|----------------------|
@@ -254,7 +254,7 @@ Faster poll rates increase:
 
 ### Network Optimization
 
-1. **Local Brokers** - Colocate brokers with WarLogix for lowest latency.
+1. **Local Brokers** - Colocate brokers with WarLink for lowest latency.
 
 2. **Dedicated Network** - Separate PLC traffic from IT traffic where possible.
 
@@ -272,11 +272,11 @@ Choose based on your use case, not throughput numbers (all have sufficient capac
 | **MQTT** | IoT integration, simple pub/sub, bidirectional | Lightweight, write-back support, widely supported |
 | **Valkey/Redis** | Real-time dashboards, caching, key-value lookup | Instant access by tag, Pub/Sub, write-back queue |
 
-You can enable multiple brokers simultaneously - WarLogix publishes to all configured brokers in parallel.
+You can enable multiple brokers simultaneously - WarLink publishes to all configured brokers in parallel.
 
 ### Change Filtering
 
-WarLogix only publishes when values change. To reduce message volume:
+WarLink only publishes when values change. To reduce message volume:
 
 1. **Reduce Precision** - Round floating-point values to reduce noise-driven changes.
 
@@ -290,7 +290,7 @@ WarLogix only publishes when values change. To reduce message volume:
 - **CPU** - Dominated by JSON serialization; ~1-2% per 1,000 tags at 2Hz.
 
 For very large deployments (>10,000 tags), consider:
-- Multiple WarLogix instances with tag partitioning
+- Multiple WarLink instances with tag partitioning
 - Longer poll intervals for less-critical data
 - Tiered polling (fast/slow groups)
 
@@ -300,13 +300,13 @@ Run the built-in stress test to establish your baseline:
 
 ```bash
 # Default: 50 PLCs, 100 tags each, 10 seconds
-warlogix --stress-test-republishing
+warlink --stress-test-republishing
 
 # Custom parameters
-warlogix --stress-test-republishing --test-duration 30s --test-plcs 100 --test-tags 200
+warlink --stress-test-republishing --test-duration 30s --test-plcs 100 --test-tags 200
 
 # Skip confirmation prompt (for CI/scripts)
-warlogix --stress-test-republishing -y
+warlink --stress-test-republishing -y
 ```
 
 Save the baseline throughput values and re-run after configuration changes to detect regressions.
@@ -329,7 +329,7 @@ Save the baseline throughput values and re-run after configuration changes to de
 
 ### High Latency
 
-1. Check network path between WarLogix and brokers
+1. Check network path between WarLink and brokers
 2. Verify TLS overhead if encryption enabled
 3. Monitor broker consumer lag (Kafka)
 4. Check for network congestion or packet loss

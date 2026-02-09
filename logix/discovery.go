@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"warlogix/eip"
+	"warlink/eip"
 )
 
 // DeviceInfo contains identity information about a discovered PLC or EtherNet/IP device.

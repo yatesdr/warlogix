@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"warlogix/config"
-	"warlogix/kafka"
-	"warlogix/mqtt"
-	"warlogix/valkey"
+	"warlink/config"
+	"warlink/kafka"
+	"warlink/mqtt"
+	"warlink/valkey"
 )
 
 // toKafkaConfig converts a config.KafkaConfig to a kafka.Config.
@@ -157,7 +157,7 @@ func (r *Runner) testKafka(cfg *kafka.Config) TestResult {
 	fmt.Printf("─────────────────────────────────────────────────────────────────────\n")
 	fmt.Printf("  Testing: Kafka/%s\n", cfg.Name)
 	fmt.Printf("  Brokers: %s\n", result.Address)
-	fmt.Printf("  Topic:   warlogix-test-stress\n")
+	fmt.Printf("  Topic:   warlink-test-stress\n")
 	fmt.Printf("─────────────────────────────────────────────────────────────────────\n")
 
 	// Create a test config with test namespace
@@ -166,7 +166,7 @@ func (r *Runner) testKafka(cfg *kafka.Config) TestResult {
 	testCfg.AutoCreateTopics = true
 
 	// Use a test namespace for isolation
-	testNamespace := "warlogix-test-stress"
+	testNamespace := "warlink-test-stress"
 
 	// Use the Manager for batched publishing (matches real-world usage)
 	mgr := kafka.NewManager()
@@ -330,7 +330,7 @@ func (r *Runner) runKafkaStress(producer *kafka.Producer, cfg *kafka.Config, res
 					// Note: cfg.Topic is no longer used; the producer uses its internal topic from builder
 					msgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					msgStart := time.Now()
-					err := producer.Produce(msgCtx, "warlogix-test-stress", key, payload)
+					err := producer.Produce(msgCtx, "warlink-test-stress", key, payload)
 					latency := time.Since(msgStart)
 					cancel()
 
@@ -381,15 +381,15 @@ func (r *Runner) testMQTT(cfg *config.MQTTConfig) TestResult {
 	fmt.Printf("─────────────────────────────────────────────────────────────────────\n")
 	fmt.Printf("  Testing: MQTT/%s\n", cfg.Name)
 	fmt.Printf("  Broker:  %s\n", result.Address)
-	fmt.Printf("  Topic:   warlogix-test-stress/+/tags/+\n")
+	fmt.Printf("  Topic:   warlink-test-stress/+/tags/+\n")
 	fmt.Printf("─────────────────────────────────────────────────────────────────────\n")
 
 	// Create a test config with test namespace
 	testCfg := *cfg
-	testCfg.ClientID = fmt.Sprintf("warlogix-stress-%d", time.Now().UnixNano())
+	testCfg.ClientID = fmt.Sprintf("warlink-stress-%d", time.Now().UnixNano())
 
 	// Use a test namespace for isolation
-	testNamespace := "warlogix-test-stress"
+	testNamespace := "warlink-test-stress"
 
 	// Create publisher
 	pub := mqtt.NewPublisher(&testCfg, testNamespace)
@@ -475,7 +475,7 @@ func (r *Runner) testValkey(cfg *config.ValkeyConfig) TestResult {
 	fmt.Printf("─────────────────────────────────────────────────────────────────────\n")
 	fmt.Printf("  Testing: Valkey/%s\n", cfg.Name)
 	fmt.Printf("  Server:  %s\n", result.Address)
-	fmt.Printf("  Keys:    warlogix-test-stress:*\n")
+	fmt.Printf("  Keys:    warlink-test-stress:*\n")
 	fmt.Printf("─────────────────────────────────────────────────────────────────────\n")
 
 	// Create a test config
@@ -483,7 +483,7 @@ func (r *Runner) testValkey(cfg *config.ValkeyConfig) TestResult {
 	testCfg.PublishChanges = false // Disable pub/sub for pure SET throughput
 
 	// Use a test namespace for isolation
-	testNamespace := "warlogix-test-stress"
+	testNamespace := "warlink-test-stress"
 
 	// Create publisher directly for synchronous testing
 	pub := valkey.NewPublisher(&testCfg, testNamespace)
@@ -598,7 +598,7 @@ func (r *Runner) printReport() {
 	if len(r.results) == 0 {
 		fmt.Println("  No enabled brokers found in configuration.")
 		fmt.Println()
-		fmt.Println("  To run tests, enable brokers in ~/.warlogix/config.yaml:")
+		fmt.Println("  To run tests, enable brokers in ~/.warlink/config.yaml:")
 		fmt.Println("    - kafka[].enabled: true")
 		fmt.Println("    - mqtt[].enabled: true")
 		fmt.Println("    - valkey[].enabled: true")

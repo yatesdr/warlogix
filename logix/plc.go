@@ -4,9 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"warlogix/cip"
-	"warlogix/eip"
-	"warlogix/logging"
+	"warlink/cip"
+	"warlink/eip"
+	"warlink/logging"
 )
 
 // PLC is a thin Logix-specific wrapper over the generic eip client.

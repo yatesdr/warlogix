@@ -9,7 +9,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlogix/config"
+	"warlink/config"
 )
 
 // Theme defines the complete color scheme for the UI.

@@ -3,7 +3,7 @@ package ads
 import "fmt"
 
 // TagInfo holds metadata about a discovered symbol.
-// This structure is designed to be compatible with the warlogix plcman package.
+// This structure is designed to be compatible with the warlink plcman package.
 type TagInfo struct {
 	Name        string // Full symbol name (e.g., "MAIN.Temperature")
 	TypeCode    uint16 // ADS type code

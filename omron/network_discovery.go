@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/logging"
+	"warlink/logging"
 )
 
 // NetworkDeviceInfo contains identity information about a discovered Omron PLC.

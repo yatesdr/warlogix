@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/config"
-	"warlogix/logging"
-	"warlogix/namespace"
+	"warlink/config"
+	"warlink/logging"
+	"warlink/namespace"
 )
 
 const (

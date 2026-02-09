@@ -3,8 +3,8 @@ package driver
 import (
 	"fmt"
 
-	"warlogix/config"
-	"warlogix/logix"
+	"warlink/config"
+	"warlink/logix"
 )
 
 // LogixAdapter wraps logix.Client to implement the Driver interface.

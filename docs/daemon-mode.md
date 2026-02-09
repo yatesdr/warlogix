@@ -1,12 +1,12 @@
 # Daemon Mode
 
-Daemon mode runs WarLogix as a background service with SSH access, allowing remote management of the TUI from any SSH client. This is useful for headless servers, edge devices, or situations where you want WarLogix running continuously while connecting to configure or monitor it as needed.
+Daemon mode runs WarLink as a background service with SSH access, allowing remote management of the TUI from any SSH client. This is useful for headless servers, edge devices, or situations where you want WarLink running continuously while connecting to configure or monitor it as needed.
 
 ## Quick Start
 
 ```bash
 # Start daemon with password authentication
-./warlogix -d --ssh-password "your-password"
+./warlink -d --ssh-password "your-password"
 
 # Connect from any SSH client
 ssh -p 2222 localhost
@@ -29,7 +29,7 @@ Daemon mode requires at least one authentication method. You can use password au
 ### Password Authentication
 
 ```bash
-./warlogix -d --ssh-password "secret123"
+./warlink -d --ssh-password "secret123"
 ```
 
 Any SSH client can connect using this password.
@@ -44,15 +44,15 @@ If you don't already have an SSH key pair, generate one:
 
 ```bash
 # Generate an Ed25519 key (recommended)
-ssh-keygen -t ed25519 -C "warlogix-access"
+ssh-keygen -t ed25519 -C "warlink-access"
 
 # Or generate an RSA key (wider compatibility)
-ssh-keygen -t rsa -b 4096 -C "warlogix-access"
+ssh-keygen -t rsa -b 4096 -C "warlink-access"
 ```
 
 This creates two files:
 - `~/.ssh/id_ed25519` (or `id_rsa`) - Your private key (keep secret)
-- `~/.ssh/id_ed25519.pub` (or `id_rsa.pub`) - Your public key (share with WarLogix)
+- `~/.ssh/id_ed25519.pub` (or `id_rsa.pub`) - Your public key (share with WarLink)
 
 #### Setting Up Authorized Keys
 
@@ -60,10 +60,10 @@ Create an authorized_keys file containing the public keys of users who should ha
 
 ```bash
 # Copy your public key to an authorized_keys file
-cat ~/.ssh/id_ed25519.pub >> ~/.warlogix/authorized_keys
+cat ~/.ssh/id_ed25519.pub >> ~/.warlink/authorized_keys
 
 # Add additional users' public keys
-cat /path/to/other_user.pub >> ~/.warlogix/authorized_keys
+cat /path/to/other_user.pub >> ~/.warlink/authorized_keys
 ```
 
 The authorized_keys file uses the standard OpenSSH format (one public key per line):
@@ -77,10 +77,10 @@ ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB... user2@host2
 
 ```bash
 # Use a specific authorized_keys file
-./warlogix -d --ssh-keys ~/.warlogix/authorized_keys
+./warlink -d --ssh-keys ~/.warlink/authorized_keys
 
 # Use a directory containing an authorized_keys file
-./warlogix -d --ssh-keys ~/.warlogix/
+./warlink -d --ssh-keys ~/.warlink/
 ```
 
 #### Connecting with Keys
@@ -96,24 +96,24 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 localhost
 ### Combined Authentication
 
 ```bash
-./warlogix -d --ssh-password "backup" --ssh-keys ~/.ssh/authorized_keys
+./warlink -d --ssh-password "backup" --ssh-keys ~/.ssh/authorized_keys
 ```
 
 Clients can authenticate with either method.
 
 ## Namespace Requirement
 
-Daemon mode requires a namespace to be configured. The namespace identifies this WarLogix instance and is used in MQTT topics, Kafka topics, and Valkey keys.
+Daemon mode requires a namespace to be configured. The namespace identifies this WarLink instance and is used in MQTT topics, Kafka topics, and Valkey keys.
 
 ```bash
 # Set namespace when starting daemon
-./warlogix -d --namespace "factory1" --ssh-password "secret"
+./warlink -d --namespace "factory1" --ssh-password "secret"
 
 # Or configure namespace first in local mode, then start daemon
-./warlogix --namespace "factory1"
+./warlink --namespace "factory1"
 # (configure PLCs, brokers, etc.)
 # Then start daemon mode
-./warlogix -d --ssh-password "secret"
+./warlink -d --ssh-password "secret"
 ```
 
 ## Connecting
@@ -173,7 +173,7 @@ Shutdown sequence:
 ### Using nohup
 
 ```bash
-nohup ./warlogix -d --ssh-password "secret" > /var/log/warlogix.log 2>&1 &
+nohup ./warlink -d --ssh-password "secret" > /var/log/warlink.log 2>&1 &
 ```
 
 ### Using systemd (Ubuntu / Debian / Rocky Linux)
@@ -182,44 +182,44 @@ nohup ./warlogix -d --ssh-password "secret" > /var/log/warlogix.log 2>&1 &
 
 ```bash
 # Create system user with no login shell
-sudo useradd -r -s /usr/sbin/nologin -d /opt/warlogix -m warlogix
+sudo useradd -r -s /usr/sbin/nologin -d /opt/warlink -m warlink
 
 # Create config directory
-sudo mkdir -p /opt/warlogix/.warlogix
-sudo chown warlogix:warlogix /opt/warlogix/.warlogix
+sudo mkdir -p /opt/warlink/.warlink
+sudo chown warlink:warlink /opt/warlink/.warlink
 ```
 
 #### 2. Install the binary
 
 ```bash
 # Download (adjust version and architecture as needed)
-sudo curl -L -o /usr/local/bin/warlogix \
-  https://github.com/yatesdr/warlogix/releases/download/v1.0.0/warlogix-linux-amd64
-sudo chmod +x /usr/local/bin/warlogix
+sudo curl -L -o /usr/local/bin/warlink \
+  https://github.com/yatesdr/warlink/releases/download/v1.0.0/warlink-linux-amd64
+sudo chmod +x /usr/local/bin/warlink
 ```
 
 #### 3. Create the systemd service
 
-Create `/etc/systemd/system/warlogix.service`:
+Create `/etc/systemd/system/warlink.service`:
 
 ```ini
 [Unit]
-Description=WarLogix PLC Gateway
-Documentation=https://github.com/yatesdr/warlogix
+Description=WarLink PLC Gateway
+Documentation=https://github.com/yatesdr/warlink
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=warlogix
-Group=warlogix
-WorkingDirectory=/opt/warlogix
+User=warlink
+Group=warlink
+WorkingDirectory=/opt/warlink
 
 # Basic setup with password auth
-ExecStart=/usr/local/bin/warlogix -d -p 2222 --ssh-password "changeme" --config /opt/warlogix/.warlogix/config.yaml
+ExecStart=/usr/local/bin/warlink -d -p 2222 --ssh-password "changeme" --config /opt/warlink/.warlink/config.yaml
 
 # Or use key-based auth (recommended)
-#ExecStart=/usr/local/bin/warlogix -d -p 2222 --ssh-keys /opt/warlogix/.warlogix/authorized_keys --config /opt/warlogix/.warlogix/config.yaml
+#ExecStart=/usr/local/bin/warlink -d -p 2222 --ssh-keys /opt/warlink/.warlink/authorized_keys --config /opt/warlink/.warlink/config.yaml
 
 # Restart policy
 Restart=on-failure
@@ -232,7 +232,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/opt/warlogix/.warlogix
+ReadWritePaths=/opt/warlink/.warlink
 
 # Resource limits (adjust as needed)
 LimitNOFILE=65535
@@ -250,12 +250,12 @@ For key-based auth:
 
 ```bash
 # Create authorized_keys file
-sudo touch /opt/warlogix/.warlogix/authorized_keys
-sudo chown warlogix:warlogix /opt/warlogix/.warlogix/authorized_keys
-sudo chmod 600 /opt/warlogix/.warlogix/authorized_keys
+sudo touch /opt/warlink/.warlink/authorized_keys
+sudo chown warlink:warlink /opt/warlink/.warlink/authorized_keys
+sudo chmod 600 /opt/warlink/.warlink/authorized_keys
 
 # Add your public key
-echo "ssh-ed25519 AAAA... your-email@example.com" | sudo tee -a /opt/warlogix/.warlogix/authorized_keys
+echo "ssh-ed25519 AAAA... your-email@example.com" | sudo tee -a /opt/warlink/.warlink/authorized_keys
 ```
 
 #### 5. Initialize configuration
@@ -264,14 +264,14 @@ Before starting the daemon, create an initial config with a namespace:
 
 ```bash
 # Run once interactively to set namespace and configure PLCs
-sudo -u warlogix /usr/local/bin/warlogix --config /opt/warlogix/.warlogix/config.yaml --namespace "factory1"
+sudo -u warlink /usr/local/bin/warlink --config /opt/warlink/.warlink/config.yaml --namespace "factory1"
 # Press Q to quit after initial setup
 ```
 
 Or create a minimal config directly:
 
 ```bash
-cat <<EOF | sudo tee /opt/warlogix/.warlogix/config.yaml
+cat <<EOF | sudo tee /opt/warlink/.warlink/config.yaml
 namespace: factory1
 poll_rate: 250
 plcs: []
@@ -279,21 +279,21 @@ mqtt: []
 kafka: []
 valkey: []
 EOF
-sudo chown warlogix:warlogix /opt/warlogix/.warlogix/config.yaml
+sudo chown warlink:warlink /opt/warlink/.warlink/config.yaml
 ```
 
 #### 6. Enable and start
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable warlogix
-sudo systemctl start warlogix
+sudo systemctl enable warlink
+sudo systemctl start warlink
 
 # Check status
-sudo systemctl status warlogix
+sudo systemctl status warlink
 
 # View logs
-sudo journalctl -u warlogix -f
+sudo journalctl -u warlink -f
 ```
 
 #### Rocky Linux / RHEL SELinux Note
@@ -301,7 +301,7 @@ sudo journalctl -u warlogix -f
 On Rocky Linux, AlmaLinux, or RHEL with SELinux enabled, you may need to allow the service to bind to the SSH port:
 
 ```bash
-# Allow warlogix to listen on port 2222
+# Allow warlink to listen on port 2222
 sudo semanage port -a -t ssh_port_t -p tcp 2222
 
 # If using a custom port, replace 2222 with your port
@@ -309,7 +309,7 @@ sudo semanage port -a -t ssh_port_t -p tcp 2222
 
 ### Using OpenRC (Alpine Linux)
 
-Alpine Linux uses OpenRC instead of systemd. Here's how to set up WarLogix on Alpine.
+Alpine Linux uses OpenRC instead of systemd. Here's how to set up WarLink on Alpine.
 
 #### 1. Install dependencies
 
@@ -325,49 +325,49 @@ apk add curl
 
 ```bash
 # Create system user
-adduser -D -S -h /opt/warlogix -s /sbin/nologin warlogix
+adduser -D -S -h /opt/warlink -s /sbin/nologin warlink
 
 # Create config directory
-mkdir -p /opt/warlogix/.warlogix
-chown warlogix:warlogix /opt/warlogix/.warlogix
+mkdir -p /opt/warlink/.warlink
+chown warlink:warlink /opt/warlink/.warlink
 ```
 
 #### 3. Install the binary
 
 ```bash
 # Download the musl/static binary for Alpine
-curl -L -o /usr/local/bin/warlogix \
-  https://github.com/yatesdr/warlogix/releases/download/v1.0.0/warlogix-linux-amd64-static
-chmod +x /usr/local/bin/warlogix
+curl -L -o /usr/local/bin/warlink \
+  https://github.com/yatesdr/warlink/releases/download/v1.0.0/warlink-linux-amd64-static
+chmod +x /usr/local/bin/warlink
 ```
 
 Note: Alpine uses musl libc, not glibc. You need a statically-linked binary or one built for musl. If the standard binary doesn't work, build from source on Alpine:
 
 ```bash
 apk add go git
-git clone https://github.com/yatesdr/warlogix.git
-cd warlogix
-CGO_ENABLED=0 go build -o /usr/local/bin/warlogix ./cmd/warlogix
+git clone https://github.com/yatesdr/warlink.git
+cd warlink
+CGO_ENABLED=0 go build -o /usr/local/bin/warlink ./cmd/warlink
 ```
 
 #### 4. Create the OpenRC init script
 
-Create `/etc/init.d/warlogix`:
+Create `/etc/init.d/warlink`:
 
 ```bash
 #!/sbin/openrc-run
 
-name="warlogix"
-description="WarLogix PLC Gateway"
+name="warlink"
+description="WarLink PLC Gateway"
 
-command="/usr/local/bin/warlogix"
-command_args="-d -p 2222 --ssh-keys /opt/warlogix/.warlogix/authorized_keys --config /opt/warlogix/.warlogix/config.yaml"
-command_user="warlogix:warlogix"
+command="/usr/local/bin/warlink"
+command_args="-d -p 2222 --ssh-keys /opt/warlink/.warlink/authorized_keys --config /opt/warlink/.warlink/config.yaml"
+command_user="warlink:warlink"
 command_background="yes"
 pidfile="/run/${RC_SVCNAME}.pid"
 
-output_log="/var/log/warlogix.log"
-error_log="/var/log/warlogix.err"
+output_log="/var/log/warlink.log"
+error_log="/var/log/warlink.err"
 
 depend() {
     need net
@@ -375,11 +375,11 @@ depend() {
 }
 
 start_pre() {
-    checkpath -d -m 0755 -o warlogix:warlogix /opt/warlogix/.warlogix
+    checkpath -d -m 0755 -o warlink:warlink /opt/warlink/.warlink
 
     # Verify config exists
-    if [ ! -f /opt/warlogix/.warlogix/config.yaml ]; then
-        eerror "Config file not found. Run warlogix manually first to initialize."
+    if [ ! -f /opt/warlink/.warlink/config.yaml ]; then
+        eerror "Config file not found. Run warlink manually first to initialize."
         return 1
     fi
 }
@@ -388,32 +388,32 @@ start_pre() {
 Make it executable:
 
 ```bash
-chmod +x /etc/init.d/warlogix
+chmod +x /etc/init.d/warlink
 ```
 
 #### 5. Set up authentication
 
 ```bash
 # Create authorized_keys
-touch /opt/warlogix/.warlogix/authorized_keys
-chown warlogix:warlogix /opt/warlogix/.warlogix/authorized_keys
-chmod 600 /opt/warlogix/.warlogix/authorized_keys
+touch /opt/warlink/.warlink/authorized_keys
+chown warlink:warlink /opt/warlink/.warlink/authorized_keys
+chmod 600 /opt/warlink/.warlink/authorized_keys
 
 # Add your public key
-echo "ssh-ed25519 AAAA... your-email@example.com" >> /opt/warlogix/.warlogix/authorized_keys
+echo "ssh-ed25519 AAAA... your-email@example.com" >> /opt/warlink/.warlink/authorized_keys
 ```
 
 For password auth, modify the init script's `command_args`:
 
 ```bash
-command_args="-d -p 2222 --ssh-password 'your-password' --config /opt/warlogix/.warlogix/config.yaml"
+command_args="-d -p 2222 --ssh-password 'your-password' --config /opt/warlink/.warlink/config.yaml"
 ```
 
 #### 6. Initialize configuration
 
 ```bash
 # Create initial config
-cat <<EOF > /opt/warlogix/.warlogix/config.yaml
+cat <<EOF > /opt/warlink/.warlink/config.yaml
 namespace: factory1
 poll_rate: 250
 plcs: []
@@ -421,30 +421,30 @@ mqtt: []
 kafka: []
 valkey: []
 EOF
-chown warlogix:warlogix /opt/warlogix/.warlogix/config.yaml
+chown warlink:warlink /opt/warlink/.warlink/config.yaml
 ```
 
 #### 7. Enable and start
 
 ```bash
 # Add to default runlevel
-rc-update add warlogix default
+rc-update add warlink default
 
 # Start the service
-rc-service warlogix start
+rc-service warlink start
 
 # Check status
-rc-service warlogix status
+rc-service warlink status
 
 # View logs
-tail -f /var/log/warlogix.log
+tail -f /var/log/warlink.log
 ```
 
 #### 8. Alpine firewall (if using awall)
 
 ```bash
-# Allow SSH access to warlogix port
-cat <<EOF > /etc/awall/optional/warlogix.json
+# Allow SSH access to warlink port
+cat <<EOF > /etc/awall/optional/warlink.json
 {
   "filter": [
     {
@@ -457,7 +457,7 @@ cat <<EOF > /etc/awall/optional/warlogix.json
 }
 EOF
 
-awall enable warlogix
+awall enable warlink
 awall activate
 ```
 
@@ -472,38 +472,38 @@ FROM alpine:3.19
 RUN apk add --no-cache ca-certificates
 
 # Copy statically-linked binary
-COPY warlogix /usr/local/bin/warlogix
+COPY warlink /usr/local/bin/warlink
 
 # Create user
-RUN adduser -D -S -h /opt/warlogix warlogix
+RUN adduser -D -S -h /opt/warlink warlink
 
-USER warlogix
-WORKDIR /opt/warlogix
+USER warlink
+WORKDIR /opt/warlink
 
 EXPOSE 2222 8080
 
-ENTRYPOINT ["/usr/local/bin/warlogix"]
+ENTRYPOINT ["/usr/local/bin/warlink"]
 CMD ["-d", "-p", "2222", "--ssh-password", "changeme"]
 ```
 
 Build with a static binary:
 
 ```bash
-CGO_ENABLED=0 GOOS=linux go build -o warlogix-static ./cmd/warlogix
-docker build -t warlogix:alpine .
+CGO_ENABLED=0 GOOS=linux go build -o warlink-static ./cmd/warlink
+docker build -t warlink:alpine .
 ```
 
 ### Using Docker
 
 ```dockerfile
 FROM debian:bookworm-slim
-COPY warlogix /usr/local/bin/
+COPY warlink /usr/local/bin/
 EXPOSE 2222 8080
-CMD ["warlogix", "-d", "--ssh-password", "secret"]
+CMD ["warlink", "-d", "--ssh-password", "secret"]
 ```
 
 ```bash
-docker run -d -p 2222:2222 -p 8080:8080 -v ~/.warlogix:/root/.warlogix warlogix
+docker run -d -p 2222:2222 -p 8080:8080 -v ~/.warlink:/root/.warlink warlink
 ```
 
 ## Logging
@@ -512,13 +512,13 @@ Daemon mode supports the same logging options as local mode:
 
 ```bash
 # Log to file
-./warlogix -d --ssh-password "secret" --log /var/log/warlogix.log
+./warlink -d --ssh-password "secret" --log /var/log/warlink.log
 
 # Enable protocol debugging
-./warlogix -d --ssh-password "secret" --log-debug
+./warlink -d --ssh-password "secret" --log-debug
 
 # Debug specific protocols
-./warlogix -d --ssh-password "secret" --log-debug=mqtt,kafka
+./warlink -d --ssh-password "secret" --log-debug=mqtt,kafka
 ```
 
 **Warning:** Debug logging (`--log-debug`) generates extremely verbose output including protocol-level hex dumps. Log files can grow to gigabytes within hours on active systems. Use debug logging only for troubleshooting specific issues, not in typical deployments. Always specify a protocol filter (e.g., `--log-debug=s7`) rather than logging all protocols when possible.
@@ -527,10 +527,10 @@ Daemon mode supports the same logging options as local mode:
 
 ### Configuration File Location
 
-WarLogix uses a single configuration file, by default at `~/.warlogix/config.yaml`. Use `--config` to specify an alternate location:
+WarLink uses a single configuration file, by default at `~/.warlink/config.yaml`. Use `--config` to specify an alternate location:
 
 ```bash
-./warlogix -d --config /etc/warlogix/config.yaml --ssh-password "secret"
+./warlink -d --config /etc/warlink/config.yaml --ssh-password "secret"
 ```
 
 ### When Configuration is Loaded
@@ -558,11 +558,11 @@ To apply external config changes:
 
 ```bash
 # Restart the daemon to pick up external changes
-sudo systemctl restart warlogix
+sudo systemctl restart warlink
 
 # Or stop and start manually
 kill <pid>
-./warlogix -d --ssh-password "secret"
+./warlink -d --ssh-password "secret"
 ```
 
 ### Configuration Deployment Workflow
@@ -575,68 +575,68 @@ For automated deployments (Ansible, Puppet, etc.):
 
 ## Ansible Deployment
 
-WarLogix is well-suited for Ansible-based deployment to edge devices and factory servers.
+WarLink is well-suited for Ansible-based deployment to edge devices and factory servers.
 
 ### Example Playbook
 
 ```yaml
 ---
-- name: Deploy WarLogix
+- name: Deploy WarLink
   hosts: plc_gateways
   become: yes
   vars:
-    warlogix_version: "1.0.0"
-    warlogix_ssh_port: 2222
-    warlogix_namespace: "{{ inventory_hostname }}"
+    warlink_version: "1.0.0"
+    warlink_ssh_port: 2222
+    warlink_namespace: "{{ inventory_hostname }}"
 
   tasks:
-    - name: Create warlogix user
+    - name: Create warlink user
       user:
-        name: warlogix
+        name: warlink
         system: yes
         shell: /bin/false
-        home: /opt/warlogix
+        home: /opt/warlink
 
     - name: Create config directory
       file:
-        path: /opt/warlogix/.warlogix
+        path: /opt/warlink/.warlink
         state: directory
-        owner: warlogix
+        owner: warlink
         mode: '0755'
 
-    - name: Download warlogix binary
+    - name: Download warlink binary
       get_url:
-        url: "https://github.com/yatesdr/warlogix/releases/download/v{{ warlogix_version }}/warlogix-linux-amd64"
-        dest: /usr/local/bin/warlogix
+        url: "https://github.com/yatesdr/warlink/releases/download/v{{ warlink_version }}/warlink-linux-amd64"
+        dest: /usr/local/bin/warlink
         mode: '0755'
 
     - name: Deploy configuration
       template:
-        src: warlogix-config.yaml.j2
-        dest: /opt/warlogix/.warlogix/config.yaml
-        owner: warlogix
+        src: warlink-config.yaml.j2
+        dest: /opt/warlink/.warlink/config.yaml
+        owner: warlink
         mode: '0600'
-      notify: restart warlogix
+      notify: restart warlink
 
     - name: Deploy authorized_keys
       copy:
-        src: warlogix_authorized_keys
-        dest: /opt/warlogix/.warlogix/authorized_keys
-        owner: warlogix
+        src: warlink_authorized_keys
+        dest: /opt/warlink/.warlink/authorized_keys
+        owner: warlink
         mode: '0600'
-      notify: restart warlogix
+      notify: restart warlink
 
     - name: Deploy systemd service
       template:
-        src: warlogix.service.j2
-        dest: /etc/systemd/system/warlogix.service
+        src: warlink.service.j2
+        dest: /etc/systemd/system/warlink.service
       notify:
         - reload systemd
-        - restart warlogix
+        - restart warlink
 
-    - name: Enable and start warlogix
+    - name: Enable and start warlink
       systemd:
-        name: warlogix
+        name: warlink
         enabled: yes
         state: started
 
@@ -645,26 +645,26 @@ WarLogix is well-suited for Ansible-based deployment to edge devices and factory
       systemd:
         daemon_reload: yes
 
-    - name: restart warlogix
+    - name: restart warlink
       systemd:
-        name: warlogix
+        name: warlink
         state: restarted
 ```
 
 ### Systemd Service Template
 
-`warlogix.service.j2`:
+`warlink.service.j2`:
 
 ```ini
 [Unit]
-Description=WarLogix PLC Gateway
+Description=WarLink PLC Gateway
 After=network.target
 
 [Service]
 Type=simple
-User=warlogix
-WorkingDirectory=/opt/warlogix
-ExecStart=/usr/local/bin/warlogix -d -p {{ warlogix_ssh_port }} --ssh-keys /opt/warlogix/.warlogix/authorized_keys --config /opt/warlogix/.warlogix/config.yaml
+User=warlink
+WorkingDirectory=/opt/warlink
+ExecStart=/usr/local/bin/warlink -d -p {{ warlink_ssh_port }} --ssh-keys /opt/warlink/.warlink/authorized_keys --config /opt/warlink/.warlink/config.yaml
 Restart=on-failure
 RestartSec=10
 
@@ -672,7 +672,7 @@ RestartSec=10
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/opt/warlogix/.warlogix
+ReadWritePaths=/opt/warlink/.warlink
 
 [Install]
 WantedBy=multi-user.target
@@ -680,14 +680,14 @@ WantedBy=multi-user.target
 
 ### Configuration Template
 
-`warlogix-config.yaml.j2`:
+`warlink-config.yaml.j2`:
 
 ```yaml
-namespace: {{ warlogix_namespace }}
+namespace: {{ warlink_namespace }}
 poll_rate: 250
 
 plcs:
-{% for plc in warlogix_plcs %}
+{% for plc in warlink_plcs %}
   - name: {{ plc.name }}
     address: {{ plc.address }}
     family: {{ plc.family }}
@@ -696,7 +696,7 @@ plcs:
 {% endfor %}
 
 mqtt:
-{% for broker in warlogix_mqtt_brokers | default([]) %}
+{% for broker in warlink_mqtt_brokers | default([]) %}
   - name: {{ broker.name }}
     broker: {{ broker.host }}
     port: {{ broker.port | default(1883) }}
@@ -710,33 +710,33 @@ mqtt:
 
 2. **Namespace per host** - Use `{{ inventory_hostname }}` or a similar pattern to ensure unique namespaces across your fleet.
 
-3. **Config changes require restart** - The `notify: restart warlogix` handler ensures config changes are applied.
+3. **Config changes require restart** - The `notify: restart warlink` handler ensures config changes are applied.
 
 4. **Avoid TUI changes on managed nodes** - If using Ansible as the source of truth, discourage manual TUI changes that would drift from the Ansible-managed config.
 
 5. **Health checks** - Add a health check task to verify the daemon is running:
 
 ```yaml
-- name: Verify warlogix is running
+- name: Verify warlink is running
   uri:
     url: "http://localhost:8080/"
     status_code: 200
-  when: warlogix_rest_enabled | default(false)
+  when: warlink_rest_enabled | default(false)
 ```
 
 6. **Log aggregation** - Use `--log` to write to a file that your log collector can pick up:
 
 ```ini
-ExecStart=/usr/local/bin/warlogix -d ... --log /var/log/warlogix/warlogix.log
+ExecStart=/usr/local/bin/warlink -d ... --log /var/log/warlink/warlink.log
 ```
 
 7. **Firewall rules** - Open the SSH port for management access:
 
 ```yaml
-- name: Allow warlogix SSH
+- name: Allow warlink SSH
   ufw:
     rule: allow
-    port: "{{ warlogix_ssh_port }}"
+    port: "{{ warlink_ssh_port }}"
     proto: tcp
 ```
 
@@ -746,16 +746,16 @@ The single-file config makes backup simple:
 
 ```bash
 # Backup
-cp ~/.warlogix/config.yaml ~/.warlogix/config.yaml.bak
+cp ~/.warlink/config.yaml ~/.warlink/config.yaml.bak
 
 # Restore
-cp ~/.warlogix/config.yaml.bak ~/.warlogix/config.yaml
+cp ~/.warlink/config.yaml.bak ~/.warlink/config.yaml
 # Then restart daemon to apply
 ```
 
 ## Auto-Start Behavior
 
-In daemon mode, WarLogix automatically:
+In daemon mode, WarLink automatically:
 
 1. Connects to PLCs marked as auto-connect
 2. Starts the REST API if enabled
@@ -764,7 +764,7 @@ In daemon mode, WarLogix automatically:
 5. Connects to Kafka clusters marked as auto-connect
 6. Arms triggers marked as enabled
 
-This means a properly configured WarLogix can start publishing data immediately on boot without any manual intervention.
+This means a properly configured WarLink can start publishing data immediately on boot without any manual intervention.
 
 ## Platform Support
 
@@ -774,7 +774,7 @@ This means a properly configured WarLogix can start publishing data immediately 
 | macOS | Supported |
 | Windows | Not supported |
 
-Windows does not support the PTY functionality required for daemon mode. On Windows, run WarLogix in local mode or use WSL.
+Windows does not support the PTY functionality required for daemon mode. On Windows, run WarLink in local mode or use WSL.
 
 ## Security Considerations
 

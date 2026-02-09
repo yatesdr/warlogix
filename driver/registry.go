@@ -3,7 +3,7 @@ package driver
 import (
 	"fmt"
 
-	"warlogix/config"
+	"warlink/config"
 )
 
 // Create creates a Driver for the given PLC configuration.

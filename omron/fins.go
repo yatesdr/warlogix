@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"warlogix/logging"
+	"warlink/logging"
 )
 
 // FINS command codes.

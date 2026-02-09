@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"sort"
 
-	"warlogix/cip"
-	"warlogix/eip"
-	"warlogix/logging"
+	"warlink/cip"
+	"warlink/eip"
+	"warlink/logging"
 )
 
 // Batch configuration constants

@@ -1,10 +1,10 @@
 # Safety and Intended Use
 
-This document describes the intended use of WarLogix and important limitations regarding write-back functionality. **Read this document carefully before deploying WarLogix in any industrial environment.**
+This document describes the intended use of WarLink and important limitations regarding write-back functionality. **Read this document carefully before deploying WarLink in any industrial environment.**
 
-## What WarLogix Is Designed For
+## What WarLink Is Designed For
 
-WarLogix is a **data gateway** designed for:
+WarLink is a **data gateway** designed for:
 
 - **Monitoring and dashboards** - Visualizing PLC data in real-time
 - **Data logging and historians** - Capturing process data for analysis and compliance
@@ -12,9 +12,9 @@ WarLogix is a **data gateway** designed for:
 - **IT integration** - Bridging industrial protocols to modern message brokers (MQTT, Kafka, Redis)
 - **Occasional acknowledgments** - Writing simple status flags back to PLCs
 
-## What WarLogix Is NOT Designed For
+## What WarLink Is NOT Designed For
 
-WarLogix is **not** a real-time control system and should never be used for:
+WarLink is **not** a real-time control system and should never be used for:
 
 - Machine control or automation logic
 - Safety-critical functions or interlocks
@@ -41,10 +41,10 @@ WarLogix is **not** a real-time control system and should never be used for:
 
 ### System Characteristics
 
-- WarLogix is a **single-instance application** - not redundant or fault-tolerant
+- WarLink is a **single-instance application** - not redundant or fault-tolerant
 - The application may restart, lose connectivity, or experience delays
 - There is no watchdog or heartbeat mechanism to detect application failure
-- PLCs should never depend on WarLogix for continuous operation
+- PLCs should never depend on WarLink for continuous operation
 
 ---
 
@@ -53,15 +53,15 @@ WarLogix is **not** a real-time control system and should never be used for:
 Write-back should only be used for **acknowledgment of events** on **dedicated tags**. The ideal pattern is:
 
 1. The PLC controls all process logic internally
-2. The PLC signals WarLogix when data is ready to be captured
-3. WarLogix captures data and publishes to IT systems
-4. WarLogix writes a simple acknowledgment (success/error) to a dedicated tag
+2. The PLC signals WarLink when data is ready to be captured
+3. WarLink captures data and publishes to IT systems
+4. WarLink writes a simple acknowledgment (success/error) to a dedicated tag
 5. The PLC reads the acknowledgment and continues its program
 
 ### Dedicated Tags
 
-**Always use tags dedicated to WarLogix communication.** These tags should:
-- Be written **only** by WarLogix (not by PLC logic or other systems)
+**Always use tags dedicated to WarLink communication.** These tags should:
+- Be written **only** by WarLink (not by PLC logic or other systems)
 - Contain simple status values (success/error flags, acknowledgment bits)
 - Not be used as inputs to safety logic or process control
 - Be reset by the PLC after reading
@@ -79,18 +79,18 @@ IF PartComplete AND NOT DataSaveRequested THEN
     TraceData.Timestamp := CurrentTime;
     TraceData.ProcessValues := CapturedValues;
 
-    // Signal WarLogix to capture
-    WarLogix_SaveData := TRUE;
+    // Signal WarLink to capture
+    WarLink_SaveData := TRUE;
     DataSaveRequested := TRUE;
 END_IF
 
 // Wait for acknowledgment before releasing part
 IF DataSaveRequested THEN
-    IF WarLogix_DataSaved = 1 THEN
+    IF WarLink_DataSaved = 1 THEN
         // Success - release part
         ReleasePart();
-        ResetWarLogixTags();
-    ELSIF WarLogix_DataSaved = -1 THEN
+        ResetWarLinkTags();
+    ELSIF WarLink_DataSaved = -1 THEN
         // Error - hold part, alert operator
         HoldPart();
         RaiseAlarm("Traceability save failed");
@@ -99,14 +99,14 @@ IF DataSaveRequested THEN
 END_IF
 ```
 
-**WarLogix Configuration:**
+**WarLink Configuration:**
 ```yaml
 triggers:
   - name: TraceabilityCapture
     plc: MainPLC
-    trigger_tag: WarLogix_SaveData
+    trigger_tag: WarLink_SaveData
     condition: { operator: "==", value: true }
-    ack_tag: WarLogix_DataSaved    # Writes 1 (success) or -1 (error)
+    ack_tag: WarLink_DataSaved    # Writes 1 (success) or -1 (error)
     tags:
       - TraceData
     kafka_cluster: all
@@ -115,9 +115,9 @@ triggers:
 **Why this is correct:**
 - PLC maintains full control of the process
 - Data is held stable until acknowledgment is received
-- Part is safely held if WarLogix fails or is delayed
+- Part is safely held if WarLink fails or is delayed
 - Write-back is to a dedicated tag, not a process parameter
-- PLC program continues to function even if WarLogix is unavailable
+- PLC program continues to function even if WarLink is unavailable
 
 ### Example: Correct Usage - Batch Recipe Selection
 
@@ -127,30 +127,30 @@ triggers:
 ```yaml
 # Dashboard writes to a dedicated tag
 tags:
-  - name: WarLogix_RecipeRequest
-    writable: true    # Dedicated to WarLogix
+  - name: WarLink_RecipeRequest
+    writable: true    # Dedicated to WarLink
 
 # PLC reads this tag and validates before loading
 ```
 
 **PLC Program:**
 ```
-// PLC validates and applies recipe - WarLogix only suggests
-IF WarLogix_RecipeRequest > 0 AND NOT RecipeChangeInProgress THEN
-    RequestedRecipe := WarLogix_RecipeRequest;
+// PLC validates and applies recipe - WarLink only suggests
+IF WarLink_RecipeRequest > 0 AND NOT RecipeChangeInProgress THEN
+    RequestedRecipe := WarLink_RecipeRequest;
     IF ValidateRecipe(RequestedRecipe) THEN
         LoadRecipe(RequestedRecipe);
     ELSE
         RaiseAlarm("Invalid recipe requested");
     END_IF
-    WarLogix_RecipeRequest := 0;  // Clear the request
+    WarLink_RecipeRequest := 0;  // Clear the request
 END_IF
 ```
 
 **Why this is correct:**
 - PLC validates all inputs before acting
 - Recipe is loaded by PLC logic, not directly written
-- WarLogix only sets a request flag on a dedicated tag
+- WarLink only sets a request flag on a dedicated tag
 - PLC clears the tag after processing
 
 ---
@@ -170,9 +170,9 @@ tags:
 ```
 
 **Why this is dangerous:**
-- WarLogix is not safety-rated (SIL, PLe, etc.)
+- WarLink is not safety-rated (SIL, PLe, etc.)
 - Network delays could allow entry during hazardous conditions
-- WarLogix could fail, crash, or lose connectivity
+- WarLink could fail, crash, or lose connectivity
 - No redundancy or fail-safe behavior
 - Violates safety system design principles
 
@@ -201,14 +201,14 @@ tags:
 ```yaml
 # RIGHT: Write to a dedicated advisory tag
 tags:
-  - name: WarLogix_HighTempWarning
+  - name: WarLink_HighTempWarning
     writable: true    # Dedicated flag only
 ```
 
 **PLC Program:**
 ```
 // PLC decides how to respond to advisory
-IF WarLogix_HighTempWarning AND DriveRunning THEN
+IF WarLink_HighTempWarning AND DriveRunning THEN
     // PLC controls the parameter, considering all factors
     DriveSpeedSetpoint := MIN(DriveSpeedSetpoint, MaxSpeedHighTemp);
 END_IF
@@ -232,18 +232,18 @@ tags:
 - No coordination with motion controller state machine
 - Could command motion when machine is not ready
 
-**Correct approach:** Use dedicated motion networks (EtherCAT, SERCOS, etc.) for position commands. WarLogix can write to a dedicated tag that requests a recipe change or mode switch, which the PLC validates and executes.
+**Correct approach:** Use dedicated motion networks (EtherCAT, SERCOS, etc.) for position commands. WarLink can write to a dedicated tag that requests a recipe change or mode switch, which the PLC validates and executes.
 
 ---
 
 ## Summary of Principles
 
-1. **WarLogix is for monitoring, not control** - Use it to observe and log, not to make decisions
+1. **WarLink is for monitoring, not control** - Use it to observe and log, not to make decisions
 2. **Dedicated tags only** - Never write to tags that PLC logic also modifies
 3. **PLC is the authority** - All process decisions should be made by PLC logic
 4. **Acknowledgments, not commands** - Write-back should confirm events, not direct operations
-5. **Fail-safe design** - PLC must operate safely if WarLogix is unavailable
-6. **No safety functions** - Never use WarLogix in the safety chain
+5. **Fail-safe design** - PLC must operate safely if WarLink is unavailable
+6. **No safety functions** - Never use WarLink in the safety chain
 
 ---
 
@@ -255,7 +255,7 @@ THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ### No Warranty
 
-The authors and contributors of WarLogix make no representations or warranties regarding:
+The authors and contributors of WarLink make no representations or warranties regarding:
 - The suitability of this software for any particular purpose
 - The accuracy, reliability, or completeness of any data transmitted
 - The timing, latency, or determinism of any operations
@@ -275,30 +275,30 @@ This includes, but is not limited to:
 
 ### User Responsibility
 
-By using WarLogix, you acknowledge and agree that:
+By using WarLink, you acknowledge and agree that:
 
-1. **You are solely responsible** for determining whether WarLogix is suitable for your application
-2. **You are solely responsible** for the safe design and implementation of any system incorporating WarLogix
-3. **You will not use** WarLogix for safety-critical applications, real-time control, or any application where failure could result in injury, death, or significant property damage
+1. **You are solely responsible** for determining whether WarLink is suitable for your application
+2. **You are solely responsible** for the safe design and implementation of any system incorporating WarLink
+3. **You will not use** WarLink for safety-critical applications, real-time control, or any application where failure could result in injury, death, or significant property damage
 4. **You assume all risk** associated with the use of this software
 5. **You agree to hold harmless** the authors, contributors, and copyright holders from any claims arising from your use of this software
 
 ### Industrial Applications
 
-If you are using WarLogix in an industrial environment:
+If you are using WarLink in an industrial environment:
 
 1. Ensure all safety functions are implemented using appropriate safety-rated devices and systems
 2. Conduct a thorough risk assessment before deployment
 3. Implement appropriate fail-safe mechanisms in your PLC programs
-4. Never rely on WarLogix for time-critical or safety-critical operations
-5. Maintain appropriate backup and redundancy systems independent of WarLogix
+4. Never rely on WarLink for time-critical or safety-critical operations
+5. Maintain appropriate backup and redundancy systems independent of WarLink
 
 ### Acceptance
 
-**By downloading, installing, or using WarLogix, you acknowledge that you have read this disclaimer, understand its terms, and agree to be bound by them.**
+**By downloading, installing, or using WarLink, you acknowledge that you have read this disclaimer, understand its terms, and agree to be bound by them.**
 
 If you do not agree to these terms, do not use this software.
 
 ---
 
-*This document was last updated to reflect WarLogix functionality as of the current release. Users are responsible for reviewing this document with each update.*
+*This document was last updated to reflect WarLink functionality as of the current release. Users are responsible for reviewing this document with each update.*

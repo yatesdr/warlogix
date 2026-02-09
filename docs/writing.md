@@ -1,10 +1,10 @@
 # Writing Values to PLCs
 
-This document describes how to write values to PLC tags using WarLogix. **Writing is designed for occasional status updates and acknowledgments, not high-frequency control.**
+This document describes how to write values to PLC tags using WarLink. **Writing is designed for occasional status updates and acknowledgments, not high-frequency control.**
 
 ## Intended Use
 
-Writing values in WarLogix is primarily intended for:
+Writing values in WarLink is primarily intended for:
 
 - **Status code write-back** - Confirming trigger execution success/failure
 - **Acknowledgment flags** - Signaling that data was captured or processed
@@ -146,10 +146,10 @@ DINT (32-bit signed integer) is the most reliable type across all PLC families. 
 
 ### Dedicated Tags Only
 
-Write only to tags that are exclusively controlled by WarLogix:
+Write only to tags that are exclusively controlled by WarLink:
 
 ```
-GOOD: WarLogix_AckCode      (dedicated to WarLogix)
+GOOD: WarLink_AckCode      (dedicated to WarLink)
 BAD:  ProcessSetpoint       (used by PLC logic)
 ```
 

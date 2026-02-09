@@ -1,6 +1,6 @@
 # MQTT Integration
 
-WarLogix publishes tag values and health status to MQTT brokers and supports write-back via MQTT messages. Configure brokers in the MQTT tab or see [Configuration Reference](configuration.md) for YAML options.
+WarLink publishes tag values and health status to MQTT brokers and supports write-back via MQTT messages. Configure brokers in the MQTT tab or see [Configuration Reference](configuration.md) for YAML options.
 
 <img width="902" height="541" alt="image" src="https://github.com/user-attachments/assets/68c2eaeb-7797-46e6-bae9-c633385a8099" />
 
@@ -101,9 +101,11 @@ TagPacks are published with `retained: true`, so new subscribers receive the las
 
 ### Topic Format
 
-Pattern: `{namespace}/packs/{packname}`
+Pattern: `{namespace}[/{selector}]/packs/{packname}`
 
-Example: `factory/packs/ProductionMetrics`
+Example (no selector): `factory/packs/ProductionMetrics`
+
+Example (with selector): `factory/line1/packs/ProductionMetrics`
 
 ### Message Format
 
@@ -146,10 +148,10 @@ Configure multiple brokers in the MQTT tab for redundancy or different purposes.
 Use the built-in stress test to benchmark your MQTT broker:
 
 ```bash
-warlogix --stress-test-republishing
+warlink --stress-test-republishing
 ```
 
-This publishes simulated PLC tag data to a test topic (`warlogix-test-stress/+/tags/+`) for 10 seconds.
+This publishes simulated PLC tag data to a test topic (`warlink-test-stress/+/tags/+`) for 10 seconds.
 
 ### Options
 
@@ -163,7 +165,7 @@ This publishes simulated PLC tag data to a test topic (`warlogix-test-stress/+/t
 ### Example
 
 ```bash
-warlogix --stress-test-republishing --test-duration 30s --test-tags 200 -y
+warlink --stress-test-republishing --test-duration 30s --test-tags 200 -y
 ```
 
 The test measures throughput (messages per second) and reports any publish failures. MQTT publishes are asynchronous with QoS 1, so the throughput represents the queue rate to the broker.

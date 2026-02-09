@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"warlogix/cip"
+	"warlink/cip"
 )
 
 // Template represents a UDT/AOI structure definition from the PLC.

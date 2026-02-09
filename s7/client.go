@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/logging"
+	"warlink/logging"
 )
 
 // Client is a high-level wrapper for S7 PLC communication.

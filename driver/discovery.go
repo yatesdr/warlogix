@@ -7,12 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"warlogix/ads"
-	"warlogix/config"
-	"warlogix/eip"
-	"warlogix/logging"
-	"warlogix/omron"
-	"warlogix/s7"
+	"warlink/ads"
+	"warlink/config"
+	"warlink/eip"
+	"warlink/logging"
+	"warlink/omron"
+	"warlink/s7"
 )
 
 // DiscoveredDevice represents a PLC discovered on the network.

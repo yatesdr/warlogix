@@ -1,6 +1,6 @@
 package driver
 
-import "warlogix/config"
+import "warlink/config"
 
 // TagValue is a unified wrapper that holds tag data from any PLC family.
 // It stores pre-computed Go values and type information for display.

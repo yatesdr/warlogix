@@ -73,12 +73,12 @@ func (c *Config) GetTLSConfig() *tls.Config {
 }
 
 // GetConsumerGroup returns the consumer group ID.
-// Defaults to warlogix-{Name}-writers if not explicitly set.
+// Defaults to warlink-{Name}-writers if not explicitly set.
 func (c *Config) GetConsumerGroup() string {
 	if c.ConsumerGroup != "" {
 		return c.ConsumerGroup
 	}
-	return "warlogix-" + c.Name + "-writers"
+	return "warlink-" + c.Name + "-writers"
 }
 
 // GetWriteMaxAge returns the maximum age of write requests to process.

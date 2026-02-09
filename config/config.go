@@ -286,7 +286,7 @@ type KafkaConfig struct {
 
 	// Writeback settings
 	EnableWriteback bool          `yaml:"enable_writeback,omitempty"` // Enable consuming write requests from Kafka
-	ConsumerGroup   string        `yaml:"consumer_group,omitempty"`   // Consumer group ID (default: warlogix-{name}-writers)
+	ConsumerGroup   string        `yaml:"consumer_group,omitempty"`   // Consumer group ID (default: warlink-{name}-writers)
 	WriteMaxAge     time.Duration `yaml:"write_max_age,omitempty"`    // Max age of write requests to process (default: 2s)
 }
 
@@ -337,7 +337,7 @@ func DefaultMQTTConfig(name string) MQTTConfig {
 		Enabled:  false,
 		Broker:   "localhost",
 		Port:     1883,
-		ClientID: "warlogix-" + name,
+		ClientID: "warlink-" + name,
 	}
 }
 
@@ -454,13 +454,13 @@ func (c *Config) UpdateValkey(name string, updated ValkeyConfig) bool {
 	return false
 }
 
-// DefaultPath returns the default configuration file path (~/.warlogix/config.yaml).
+// DefaultPath returns the default configuration file path (~/.warlink/config.yaml).
 func DefaultPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "config.yaml"
 	}
-	return filepath.Join(home, ".warlogix", "config.yaml")
+	return filepath.Join(home, ".warlink", "config.yaml")
 }
 
 // Load reads configuration from a YAML file.

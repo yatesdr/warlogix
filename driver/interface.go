@@ -1,6 +1,6 @@
 package driver
 
-import "warlogix/config"
+import "warlink/config"
 
 // Driver is the unified interface for all PLC communications.
 // Each PLC family has an adapter that implements this interface.
