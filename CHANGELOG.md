@@ -2,20 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
-
-### Changed
-- **ADS Performance Optimization**: Implemented SumUp Read (IndexGroup 0xF080) for
-  batching multiple tag reads into a single TCP request
-  - ~98% reduction in read cycle time for multi-tag configurations
-  - Example: 33 tags reduced from ~300ms to ~6ms per poll cycle
-  - Uses direct addressing (IndexGroup 0x4040) for optimal compatibility
+## [0.2.0] - 2026-02-09
 
 ### Added
-- **Debug Logging**: New `logging/debug.go` package for protocol-level troubleshooting
-  - Hex dump capability for TX/RX packet inspection
-  - Connection lifecycle logging
-  - Works across all protocol drivers (ADS, S7, etc.)
+- **Siemens S7 Write Support**: Full write capability for S7-300/400/1200/1500 PLCs
+  - Chunked writes for large data blocks
+  - Support for all basic types (BOOL, INT, DINT, REAL, STRING, etc.)
+  - Array write support
+- **Native S7 Protocol Implementation**: Replaced gos7 dependency with custom implementation
+  - Better error handling and connection recovery
+  - Improved compatibility across S7 variants
+- **Multi-Protocol PLC Discovery**: Scan network for PLCs from all supported vendors
+  - EtherNet/IP broadcast for Allen-Bradley and Omron NJ/NX
+  - S7 identification for Siemens PLCs
+  - ADS/UDP broadcast for Beckhoff TwinCAT
+  - FINS/UDP for Omron CS/CJ/CP series
+  - Live discovery modal with real-time results
+- **Write Dialog**: New TUI dialog for writing values to PLC tags
+  - Type-aware writes using discovered tag types
+  - Array support with bracket notation
+  - String and quoted string array parsing
+  - Support for BYTE/WORD/DWORD/LWORD types
+- **TagPacks**: Group tags from multiple PLCs for atomic publishing
+  - Publish as single JSON message when any member changes
+  - Per-pack broker selection (MQTT, Kafka, Valkey)
+  - Ignore list for volatile members (timestamps, counters)
+- **Theming System**: 12 built-in color themes
+  - Cycle with F6 key
+  - Persistent theme selection in config
+- **Unified Namespace**: Consistent topic/key structure across all brokers
+  - Configurable namespace prefix
+  - Per-broker selector suffix
+- **Health Monitoring**: Periodic health status publishing
+  - Per-PLC toggle for health checks
+  - Published to REST, MQTT, Valkey, and Kafka
+- **UDT/Structure Support**: Automatic structure unpacking
+  - Template discovery for Logix and Beckhoff
+  - Member-level change filtering with ignore list
+  - Published as JSON objects
+- **Stress Testing**: Built-in broker performance testing
+  - `--stress-test-republishing` flag
+  - Configurable duration, tag count, and PLC count
+  - Measures confirmed delivery throughput
+- **Comprehensive Documentation**
+  - Daemon mode setup guide with systemd and OpenRC examples
+  - User interface guide with all keyboard shortcuts
+  - Developer guide for using drivers in custom applications
+  - Performance tuning guide
+  - Multi-instance deployment guide
+  - Safety and intended use guidelines
+
+### Changed
+- **ADS Performance Optimization**: SumUp Read batching reduces read cycle time by ~98%
+- **Omron Improvements**: Optimized FINS and EIP drivers for high-throughput reads
+- **Kafka Publishing**: Batched async publishing with confirmation tracking
+- **MQTT Publishing**: Uses tag alias for topic path when available
+- **REST Tab**: Initial focus set to Start button to keep hotkeys active
+- **Debug Logging**: Protocol-level hex dumps available via `--log-debug`
+
+### Fixed
+- TUI filter and hotkey handling bugs
+- Logix write type detection for UDT members
+- ADS type encoding for writes
+- STRING type decoding (proper null termination)
+- FINS address parsing for multi-digit addresses (DM10, DM100, etc.)
+- FINS/TCP node address negotiation
+- Discovery dialog race conditions with other modals
+- Write dialog deadlocks and rendering issues
+- ASCII mode detection from locale environment
+- Race conditions and goroutine leaks in various components
 
 ## [0.1.8] - 2026-02-04
 
