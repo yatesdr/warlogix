@@ -1,30 +1,14 @@
 # Valkey/Redis Integration
 
-WarLogix stores tag values in Valkey/Redis with optional Pub/Sub notifications and write-back queue support.
-
+WarLogix stores tag values in Valkey/Redis with optional Pub/Sub notifications and write-back queue support. Configure servers in the Valkey tab or see [Configuration Reference](configuration.md) for YAML options.
 
 <img width="911" height="541" alt="image" src="https://github.com/user-attachments/assets/80851e84-b122-4718-b0a5-c3e858017371" />
 
+## Namespace and Keys
 
-## Configuration
-
-```yaml
-namespace: factory                  # Required: instance namespace
-
-valkey:
-  - name: LocalValkey
-    enabled: true
-    address: localhost:6379
-    database: 0
-    selector: line1                 # Optional: sub-namespace
-    password: secret                # Optional
-    use_tls: true                   # Optional
-    key_ttl: 60s                    # Optional key expiration
-    publish_changes: true           # Enable Pub/Sub
-    enable_writeback: true          # Enable write-back queue
-```
-
-The `namespace` is a required top-level setting that identifies this WarLogix instance. The optional `selector` provides additional sub-organization within the namespace.
+Redis keys are built from the global `namespace` setting and optional per-server `selector`:
+- Pattern: `{namespace}[:{selector}]:{plc}:...`
+- Example: `factory:line1:MainPLC:tags:Counter`
 
 ## Key Storage
 
@@ -194,24 +178,7 @@ redis-cli GET factory:packs:ProductionMetrics
 
 ## Multiple Servers
 
-Configure multiple Valkey/Redis servers:
-
-```yaml
-namespace: factory
-
-valkey:
-  - name: Primary
-    enabled: true
-    address: redis-primary:6379
-    selector: primary
-
-  - name: Replica
-    enabled: true
-    address: redis-replica:6379
-    selector: replica
-```
-
-All enabled servers receive the same updates.
+Configure multiple Valkey/Redis servers in the Valkey tab. All enabled servers receive the same updates.
 
 ## CLI Examples
 

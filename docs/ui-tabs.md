@@ -228,10 +228,10 @@ The TagPacks tab uses context-sensitive hotkeys based on which pane has focus:
 
 ### Creating a Pack
 
-1. Press `c` to create a new pack
-2. Enter a name and topic
+1. Press `a` to create a new pack
+2. Enter a name
 3. Select which brokers to publish to
-4. Press `a` to add tags from the tag picker
+4. Switch to member list with `Tab`, then press `a` to add tags
 
 ### Tag Picker
 

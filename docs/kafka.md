@@ -1,34 +1,14 @@
 # Kafka Integration
 
-WarLogix publishes tag changes, health status, and event triggers to Apache Kafka. Optional writeback support allows external systems to write values to PLC tags via Kafka.
+WarLogix publishes tag changes, health status, and event triggers to Apache Kafka. Optional writeback support allows external systems to write values to PLC tags via Kafka. Configure clusters in the Kafka tab or see [Configuration Reference](configuration.md) for YAML options.
 
-## Configuration
+## Namespace and Topics
 
-```yaml
-namespace: factory                      # Required: instance namespace
-
-kafka:
-  - name: LocalKafka
-    enabled: true
-    brokers: [localhost:9092, localhost:9093]
-    selector: line1                     # Optional: sub-namespace
-    publish_changes: true
-    use_tls: true                       # Optional
-    tls_skip_verify: false              # Optional
-    sasl_mechanism: SCRAM-SHA-256       # Optional: PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
-    username: user                      # Optional
-    password: pass                      # Optional
-    required_acks: -1                   # -1=all, 0=none, 1=leader
-    max_retries: 3
-    retry_backoff: 100ms
-
-    # Writeback (optional)
-    enable_writeback: true              # Enable consuming write requests
-    consumer_group: warlogix-writers    # Default: warlogix-{name}-writers
-    write_max_age: 2s                   # Ignore requests older than this
-```
-
-The `namespace` is a required top-level setting that identifies this WarLogix instance. The optional `selector` provides additional sub-organization within the namespace.
+Kafka topics are built from the global `namespace` setting and optional per-cluster `selector`:
+- Tag changes: `{namespace}[-{selector}]` (e.g., `factory-line1`)
+- Health: `{namespace}[-{selector}].health` (e.g., `factory-line1.health`)
+- Write requests: `{namespace}[-{selector}]-writes`
+- Write responses: `{namespace}[-{selector}]-write-responses`
 
 ## Topics
 
@@ -339,12 +319,7 @@ Requests older than `write_max_age` (default 2 seconds) are marked as expired an
 }
 ```
 
-**Configuring max age:**
-```yaml
-kafka:
-  - name: MainCluster
-    write_max_age: 5s    # Increase if network latency is high
-```
+Increase `write_max_age` if network latency is high (default: 2s).
 
 ### Debug Logging
 
@@ -444,57 +419,17 @@ kafkacat -b localhost:9092 -t factory-line1-write-responses -C
 
 ## Authentication
 
-### No Authentication
+Configure authentication options in the Kafka tab or via YAML:
 
-```yaml
-kafka:
-  - name: Local
-    brokers: [localhost:9092]
-```
+| Option | Description |
+|--------|-------------|
+| No auth | Default - no credentials required |
+| SASL/PLAIN | Basic username/password |
+| SASL/SCRAM-SHA-256 | SCRAM authentication (more secure) |
+| SASL/SCRAM-SHA-512 | SCRAM with SHA-512 |
+| TLS | Encrypted connection (can combine with SASL) |
 
-### SASL/PLAIN
-
-```yaml
-kafka:
-  - name: SASL
-    brokers: [kafka:9092]
-    sasl_mechanism: PLAIN
-    username: user
-    password: pass
-```
-
-### SASL/SCRAM
-
-```yaml
-kafka:
-  - name: SCRAM
-    brokers: [kafka:9092]
-    sasl_mechanism: SCRAM-SHA-256    # or SCRAM-SHA-512
-    username: user
-    password: pass
-```
-
-### TLS
-
-```yaml
-kafka:
-  - name: TLS
-    brokers: [kafka:9093]
-    use_tls: true
-    tls_skip_verify: false    # Set true for self-signed certs
-```
-
-### TLS + SASL
-
-```yaml
-kafka:
-  - name: Secure
-    brokers: [kafka:9093]
-    use_tls: true
-    sasl_mechanism: SCRAM-SHA-512
-    username: user
-    password: pass
-```
+Set `tls_skip_verify: true` for self-signed certificates.
 
 ## Acknowledgment Settings
 
@@ -548,24 +483,7 @@ For maximum throughput:
 
 ## Multiple Clusters
 
-Configure multiple Kafka clusters:
-
-```yaml
-namespace: factory
-
-kafka:
-  - name: Production
-    enabled: true
-    brokers: [kafka-prod:9092]
-    selector: prod
-    publish_changes: true
-
-  - name: Analytics
-    enabled: true
-    brokers: [kafka-analytics:9092]
-    selector: analytics
-    publish_changes: true
-```
+Configure multiple Kafka clusters in the Kafka tab. Each cluster can have a different `selector` for topic isolation. All enabled clusters receive the same tag updates.
 
 ## Consumer Examples
 

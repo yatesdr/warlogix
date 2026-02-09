@@ -1,6 +1,6 @@
 # TagPacks
 
-TagPacks group tags from multiple PLCs and publish them atomically as a single JSON message when any non-ignored member changes.
+TagPacks group tags from multiple PLCs and publish them atomically as a single JSON message when any non-ignored member changes. Configure packs in the TagPacks tab or see [Configuration Reference](configuration.md) for YAML options.
 
 ## Use Cases
 
@@ -16,48 +16,6 @@ TagPacks group tags from multiple PLCs and publish them atomically as a single J
 3. When any non-ignored member changes, a 250ms debounce timer starts
 4. After debounce, all member values are collected and published atomically
 5. Published JSON includes tag values plus PLC metadata (connection status, IP, model)
-
-## Configuration
-
-```yaml
-tag_packs:
-  - name: ProductionMetrics
-    enabled: true
-    mqtt_enabled: true
-    kafka_enabled: true
-    valkey_enabled: true
-    members:
-      - plc: MainPLC
-        tag: ProductCount
-        # ignore_changes: false   # Default: changes trigger publish
-      - plc: MainPLC
-        tag: Temperature
-      - plc: SecondaryPLC
-        tag: ConveyorSpeed
-        ignore_changes: true      # Changes to this tag don't trigger publish
-      - plc: SecondaryPLC
-        tag: AlarmStatus
-        ignore_changes: true      # Included in pack but ignored for triggering
-```
-
-### Configuration Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | Yes | Unique identifier for the pack |
-| `enabled` | bool | No | Enable/disable the pack (default: false) |
-| `mqtt_enabled` | bool | No | Publish to MQTT brokers |
-| `kafka_enabled` | bool | No | Publish to Kafka clusters |
-| `valkey_enabled` | bool | No | Store/publish to Valkey/Redis |
-| `members` | list | Yes | Tags included in the pack |
-
-### Member Fields
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `plc` | string | Yes | PLC name (must exist in config) |
-| `tag` | string | Yes | Tag name to include |
-| `ignore_changes` | bool | No | If true, changes to this tag don't trigger publish (default: false) |
 
 ## Topic/Key Naming
 
@@ -174,16 +132,24 @@ If a PLC has connection issues, a `plcs` field is included with error details:
 
 Navigate to the **TagPacks** tab to manage packs.
 
+**Pack list (left pane):**
+
 | Key | Action |
 |-----|--------|
-| `c` | Create new pack |
-| `a` | Add tag to selected pack |
-| `d` | Delete selected pack or member |
-| `Space` | Toggle pack enabled/disabled (publishes immediately when enabled) |
-| `i` | Toggle member ignore (ignored members don't trigger publish) |
-| `e` | Edit pack settings (topic, brokers) |
-| `r` | Rename pack |
-| `Tab` | Switch focus between pack list and member list |
+| `a` | Add new pack |
+| `x` | Remove selected pack |
+| `Space` | Toggle pack enabled/disabled |
+| `e` | Edit pack settings |
+| `Tab` | Switch focus to member list |
+
+**Member list (right pane):**
+
+| Key | Action |
+|-----|--------|
+| `a` | Add tag to pack |
+| `x` | Remove selected member |
+| `i` | Toggle ignore (ignored members don't trigger publish) |
+| `E` | Enable tag in Browser if not already enabled |
 
 **Note:** By default, changes to any member trigger a pack publish. Use `i` to mark members as "ignored" - these tags are still included in the pack data but their changes won't trigger a publish (useful for volatile data like counters or timestamps).
 
@@ -270,28 +236,7 @@ Response: Full PackValue JSON with current tag values (same flat `plc.tag` key f
 
 ## Integration with Triggers
 
-Triggers can include TagPack data in their snapshot. When a trigger fires, pack data is embedded directly in the trigger message (like a UDT), not published separately.
-
-```yaml
-triggers:
-  - name: ProductComplete
-    plc: MainPLC
-    trigger_tag: ProductReady
-    condition: { operator: "==", value: true }
-    tags:
-      - ProductID
-      - BatchNumber
-      - pack:ProductionMetrics    # Include pack data with pack: prefix
-    kafka_cluster: LocalKafka
-```
-
-When the trigger fires:
-1. All configured tags are read from the PLC
-2. All referenced packs have their tag data collected
-3. Everything is combined into a single atomic JSON message
-4. Pack data appears in the trigger's `data` field as a nested object
-
-See [Triggers](triggers.md) for the complete trigger message format.
+Triggers can include TagPack data in their snapshot by adding `pack:PackName` to the trigger's data tags list. When the trigger fires, pack data is embedded directly in the trigger message as a nested object. See [Triggers](triggers.md) for details.
 
 ## Debouncing
 
@@ -335,48 +280,8 @@ name: AlarmSummary         # → Topic: factory-line1, Key: pack:AlarmSummary (K
 - Cross-PLC packs require reads from multiple connections
 - Debouncing reduces publish frequency for rapidly changing data
 
-## Example: Multi-Line Production
+## Use Case Examples
 
-```yaml
-tag_packs:
-  - name: Line1Status
-    enabled: true
-    mqtt_enabled: true
-    kafka_enabled: true
-    valkey_enabled: true
-    members:
-      - { plc: Line1_PLC, tag: RunningState }
-      - { plc: Line1_PLC, tag: PartsProduced }
-      - { plc: Line1_PLC, tag: CycleTime, ignore_changes: true }
-      - { plc: Line1_Robot, tag: Position, ignore_changes: true }
-      - { plc: Line1_Robot, tag: GripperState, ignore_changes: true }
+**Multi-Line Production**: Create a pack per production line with running state, parts count, and cycle time. Mark volatile values (cycle time, robot position) as ignored to reduce message volume.
 
-  - name: Line2Status
-    enabled: true
-    mqtt_enabled: true
-    kafka_enabled: true
-    valkey_enabled: true
-    members:
-      - { plc: Line2_PLC, tag: RunningState }
-      - { plc: Line2_PLC, tag: PartsProduced }
-      - { plc: Line2_PLC, tag: CycleTime, ignore_changes: true }
-      - { plc: Line2_Vision, tag: InspectionResult }
-```
-
-## Example: Alarm Aggregation
-
-```yaml
-tag_packs:
-  - name: AllAlarms
-    enabled: true
-    mqtt_enabled: true
-    kafka_enabled: false
-    valkey_enabled: true
-    members:
-      - { plc: MainPLC, tag: AlarmWord1 }
-      - { plc: MainPLC, tag: AlarmWord2 }
-      - { plc: SafetyPLC, tag: EStopStatus }
-      - { plc: SafetyPLC, tag: GuardStatus }
-      - { plc: HVAC_PLC, tag: TempAlarm }
-      - { plc: HVAC_PLC, tag: PressureAlarm }
-```
+**Alarm Aggregation**: Combine alarm words from multiple PLCs into a single pack for unified alarm monitoring.

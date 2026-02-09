@@ -160,18 +160,9 @@ This is useful when you only need specific members or want finer control over ch
 
 UDTs often contain volatile members (timestamps, heartbeats, counters) that change frequently but aren't meaningful for data capture. You can exclude these from change detection.
 
-### Via Configuration
-
-```yaml
-tags:
-  - name: Program:MainProgram.MachineStatus
-    enabled: true
-    ignore_changes: [Timestamp, HeartbeatCount, SequenceNum]
-```
-
 ### Via Tag Browser
 
-Press `i` on a UDT member to toggle ignore status. Ignored members show `[I]` indicator.
+Press `i` on a UDT member to toggle ignore status. Ignored members show `[I]` indicator. You can also set `ignore_changes` in the tag configuration.
 
 ### Auto-Detection
 
@@ -192,22 +183,9 @@ When you enable a UDT tag, WarLogix automatically ignores common volatile types:
 - Only Timestamp changes → No message published
 - Both change → Message published with both values
 
-## Manual Tags (S7/Omron)
+## Manual Tags (S7/Omron FINS)
 
-For PLCs without automatic discovery, specify `data_type`:
-
-```yaml
-tags:
-  - name: DB1.0
-    alias: ProductCount
-    data_type: DINT
-    enabled: true
-
-  - name: DM100
-    alias: SetPoint
-    data_type: REAL
-    enabled: true
-```
+For PLCs without automatic discovery, add tags manually in the Browser tab (press `a`). Specify the address and data type when prompted.
 
 ### S7 Addressing
 
@@ -235,12 +213,4 @@ Arrays: `DM100[10]` (10 words)
 
 ## Tag Aliases
 
-Use `alias` to give address-based tags friendly names:
-
-```yaml
-- name: DB1.0          # Raw address
-  alias: ProductCount  # Used in MQTT/Valkey/Kafka messages
-  data_type: DINT
-```
-
-The alias appears in all published messages instead of the raw address.
+For address-based PLCs (S7, Omron FINS), aliases give friendly names to memory addresses. When adding a manual tag, set an alias in the edit dialog. The alias appears in all published messages instead of the raw address.

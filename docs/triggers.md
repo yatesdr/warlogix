@@ -1,6 +1,6 @@
 # Event Triggers
 
-Triggers capture data snapshots when PLC conditions are met and publish to MQTT and/or Kafka with optional acknowledgment.
+Triggers capture data snapshots when PLC conditions are met and publish to MQTT and/or Kafka with optional acknowledgment. Configure triggers in the Triggers tab or see [Configuration Reference](configuration.md) for YAML options.
 
 ## How Triggers Work
 
@@ -11,35 +11,7 @@ Triggers capture data snapshots when PLC conditions are met and publish to MQTT 
    - **Kafka**: Published with configured acknowledgment level
 4. Optionally write acknowledgment to PLC (1=success, -1=error)
 
-## Configuration
-
-```yaml
-triggers:
-  - name: ProductComplete
-    enabled: true
-    plc: MainPLC
-    trigger_tag: Program:MainProgram.ProductReady
-    condition:
-      operator: "=="
-      value: true
-    ack_tag: Program:MainProgram.ProductAck    # Optional
-    debounce_ms: 100                            # Optional
-    tags:
-      - ProductID
-      - BatchNumber
-      - Quantity
-      - Temperature
-      - pack:ProductionMetrics                  # Reference a TagPack with pack: prefix
-    mqtt_broker: all                            # "all", "none", or specific broker name
-    kafka_cluster: all                          # "all", "none", or specific cluster name
-    selector: events                            # Optional: sub-namespace for topics
-    publish_pack: ProductionMetrics             # Optional: legacy pack reference
-    metadata:                                   # Optional static data
-      line: Line1
-      station: Assembly
-```
-
-### Service Selection
+## Service Selection
 
 Triggers can publish to multiple MQTT brokers and Kafka clusters:
 
@@ -108,31 +80,7 @@ MQTT publishes with **QoS 2** (exactly-once delivery) for reliable event capture
 
 ## TagPack Integration
 
-Triggers can include TagPack data in their snapshot. Packs are embedded directly in the trigger message alongside regular tags, treating them like UDTs:
-
-```yaml
-triggers:
-  - name: ProductComplete
-    plc: MainPLC
-    trigger_tag: ProductReady
-    condition: { operator: "==", value: true }
-    tags:
-      - ProductID
-      - BatchNumber
-      - pack:ProductionMetrics    # Include pack data with pack: prefix
-    kafka_cluster: LocalKafka
-```
-
-You can also use the legacy `publish_pack` field:
-
-```yaml
-triggers:
-  - name: ProductComplete
-    plc: MainPLC
-    trigger_tag: ProductReady
-    condition: { operator: "==", value: true }
-    publish_pack: ProductionMetrics    # Legacy syntax
-```
+Triggers can include TagPack data in their snapshot. Add packs to a trigger's data tags using the `pack:` prefix (e.g., `pack:ProductionMetrics`). Packs are embedded directly in the trigger message alongside regular tags.
 
 When the trigger fires:
 1. All configured tags are read from the PLC
@@ -165,11 +113,7 @@ The ack tag must be:
 
 ## Debouncing
 
-Set `debounce_ms` to prevent rapid re-triggering:
-
-```yaml
-debounce_ms: 100    # Ignore triggers within 100ms of last fire
-```
+Set `debounce_ms` to prevent rapid re-triggering. This ignores condition matches within the debounce window after the last fire.
 
 ## Keyboard Shortcuts
 
@@ -193,47 +137,11 @@ The Triggers tab uses context-sensitive hotkeys based on which pane has focus:
 | `a` | Add tag or pack to capture list |
 | `x` | Remove selected tag (with confirmation) |
 
-## Example: Production Tracking
+## Use Cases
 
-```yaml
-triggers:
-  - name: PartComplete
-    enabled: true
-    plc: MainPLC
-    trigger_tag: Program:Production.PartDone
-    condition: { operator: "==", value: true }
-    ack_tag: Program:Production.PartAck
-    debounce_ms: 50
-    tags:
-      - Program:Production.PartNumber
-      - Program:Production.SerialNumber
-      - Program:Production.CycleTime
-      - Program:Production.PassFail
-    kafka_cluster: ProductionKafka
-    topic: parts-produced
-    metadata:
-      cell: Cell-A1
-      shift: auto    # Could be updated dynamically
-```
+**Production Tracking**: Monitor a "part complete" tag, capture serial number, cycle time, and pass/fail status, publish to Kafka for traceability.
 
-## Example: Alarm Capture
-
-```yaml
-triggers:
-  - name: CriticalAlarm
-    enabled: true
-    plc: MainPLC
-    trigger_tag: Alarms.Critical
-    condition: { operator: ">", value: 0 }
-    debounce_ms: 1000    # Don't spam on rapid alarms
-    tags:
-      - Alarms.ActiveCode
-      - Alarms.Description
-      - Process.CurrentState
-      - Process.LastOperation
-    kafka_cluster: AlertsKafka
-    topic: critical-alarms
-```
+**Alarm Capture**: Monitor alarm word, capture alarm details and process state when alarms occur, use debouncing to prevent spam on rapid alarms.
 
 ## Notes
 

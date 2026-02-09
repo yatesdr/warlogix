@@ -128,33 +128,13 @@ Before writing to a tag, it must be marked as writable:
 
 ---
 
-## Configuration
+## Marking Tags as Writable
 
-### Marking Tags as Writable
+In the Browser tab, press `w` on a tag to toggle the writable flag. Alternatively, set `writable: true` in config.yaml for pre-configured tags.
 
-In `config.yaml`:
+## Write-Back via Services
 
-```yaml
-plcs:
-  - name: MainPLC
-    address: 192.168.1.100
-    family: logix
-    tags:
-      - name: StatusCode
-        writable: true      # Enable writes
-      - name: AckFlag
-        writable: true
-      - name: ReadOnlyTag
-        writable: false     # Default - read only
-```
-
-### Write-Back via Services
-
-Tags can also be written via REST API, MQTT, and Valkey. See the respective documentation:
-
-- [REST API](rest-api.md) - `POST /api/plc/{name}/tags/{tag}`
-- [MQTT](mqtt.md) - Subscribe to write topics
-- [Valkey](valkey.md) - Write-back queue
+Tags can also be written via REST API, MQTT, Valkey, and Kafka. See the respective documentation for write request formats.
 
 ---
 
@@ -162,20 +142,7 @@ Tags can also be written via REST API, MQTT, and Valkey. See the respective docu
 
 ### Use DINT for Status Codes
 
-DINT (32-bit signed integer) is the most reliable type across all PLC families:
-
-```yaml
-# PLC tag for acknowledgment
-tags:
-  - name: WarLogix_Status
-    data_type: DINT
-    writable: true
-```
-
-Values:
-- `0` = Idle/Reset
-- `1` = Success
-- `-1` = Error
+DINT (32-bit signed integer) is the most reliable type across all PLC families. Use values like 0=Idle, 1=Success, -1=Error.
 
 ### Dedicated Tags Only
 

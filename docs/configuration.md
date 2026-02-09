@@ -94,7 +94,7 @@ mqtt:
     broker: localhost
     port: 1883
     client_id: warlogix-main
-    root_topic: factory
+    selector: line1                   # Optional sub-namespace
     # username: user              # Optional authentication
     # password: pass
     # use_tls: true               # Enable TLS
@@ -104,7 +104,7 @@ valkey:
     enabled: true
     address: localhost:6379
     database: 0
-    factory: factory                  # Key prefix
+    selector: line1                   # Optional sub-namespace
     # password: secret              # Optional authentication
     # use_tls: true
     key_ttl: 60s                      # Key expiration (0 = no expiry)
@@ -201,11 +201,95 @@ ui:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | Yes | Tag name or address |
-| `alias` | string | No | Friendly name for publishing |
-| `data_type` | string | No | Data type for manual tags (S7/Omron) |
+| `alias` | string | No | Friendly name for publishing (S7/Omron) |
+| `data_type` | string | No | Data type for manual tags (S7/Omron FINS) |
 | `enabled` | bool | No | Enable publishing (default: false) |
 | `writable` | bool | No | Allow write operations (default: false) |
 | `ignore_changes` | list | No | UDT member names to ignore for change detection |
+| `no_rest` | bool | No | Exclude from REST API |
+| `no_mqtt` | bool | No | Exclude from MQTT publishing |
+| `no_kafka` | bool | No | Exclude from Kafka publishing |
+| `no_valkey` | bool | No | Exclude from Valkey publishing |
+
+### Tag Examples
+
+**Allen-Bradley (automatic discovery):**
+```yaml
+tags:
+  - name: Program:MainProgram.Counter
+    enabled: true
+    writable: true
+  - name: Program:MainProgram.MachineStatus
+    enabled: true
+    ignore_changes: [Timestamp, HeartbeatCount]  # Don't republish when these UDT members change
+```
+
+**Siemens S7 (manual addressing):**
+```yaml
+tags:
+  - name: DB1.0
+    alias: ProductCount           # Published as "ProductCount" instead of "DB1.0"
+    data_type: DINT
+    enabled: true
+  - name: DB1.4
+    alias: Temperature
+    data_type: REAL
+    enabled: true
+    writable: true
+  - name: DB1.8.0                 # Bit 0 of byte 8
+    alias: MachineRunning
+    data_type: BOOL
+    enabled: true
+  - name: DB1.10[100]             # Array of 100 bytes starting at offset 10
+    alias: ProductName
+    data_type: STRING
+    enabled: true
+```
+
+**Omron FINS (manual addressing):**
+```yaml
+tags:
+  - name: DM100
+    alias: MotorSpeed
+    data_type: DINT
+    enabled: true
+  - name: DM104
+    alias: SetPoint
+    data_type: REAL
+    enabled: true
+    writable: true
+  - name: CIO50.5                 # Bit 5 of CIO50
+    alias: ConveyorRunning
+    data_type: BOOL
+    enabled: true
+```
+
+### Per-Service Publishing
+
+Use `no_*` flags to exclude specific tags from services:
+
+```yaml
+tags:
+  - name: HighFrequencyCounter
+    enabled: true
+    no_mqtt: true                 # Don't publish to MQTT (too frequent)
+    no_valkey: true               # Don't store in Redis
+                                  # Still published to REST and Kafka
+```
+
+### Change Detection Filtering
+
+For UDTs with volatile members (timestamps, heartbeats), use `ignore_changes` to prevent republishing when only those members change:
+
+```yaml
+tags:
+  - name: MachineStatus           # UDT tag
+    enabled: true
+    ignore_changes:
+      - Timestamp                 # These members are still included in published data
+      - HeartbeatCount            # but changes to them alone don't trigger republishing
+      - SequenceNumber
+```
 
 ## REST Configuration
 
@@ -224,7 +308,7 @@ ui:
 | `broker` | string | Yes | Broker hostname or IP |
 | `port` | int | No | Broker port (default: 1883) |
 | `client_id` | string | Yes | MQTT client ID |
-| `root_topic` | string | Yes | Root topic for all messages |
+| `selector` | string | No | Optional sub-namespace within the global namespace |
 | `username` | string | No | Authentication username |
 | `password` | string | No | Authentication password |
 | `use_tls` | bool | No | Enable TLS (default: false) |
@@ -237,7 +321,7 @@ ui:
 | `enabled` | bool | No | Enable this server (default: false) |
 | `address` | string | Yes | Server address (host:port) |
 | `database` | int | No | Redis database number (default: 0) |
-| `factory` | string | Yes | Key prefix for all keys |
+| `selector` | string | No | Optional sub-namespace within the global namespace |
 | `password` | string | No | Authentication password |
 | `use_tls` | bool | No | Enable TLS (default: false) |
 | `key_ttl` | duration | No | Key expiration time (0 = no expiry) |
@@ -251,7 +335,7 @@ ui:
 | `name` | string | Yes | Unique identifier |
 | `enabled` | bool | No | Enable this cluster (default: false) |
 | `brokers` | list | Yes | List of broker addresses |
-| `topic` | string | No | Topic for tag change publishing |
+| `selector` | string | No | Optional sub-namespace |
 | `publish_changes` | bool | No | Publish tag changes |
 | `use_tls` | bool | No | Enable TLS (default: false) |
 | `tls_skip_verify` | bool | No | Skip TLS certificate verification |
@@ -261,6 +345,46 @@ ui:
 | `required_acks` | int | No | Acks required: -1=all, 0=none, 1=leader |
 | `max_retries` | int | No | Max publish retries |
 | `retry_backoff` | duration | No | Retry backoff interval |
+| `auto_create_topics` | bool | No | Auto-create topics if missing (default: true) |
+| `enable_writeback` | bool | No | Enable consuming write requests |
+| `consumer_group` | string | No | Consumer group ID (default: warlogix-{name}-writers) |
+| `write_max_age` | duration | No | Max age of write requests to process (default: 2s) |
+
+## TagPack Configuration
+
+```yaml
+tag_packs:
+  - name: ProductionMetrics
+    enabled: true
+    mqtt_enabled: true
+    kafka_enabled: true
+    valkey_enabled: true
+    members:
+      - plc: MainPLC
+        tag: ProductCount
+      - plc: MainPLC
+        tag: Temperature
+      - plc: SecondaryPLC
+        tag: ConveyorSpeed
+        ignore_changes: true      # Changes don't trigger republish
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique pack identifier |
+| `enabled` | bool | No | Enable the pack (default: false) |
+| `mqtt_enabled` | bool | No | Publish to MQTT brokers |
+| `kafka_enabled` | bool | No | Publish to Kafka clusters |
+| `valkey_enabled` | bool | No | Store/publish to Valkey/Redis |
+| `members` | list | Yes | Tags to include in the pack |
+
+### TagPack Member Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `plc` | string | Yes | PLC name |
+| `tag` | string | Yes | Tag name (uses alias if set) |
+| `ignore_changes` | bool | No | If true, changes don't trigger pack publish |
 
 ## Trigger Configuration
 
@@ -271,12 +395,14 @@ ui:
 | `plc` | string | Yes | PLC name to monitor |
 | `trigger_tag` | string | Yes | Tag to watch for condition |
 | `condition` | object | Yes | Condition to fire trigger |
-| `ack_tag` | string | No | Tag to write acknowledgment |
-| `debounce_ms` | int | No | Debounce time in milliseconds |
-| `tags` | list | Yes | Tags to capture when triggered |
-| `kafka_cluster` | string | Yes | Kafka cluster name |
-| `topic` | string | Yes | Kafka topic for events |
-| `metadata` | map | No | Static metadata to include |
+| `ack_tag` | string | No | Tag to write acknowledgment (1=success, -1=error) |
+| `debounce_ms` | int | No | Debounce time in milliseconds (default: 100) |
+| `tags` | list | Yes | Tags to capture (use `pack:Name` for TagPacks) |
+| `mqtt_broker` | string | No | MQTT broker: "all", "none", or specific name |
+| `kafka_cluster` | string | No | Kafka cluster: "all", "none", or specific name |
+| `selector` | string | No | Optional sub-namespace for topic |
+| `publish_pack` | string | No | Legacy: TagPack name to include |
+| `metadata` | map | No | Static metadata to include in messages |
 
 ### Condition Object
 
@@ -284,6 +410,31 @@ ui:
 |-------|------|-------------|
 | `operator` | string | Comparison: `==`, `!=`, `>`, `<`, `>=`, `<=` |
 | `value` | any | Value to compare against |
+
+### Trigger Example
+
+```yaml
+triggers:
+  - name: ProductComplete
+    enabled: true
+    plc: MainPLC
+    trigger_tag: Program:MainProgram.ProductReady
+    condition:
+      operator: "=="
+      value: true
+    ack_tag: Program:MainProgram.ProductAck
+    debounce_ms: 100
+    tags:
+      - ProductID
+      - BatchNumber
+      - Quantity
+      - pack:ProductionMetrics    # Include TagPack data
+    mqtt_broker: all              # Publish to all MQTT brokers (QoS 2)
+    kafka_cluster: ProductionKafka
+    metadata:
+      line: Line1
+      station: Assembly
+```
 
 ## UI Configuration
 

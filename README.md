@@ -147,13 +147,18 @@ Run `warlogix --stress-test-republishing` to benchmark your system.
 
 ```
 --config <path>              Path to config file (default: ~/.warlogix/config.yaml)
+--namespace <name>           Set instance namespace (saved to config)
 --log <path>                 Write debug messages to a file
---log-debug                  Enable verbose protocol debugging to debug.log
+--log-debug [filter]         Enable protocol debugging (omron,ads,logix,s7,mqtt,kafka,valkey,tui)
 -d                           Daemon mode (serve TUI over SSH)
 -p <port>                    SSH port for daemon mode (default: 2222)
 --ssh-password <pw>          SSH password authentication
 --ssh-keys <path>            Path to authorized_keys file
 --stress-test-republishing   Stress test Kafka, MQTT, and Valkey throughput
+--test-duration <dur>        Stress test duration (default: 10s)
+--test-tags <n>              Simulated tags per PLC (default: 100)
+--test-plcs <n>              Simulated PLCs (default: 50)
+-y                           Skip confirmation prompts
 --version                    Show version
 ```
 

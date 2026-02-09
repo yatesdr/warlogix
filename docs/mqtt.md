@@ -1,30 +1,14 @@
 # MQTT Integration
 
-WarLogix publishes tag values and health status to MQTT brokers and supports write-back via MQTT messages.
-
+WarLogix publishes tag values and health status to MQTT brokers and supports write-back via MQTT messages. Configure brokers in the MQTT tab or see [Configuration Reference](configuration.md) for YAML options.
 
 <img width="902" height="541" alt="image" src="https://github.com/user-attachments/assets/68c2eaeb-7797-46e6-bae9-c633385a8099" />
 
+## Namespace and Topics
 
-
-## Configuration
-
-```yaml
-namespace: factory                  # Required: instance namespace
-
-mqtt:
-  - name: LocalBroker
-    enabled: true
-    broker: localhost
-    port: 1883
-    client_id: warlogix-main
-    selector: line1                 # Optional: sub-namespace
-    username: user                  # Optional
-    password: pass                  # Optional
-    use_tls: true                   # Optional
-```
-
-The `namespace` is a required top-level setting that identifies this WarLogix instance. The optional `selector` provides additional sub-organization within the namespace.
+MQTT topics are built from the global `namespace` setting and optional per-broker `selector`:
+- Pattern: `{namespace}[/{selector}]/{plc}/...`
+- Example: `factory/line1/MainPLC/tags/Counter`
 
 ## Topics
 
@@ -155,24 +139,7 @@ Enable TLS by setting `use_tls: true`. The system CA certificates are used for v
 
 ## Multiple Brokers
 
-Configure multiple brokers for redundancy or different purposes:
-
-```yaml
-namespace: factory
-
-mqtt:
-  - name: Production
-    enabled: true
-    broker: mqtt.production.local
-    selector: prod
-
-  - name: Development
-    enabled: true
-    broker: mqtt.dev.local
-    selector: dev
-```
-
-All enabled brokers receive the same tag updates. Use different `selector` values to distinguish data streams on different brokers.
+Configure multiple brokers in the MQTT tab for redundancy or different purposes. All enabled brokers receive the same tag updates. Use different `selector` values to distinguish data streams on different brokers.
 
 ## Stress Testing
 
