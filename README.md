@@ -176,7 +176,7 @@ See [Daemon Mode](docs/daemon-mode.md) for systemd setup, Docker deployment, and
 
 ## License
 
-Apache License 2.0
+Copyright held by author - inquire for usage rights.
 
 ## Acknowledgements
 
