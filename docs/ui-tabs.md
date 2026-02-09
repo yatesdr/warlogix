@@ -27,6 +27,8 @@ WarLogix uses a tabbed terminal interface (TUI) for managing PLCs, tags, and dat
 
 The PLCs tab manages PLC connections. It lists all configured PLCs with their connection status, family type, and device information.
 
+<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/73d461a9-573d-4000-a4a0-348b79c69adb" />
+
 ### Display Columns
 
 | Column | Description |
@@ -51,7 +53,16 @@ The PLCs tab manages PLC connections. It lists all configured PLCs with their co
 | `i` | **Info** - Show detailed device information |
 | `Enter` | Toggle connection (connect if disconnected, disconnect if connected) |
 
+
+### PLC Info
+
+Displays the known information that was polled from the PLC.
+
+<img width="389" height="274" alt="image" src="https://github.com/user-attachments/assets/86677928-ee77-4977-a485-328ed533e676" />
+
 ### Adding a PLC
+
+<img width="385" height="259" alt="image" src="https://github.com/user-attachments/assets/a6e55cd7-4330-4290-9e4b-75d44071ff9a" />
 
 Press `a` to open the Add PLC dialog:
 
@@ -86,13 +97,17 @@ For Omron, also configure:
 
 ### Discovery
 
-Press `d` to discover Allen-Bradley PLCs on the local network. Discovery uses EtherNet/IP broadcast to find PLCs within 3 seconds. Select a discovered device to pre-fill the Add dialog.
+Press `d` to discover Logix, S7, Omron, or Beckhoff PLCs on the local network. Discovery uses EtherNet/IP broadcasts as well as UDP and TCP discovery to find PLCs within about 10 seconds. Select a discovered device to pre-fill the Add dialog.   Discovery may be finicky depending on your network topology and broadcast domain, especially for UDP discovered PLCs.   This is a limitation of networking technology and all known best practices to find and add PLC's have been implemented.
+
+<img width="772" height="375" alt="image" src="https://github.com/user-attachments/assets/69444e14-ad8e-462a-a638-41fee5be1f8a" />
 
 ---
 
-## Browser Tab
+## Republisher Tab
 
-The Browser tab displays available tags from connected PLCs. Use it to select which tags to publish and configure their properties.
+The Republisher tab displays available tags from connected PLCs. Use it to select which tags to publish and configure their properties.
+
+<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/484acd62-65b7-4cb0-9992-27a1a350d022" />
 
 ### Display Elements
 
@@ -147,21 +162,31 @@ For manual PLCs (S7, Omron FINS):
 
 ### Per-Service Publishing
 
+
+<img width="318" height="208" alt="image" src="https://github.com/user-attachments/assets/2a5e6a29-251b-4375-be4d-647a12af13df" />
+
 Press `s` on an enabled tag to configure which services receive that tag's updates:
 - **REST API** - Available via HTTP endpoints
 - **MQTT** - Published to MQTT brokers
 - **Kafka** - Published to Kafka topics
 - **Valkey** - Stored in Redis/Valkey keys
 
-By default, all services are enabled. Disable services to reduce network traffic for specific tags.
+By default, all services are enabled. Disable services to reduce network traffic for specific tags if they are not needed.   Per-broker selection is not possible - it's all or none for a given service that's been configured.   A typical use case would be to publish tag states to Valkey or MQTT, and traceability or other defined packages of data to Kafka or MQTT QoS2.   For more granularity around specific tags and brokers you can run multiple warlogix instances if they are properly namespaced and on separate IP Links.   You can't typically run multiple WarLogix on the same IP address as the PLC's will often disconnect (ADS driver, in particular - protocol limited.)
 
 ### UDT/Structure Handling
 
-When you select a UDT tag, press `Enter` to expand it and see its members. Each member can be independently enabled for publishing.
+
+<img width="390" height="183" alt="image" src="https://github.com/user-attachments/assets/edbc5d29-5709-4d14-8c15-89021fc3df97" />
+
+When you select a UDT tag, press `Enter` to expand it and see its members. Each member can be independently enabled for publishing, or the entire UDT can be published, or some combination of both if desired.
 
 **Ignore List:** Mark volatile UDT members (timestamps, counters, heartbeats) as "ignored" using `i`. Ignored members are still included in published data but don't trigger republishing when they change. This reduces message volume for frequently-changing status structures.
 
+<img width="251" height="76" alt="image" src="https://github.com/user-attachments/assets/2eb29e17-87b5-4684-ba44-906cec02ad44" />
+
 ### Write Dialog
+
+<img width="318" height="121" alt="image" src="https://github.com/user-attachments/assets/10203768-b2bc-48db-aedd-38fe86e4558f" />
 
 Press `W` on any tag to write a new value. The dialog shows:
 - Tag name and current data type
@@ -189,9 +214,14 @@ Press `W` on any tag to write a new value. The dialog shows:
 
 ---
 
-## Packs Tab
+## TagPacks Tab
 
-TagPacks group tags from multiple PLCs and publish them atomically as a single JSON message when any non-ignored member changes.
+TagPacks group tags from multiple PLCs and publish them atomically as a single JSON message when any non-ignored member changes.   You can think of them like a "Virtual" UDT, where multiple tags are grouped together and published under a new name.   This is very useful for dashboards that need data from several different tags, or even from several different PLCs.   TagPacks can pack tags from any configured PLC as long as the tag is enabled for publishing on that PLC.
+
+**TagPacks are not guaranteed atomic reads** - This depends on the polling rates, especially across PLCs, as well as the PLC's specific implementation driver and whatever batch reading occurred to assemble the TagPack.   They should be considered to contain values that have occurred during the last polling cycle, but are not a deterministic item.   If you need atomic data synced in time, you will have to create a PLC function to provide it in a separate tag or UDT.
+
+<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/c9694947-08d5-41da-95f8-3f17c3c6cf2f" />
+
 
 ### Display Columns
 
@@ -228,12 +258,16 @@ The TagPacks tab uses context-sensitive hotkeys based on which pane has focus:
 
 ### Creating a Pack
 
-1. Press `a` to create a new pack
-2. Enter a name
+<img width="349" height="218" alt="image" src="https://github.com/user-attachments/assets/7baadf0f-fb01-4cf1-abf6-204454aade71" />
+
+1. Tab to the Tag Packs pane and press `a` to create a new pack
+2. Enter a name and topic
 3. Select which brokers to publish to
-4. Switch to member list with `Tab`, then press `a` to add tags
+4. Tab to the Member pane and press `a` to add tags from the tag picker
 
 ### Tag Picker
+
+<img width="489" height="278" alt="image" src="https://github.com/user-attachments/assets/14bd732c-7df1-4913-8550-ebd3f20e38d1" />
 
 When adding tags, use the filter to quickly find tags across all PLCs:
 
@@ -248,7 +282,11 @@ When adding tags, use the filter to quickly find tags across all PLCs:
 
 ## Triggers Tab
 
-Event triggers capture data snapshots when PLC conditions are met and publish to MQTT and/or Kafka.
+Event triggers capture data snapshots when PLC conditions are met and publish to MQTT and/or Kafka.  Event triggers are considered captured items and will not publish to Redis/Valkey services.  Triggers are typically used to capture all values at a particular moment, and most often interact with the PLC.   For example, if quality data is assembled into a bundle and then the PLC sets the "read_data" flag high, it can be monitored and then the Trigger pack will be assembled with the data.   Optional write-back is supported for PLC confirmation flags or status codes which need to be communicated back into the process.
+
+
+<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/36b2a192-94d2-4482-90f6-c5d50114210f" />
+
 
 ### Display Columns
 
@@ -288,6 +326,8 @@ The Triggers tab uses context-sensitive hotkeys based on which pane has focus:
 
 ### Creating a Trigger
 
+<img width="457" height="340" alt="image" src="https://github.com/user-attachments/assets/93f47185-c674-4527-9b8f-e3c13f8dfb75" />
+
 1. Press `a` to open the Add dialog
 2. Configure:
    - **Name** - Unique identifier
@@ -316,6 +356,9 @@ Press `T` to manually test fire a trigger. This:
 
 The REST tab configures the HTTP API server.
 
+<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/9b8fa8a1-1500-4a89-9df5-0d5fe6022ef9" />
+
+
 ### Configuration
 
 - **Host** - Bind address (0.0.0.0 for all interfaces)
@@ -340,6 +383,9 @@ The tab displays all available REST endpoints with their HTTP methods and URL pa
 
 The MQTT tab manages connections to MQTT brokers.
 
+<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/0d665e04-e800-4724-aefe-fa88a4ae8da9" />
+
+
 ### Display Columns
 
 | Column | Description |
@@ -349,7 +395,7 @@ The MQTT tab manages connections to MQTT brokers.
 | Broker | Hostname/IP |
 | Port | TCP port |
 | TLS | Yes/No |
-| Root Topic | Base topic for all messages |
+| Selector | Sub-topic for all messages |
 | Status | Connection state |
 
 ### Keyboard Shortcuts
@@ -368,17 +414,31 @@ The MQTT tab manages connections to MQTT brokers.
 - **Name** - Unique identifier
 - **Broker** - Hostname or IP address
 - **Port** - MQTT port (default: 1883, TLS: 8883)
-- **Root Topic** - Base topic prefix
+- **Selector** - Base topic prefix - optional.  Will be appended to the instance Namespace.
 - **Client ID** - MQTT client identifier
 - **Username/Password** - Optional authentication
 - **Use TLS** - Enable encrypted connection
 - **Auto-connect** - Connect on startup
+
+
+### Publishing to Topics
+
+Every WarLogix instance requieres a Namespace at first launch.   It can be a city, factory, process line, or any other url-safe string, and will form the basis for publishing MQTT, Redis, and Kafka messages.   The 'Selector' will be appended to it for a per-server topic configuration.
+
+Namespace:  warlogix1
+Selector: processData
+MQTT Topic: /warlogix1/processData/{messages}
+Kafka Topic: warlogix1-processData-{data}
+Valkey Topic: warlogix1:processData:{key}-->{data}
 
 ---
 
 ## Valkey Tab
 
 The Valkey tab manages connections to Redis/Valkey servers.
+
+<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/4d1452ff-2048-43ec-9574-6295682196c9" />
+
 
 ### Display Columns
 
@@ -415,11 +475,23 @@ The Valkey tab manages connections to Redis/Valkey servers.
 - **Enable Writeback** - Enable write-back queue for PLC writes
 - **Auto-connect** - Connect on startup
 
+### Publishing to Topics
+
+Every WarLogix instance requieres a Namespace at first launch.   It can be a city, factory, process line, or any other url-safe string, and will form the basis for publishing MQTT, Redis, and Kafka messages.   The 'Selector' will be appended to it for a per-server topic configuration.
+
+Namespace:  warlogix1
+Selector: processData
+MQTT Topic: /warlogix1/processData/{messages}
+Kafka Topic: warlogix1-processData-{data}
+Valkey Topic: warlogix1:processData:{key}-->{data}
 ---
 
 ## Kafka Tab
 
 The Kafka tab manages connections to Kafka clusters.
+
+<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/9abb9225-3693-4183-971e-1ec22f9e1688" />
+
 
 ### Display Columns
 
@@ -459,6 +531,9 @@ The Kafka tab manages connections to Kafka clusters.
 ## Debug Tab
 
 The Debug tab displays real-time log messages for troubleshooting.
+
+<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/9b0653b4-fcf3-4b7a-ae18-fb06cdb2dcaf" />
+
 
 ### Keyboard Shortcuts
 
