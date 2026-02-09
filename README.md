@@ -174,9 +174,6 @@ ssh -p 2222 localhost
 
 See [Daemon Mode](docs/daemon-mode.md) for systemd setup, Docker deployment, and security options.
 
-## License
-
-Apache License 2.0
 
 ## Acknowledgements
 
