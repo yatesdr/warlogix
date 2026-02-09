@@ -11,7 +11,9 @@ At its heart WarLogix is a TUI (Text User Interface) gateway for industrial PLCs
 
 > **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff is stable but requires more testing, and Omron support is still experimental.
 
+
 <img width="916" height="548" alt="image" src="https://github.com/user-attachments/assets/26355fa0-95bc-4987-b6c1-2420e5c60d71" />
+
 
 War was originally designed as an "Edge" application to simplify pushing data out of NAT'd process networks, but is found to also work well in the server room for aggregating and monitoring data factory-wide.   It has been designed for easy configuration and back up (single-file config), and works well for distribution with Ansible and other distribution managers.   WarLogix runs on most modern terminals, and includes a built-in SSH server and daemon-mode for when you prefer to run it in the background on existing computers or servers, while connecting to it remotely to refine the configuration or monitor conditions.
 
@@ -172,8 +174,8 @@ Apache License 2.0
 This project builds on excellent open source libraries:
 
 **PLC Communication:**
-- [gos7](https://github.com/robinson/gos7) - Siemens S7 protocol
-- [fins](https://github.com/xiaotushaoxia/fins) - Omron FINS/UDP protocol
+- [gos7](https://github.com/robinson/gos7) - Siemens S7 protocol reference
+- [fins](https://github.com/xiaotushaoxia/fins) - Omron FINS/UDP protocol reference
 - [pylogix](https://github.com/dmroeder/pylogix) - Allen-Bradley EtherNet/IP reference
 
 **Infrastructure:**
