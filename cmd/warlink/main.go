@@ -398,8 +398,13 @@ func runLocalMode(cfg *config.Config) {
 }
 
 // runDaemonMode runs the TUI in daemon mode, serving it over SSH.
+// Each SSH session gets its own independent TUI instance, but all share
+// the same backend managers (PLC, MQTT, Kafka, Valkey, etc.).
 func runDaemonMode(cfg *config.Config) {
 	fmt.Printf("Starting warlink daemon on port %d...\n", *sshPort)
+
+	// Initialize shared debug store for multi-TUI support
+	tui.InitDebugStore(1000)
 
 	// Create PLC manager
 	manager := plcman.NewManager(cfg.PollRate)
@@ -465,7 +470,7 @@ func runDaemonMode(cfg *config.Config) {
 		}
 	})
 	packMgrDaemon.SetLogFunc(func(format string, args ...interface{}) {
-		tui.DebugLog(format, args...)
+		tui.StoreLog(format, args...)
 	})
 
 	// Create trigger manager
@@ -490,28 +495,29 @@ func runDaemonMode(cfg *config.Config) {
 	}
 	mqttMgr.SetPLCNames(plcNames)
 
+	// Create shared managers for SSH sessions
+	sharedManagers := &ssh.SharedManagers{
+		Config:     cfg,
+		ConfigPath: *configPath,
+		PLCMan:     manager,
+		APIServer:  apiServer,
+		MQTTMgr:    mqttMgr,
+		ValkeyMgr:  valkeyMgr,
+		KafkaMgr:   kafkaMgr,
+		TriggerMgr: triggerMgr,
+		PackMgr:    packMgrDaemon,
+	}
+
+	// Set pack manager for API server
+	apiServer.SetPackManager(packMgrDaemon)
+
 	// Create SSH server
 	sshServer := ssh.NewServer(&ssh.Config{
 		Port:           *sshPort,
 		Password:       *sshPassword,
 		AuthorizedKeys: *sshKeys,
 	})
-
-	// Start SSH server first to get the PTY
-	if err := sshServer.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error starting SSH server: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Create TUI app with PTY
-	app, err := tui.NewAppWithPTY(cfg, *configPath, manager, apiServer, mqttMgr, valkeyMgr, kafkaMgr, triggerMgr, sshServer.GetPTYSlave())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating TUI: %v\n", err)
-		sshServer.Stop()
-		os.Exit(1)
-	}
-	app.SetPackManager(packMgrDaemon)
-	apiServer.SetPackManager(packMgrDaemon)
+	sshServer.SetSharedManagers(sharedManagers)
 
 	// Set up file logging if specified
 	var fileLogger *logging.FileLogger
@@ -521,17 +527,20 @@ func runDaemonMode(cfg *config.Config) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to open log file: %v\n", err)
 		} else {
-			tui.SetDebugFileLogger(fileLogger)
+			store := tui.GetDebugStore()
+			if store != nil {
+				store.SetFileLogger(fileLogger)
+			}
 		}
 	}
 
 	// Set up debug logging if specified
 	// Supports: --log-debug=all (or true/1) for all protocols
 	//           --log-debug=omron,ads for specific protocols
-	var debugLogger *logging.DebugLogger
+	var debugLoggerFile *logging.DebugLogger
 	if *logDebug != "" {
 		var err error
-		debugLogger, err = logging.NewDebugLogger("debug.log")
+		debugLoggerFile, err = logging.NewDebugLogger("debug.log")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to open debug log: %v\n", err)
 		} else {
@@ -540,35 +549,34 @@ func runDaemonMode(cfg *config.Config) {
 			if filter == "all" || filter == "true" || filter == "1" {
 				filter = "" // Empty = log all
 			}
-			debugLogger.SetFilter(filter)
-			logging.SetGlobalDebugLogger(debugLogger)
+			debugLoggerFile.SetFilter(filter)
+			logging.SetGlobalDebugLogger(debugLoggerFile)
 			if filter == "" {
-				tui.DebugLog("Debug logging enabled (all protocols) - writing to debug.log")
+				tui.StoreLog("Debug logging enabled (all protocols) - writing to debug.log")
 			} else {
-				tui.DebugLog("Debug logging enabled (filter: %s) - writing to debug.log", filter)
+				tui.StoreLog("Debug logging enabled (filter: %s) - writing to debug.log", filter)
 			}
 		}
 	}
 
-	// Set up Valkey on-connect callback
+	// Set up Valkey on-connect callback for initial sync
 	valkeyMgr.SetOnConnectCallback(func() {
-		app.ForcePublishAllValuesToValkey()
+		forcePublishAllValuesToValkey(manager, valkeyMgr)
 	})
 
 	// Set up session callbacks for logging
 	sshServer.SetOnSessionConnect(func(remoteAddr string) {
-		tui.DebugLogSSH("Client connected from %s (total sessions: %d)", remoteAddr, sshServer.SessionCount())
+		tui.StoreLogSSH("Client connected from %s (total sessions: %d)", remoteAddr, sshServer.SessionCount())
 	})
 	sshServer.SetOnSessionDisconnect(func(remoteAddr string) {
-		tui.DebugLogSSH("Client disconnected from %s (total sessions: %d)", remoteAddr, sshServer.SessionCount())
+		tui.StoreLogSSH("Client disconnected from %s (total sessions: %d)", remoteAddr, sshServer.SessionCount())
 	})
 
-	// Set up daemon mode callbacks
-	// In PTY multiplexing mode, all sessions share the same view, so Shift-Q disconnects everyone
-	app.SetOnDisconnect(func() {
-		tui.DebugLogSSH("Disconnect requested via Shift-Q")
-		sshServer.DisconnectAllSessions()
-	})
+	// Start SSH server (no PTY needed - each session creates its own TUI)
+	if err := sshServer.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting SSH server: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -576,6 +584,11 @@ func runDaemonMode(cfg *config.Config) {
 
 	// Start manager polling
 	manager.Start()
+
+	// Set up manager logging to go to shared debug store
+	manager.SetOnLog(func(format string, args ...interface{}) {
+		tui.StoreLog(format, args...)
+	})
 
 	// Auto-start REST server if enabled
 	if cfg.REST.Enabled {
@@ -590,14 +603,14 @@ func runDaemonMode(cfg *config.Config) {
 	// Auto-start enabled MQTT publishers
 	go func() {
 		if started := mqttMgr.StartAll(); started > 0 {
-			app.ForcePublishAllValues()
+			forcePublishAllValuesToMQTT(manager, mqttMgr)
 		}
 	}()
 
 	// Auto-start enabled Valkey publishers
 	go func() {
 		if started := valkeyMgr.StartAll(); started > 0 {
-			app.ForcePublishAllValuesToValkey()
+			forcePublishAllValuesToValkey(manager, valkeyMgr)
 		}
 	}()
 
@@ -606,22 +619,18 @@ func runDaemonMode(cfg *config.Config) {
 
 	// Set up trigger debug logging
 	triggerMgr.SetLogFunc(func(format string, args ...interface{}) {
-		tui.DebugLog(format, args...)
+		tui.StoreLog(format, args...)
 	})
 
 	// Auto-start enabled triggers
 	triggerMgr.Start()
 
+	// Start health publishing loop
+	go publishHealthLoop(manager, mqttMgr, valkeyMgr, kafkaMgr)
+
 	fmt.Printf("Daemon started. SSH available on port %d\n", *sshPort)
 	fmt.Printf("Connect with: ssh -p %d localhost\n", *sshPort)
 	fmt.Printf("Press Ctrl+C to stop the daemon\n")
-
-	// Run TUI in background
-	go func() {
-		if err := app.Run(); err != nil {
-			tui.DebugLogError("TUI error: %v", err)
-		}
-	}()
 
 	// Wait for shutdown signal
 	sig := <-sigChan
@@ -630,12 +639,24 @@ func runDaemonMode(cfg *config.Config) {
 	// Graceful shutdown with timeout
 	shutdownDone := make(chan struct{})
 	go func() {
-		// Close PTY first to unblock TUI's event loop
+		// Disconnect all SSH sessions first
 		sshServer.DisconnectAllSessions()
 		sshServer.Stop()
 
-		// Now shutdown the app (TUI exits quickly since PTY is closed)
-		app.Shutdown()
+		// Stop triggers first (they may be waiting on PLC reads or Kafka writes)
+		triggerMgr.Stop()
+
+		// Stop messaging services
+		mqttMgr.StopAll()
+		valkeyMgr.StopAll()
+		kafkaMgr.StopAll()
+
+		// Stop API and manager
+		apiServer.Stop()
+		manager.Stop()
+
+		// Disconnect PLCs
+		manager.DisconnectAll()
 
 		close(shutdownDone)
 	}()
@@ -644,18 +665,85 @@ func runDaemonMode(cfg *config.Config) {
 	select {
 	case <-shutdownDone:
 		// Clean shutdown
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		// Timeout - proceed to exit anyway
 	}
 
 	if fileLogger != nil {
 		fileLogger.Close()
 	}
-	if debugLogger != nil {
-		debugLogger.Close()
+	if debugLoggerFile != nil {
+		debugLoggerFile.Close()
 	}
 
 	fmt.Println("Daemon stopped")
+}
+
+// forcePublishAllValuesToMQTT publishes all current tag values to MQTT brokers.
+func forcePublishAllValuesToMQTT(manager *plcman.Manager, mqttMgr *mqtt.Manager) {
+	values := manager.GetAllCurrentValues()
+	tui.StoreLogMQTT("ForcePublishAllValues: publishing %d values", len(values))
+	for _, v := range values {
+		if !v.NoMQTT {
+			mqttMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, true)
+		}
+	}
+}
+
+// forcePublishAllValuesToValkey publishes all current tag values to Valkey servers.
+func forcePublishAllValuesToValkey(manager *plcman.Manager, valkeyMgr *valkey.Manager) {
+	values := manager.GetAllCurrentValues()
+	tui.StoreLogValkey("ForcePublishAllValuesToValkey: publishing %d values", len(values))
+	for _, v := range values {
+		if !v.NoValkey {
+			valkeyMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable)
+		}
+	}
+}
+
+// publishHealthLoop publishes PLC health status to all services every 10 seconds.
+func publishHealthLoop(manager *plcman.Manager, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager) {
+	// Wait for initial services to start
+	time.Sleep(2 * time.Second)
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	// Publish immediately on start, then every 10 seconds
+	publishAllHealth(manager, mqttMgr, valkeyMgr, kafkaMgr)
+
+	for range ticker.C {
+		publishAllHealth(manager, mqttMgr, valkeyMgr, kafkaMgr)
+	}
+}
+
+// publishAllHealth publishes health status for all PLCs to MQTT, Valkey, and Kafka.
+func publishAllHealth(manager *plcman.Manager, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager) {
+	plcs := manager.ListPLCs()
+	tui.StoreLog("Publishing health for %d PLCs", len(plcs))
+	for _, plc := range plcs {
+		// Skip PLCs with health check disabled
+		if !plc.Config.IsHealthCheckEnabled() {
+			continue
+		}
+
+		health := plc.GetHealthStatus()
+
+		// Publish to MQTT
+		if mqttMgr != nil {
+			mqttMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
+		}
+
+		// Publish to Valkey
+		if valkeyMgr != nil {
+			valkeyMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
+		}
+
+		// Publish to Kafka
+		if kafkaMgr != nil {
+			kafkaMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
+		}
+	}
 }
 
 // setupValueChangeHandlers sets up the value change callback for publishing to MQTT, Valkey, and Kafka.

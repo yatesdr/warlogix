@@ -1,26 +1,130 @@
 package ssh
 
 import (
+	"encoding/binary"
 	"fmt"
-	"io"
 	"net"
-	"os"
 	"sync"
-	"time"
 
-	"github.com/creack/pty"
-	"github.com/gliderlabs/ssh"
+	"github.com/gdamore/tcell/v2"
+	gossh "golang.org/x/crypto/ssh"
+	"warlink/api"
+	"warlink/config"
+	"warlink/kafka"
+	"warlink/mqtt"
+	"warlink/plcman"
+	"warlink/tagpack"
+	"warlink/trigger"
 	"warlink/tui"
+	"warlink/valkey"
 )
 
-// Server handles SSH connections and multiplexes them to a shared PTY.
+// SharedManagers holds all the shared backend managers for daemon mode.
+// Each SSH session creates its own TUI but shares these managers.
+// Implements tui.SharedManagers interface.
+type SharedManagers struct {
+	Config     *config.Config
+	ConfigPath string
+	PLCMan     *plcman.Manager
+	APIServer  *api.Server
+	MQTTMgr    *mqtt.Manager
+	ValkeyMgr  *valkey.Manager
+	KafkaMgr   *kafka.Manager
+	TriggerMgr *trigger.Manager
+	PackMgr    *tagpack.Manager
+}
+
+// GetConfig returns the shared config.
+func (m *SharedManagers) GetConfig() *config.Config { return m.Config }
+
+// GetConfigPath returns the config file path.
+func (m *SharedManagers) GetConfigPath() string { return m.ConfigPath }
+
+// GetPLCMan returns the shared PLC manager.
+func (m *SharedManagers) GetPLCMan() *plcman.Manager { return m.PLCMan }
+
+// GetAPIServer returns the shared API server.
+func (m *SharedManagers) GetAPIServer() *api.Server { return m.APIServer }
+
+// GetMQTTMgr returns the shared MQTT manager.
+func (m *SharedManagers) GetMQTTMgr() *mqtt.Manager { return m.MQTTMgr }
+
+// GetValkeyMgr returns the shared Valkey manager.
+func (m *SharedManagers) GetValkeyMgr() *valkey.Manager { return m.ValkeyMgr }
+
+// GetKafkaMgr returns the shared Kafka manager.
+func (m *SharedManagers) GetKafkaMgr() *kafka.Manager { return m.KafkaMgr }
+
+// GetTriggerMgr returns the shared trigger manager.
+func (m *SharedManagers) GetTriggerMgr() *trigger.Manager { return m.TriggerMgr }
+
+// GetPackMgr returns the shared TagPack manager.
+func (m *SharedManagers) GetPackMgr() *tagpack.Manager { return m.PackMgr }
+
+// Session represents an active SSH session.
+type Session struct {
+	channel  gossh.Channel
+	conn     *gossh.ServerConn
+	ptyReq   *ptyRequest
+	tty      *SSHChannelTty
+	winCh    chan Window
+	closeMu  sync.Mutex
+	closed   bool
+}
+
+// RemoteAddr returns the remote address of the session.
+func (s *Session) RemoteAddr() net.Addr {
+	return s.conn.RemoteAddr()
+}
+
+// Write writes data to the session.
+func (s *Session) Write(data []byte) (int, error) {
+	return s.channel.Write(data)
+}
+
+// Read reads data from the session.
+func (s *Session) Read(data []byte) (int, error) {
+	return s.channel.Read(data)
+}
+
+// Close closes the session.
+func (s *Session) Close() error {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.winCh != nil {
+		close(s.winCh)
+	}
+	if s.tty != nil {
+		s.tty.Stop()
+	}
+	return s.channel.Close()
+}
+
+// Window represents terminal window dimensions.
+type Window struct {
+	Width  int
+	Height int
+}
+
+// ptyRequest holds PTY request parameters.
+type ptyRequest struct {
+	Term   string
+	Width  uint32
+	Height uint32
+	// We ignore pixel dimensions and modes
+}
+
+// Server handles SSH connections with independent TUI per session.
 type Server struct {
 	config     *Config
-	server     *ssh.Server
+	sshConfig  *gossh.ServerConfig
 	listener   net.Listener
-	ptyMaster  *os.File
-	ptySlave   *os.File
-	sessions   map[ssh.Session]struct{}
+	managers   *SharedManagers
+	sessions   map[*Session]struct{}
 	sessionsMu sync.RWMutex
 	running    bool
 	mu         sync.Mutex
@@ -42,9 +146,14 @@ type Config struct {
 func NewServer(config *Config) *Server {
 	return &Server{
 		config:   config,
-		sessions: make(map[ssh.Session]struct{}),
+		sessions: make(map[*Session]struct{}),
 		stopChan: make(chan struct{}),
 	}
+}
+
+// SetSharedManagers sets the shared backend managers for the server.
+func (s *Server) SetSharedManagers(m *SharedManagers) {
+	s.managers = m
 }
 
 // SetOnSessionConnect sets a callback for when a session connects.
@@ -57,16 +166,6 @@ func (s *Server) SetOnSessionDisconnect(fn func(remoteAddr string)) {
 	s.onSessionDisconnect = fn
 }
 
-// GetPTYSlave returns the slave end of the PTY for the TUI to use.
-func (s *Server) GetPTYSlave() *os.File {
-	return s.ptySlave
-}
-
-// GetPTYMaster returns the master end of the PTY.
-func (s *Server) GetPTYMaster() *os.File {
-	return s.ptyMaster
-}
-
 // Start starts the SSH server.
 func (s *Server) Start() error {
 	s.mu.Lock()
@@ -75,54 +174,43 @@ func (s *Server) Start() error {
 		return fmt.Errorf("server already running")
 	}
 
-	// Create PTY pair
-	master, slave, err := pty.Open()
-	if err != nil {
-		s.mu.Unlock()
-		return fmt.Errorf("failed to create PTY: %w", err)
-	}
-	s.ptyMaster = master
-	s.ptySlave = slave
-
 	// Get or create host key
 	hostKey, err := GetOrCreateHostKey()
 	if err != nil {
-		master.Close()
-		slave.Close()
 		s.mu.Unlock()
 		return fmt.Errorf("failed to get host key: %w", err)
 	}
 
-	// Create SSH server
-	s.server = &ssh.Server{
-		Addr:        fmt.Sprintf(":%d", s.config.Port),
-		HostSigners: []ssh.Signer{hostKey},
-		Handler:     s.sessionHandler,
-	}
+	// Build SSH server config
+	s.sshConfig = &gossh.ServerConfig{}
+	s.sshConfig.AddHostKey(hostKey)
 
 	// Configure authentication
+	hasAuth := false
 	if s.config.Password != "" {
-		s.server.PasswordHandler = PasswordHandler(s.config.Password)
+		s.sshConfig.PasswordCallback = passwordCallback(s.config.Password)
+		hasAuth = true
 	}
 	if s.config.AuthorizedKeys != "" {
-		s.server.PublicKeyHandler = PublicKeyHandler(s.config.AuthorizedKeys)
+		callback := publicKeyCallback(s.config.AuthorizedKeys)
+		if callback != nil {
+			s.sshConfig.PublicKeyCallback = callback
+			hasAuth = true
+		}
 	}
 
 	// At least one auth method must be configured
-	if s.server.PasswordHandler == nil && s.server.PublicKeyHandler == nil {
-		master.Close()
-		slave.Close()
+	if !hasAuth {
 		s.mu.Unlock()
 		return fmt.Errorf("no authentication method configured")
 	}
 
 	// Start listener
-	listener, err := net.Listen("tcp", s.server.Addr)
+	addr := fmt.Sprintf(":%d", s.config.Port)
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		master.Close()
-		slave.Close()
 		s.mu.Unlock()
-		return fmt.Errorf("failed to listen on %s: %w", s.server.Addr, err)
+		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 	s.listener = listener
 	s.running = true
@@ -131,17 +219,252 @@ func (s *Server) Start() error {
 
 	tui.DebugLogSSH("Server started on port %d", s.config.Port)
 
-	// Start PTY output multiplexer
-	go s.multiplexPTYOutput()
-
-	// Serve in background
-	go func() {
-		if err := s.server.Serve(listener); err != nil && err != ssh.ErrServerClosed {
-			tui.DebugLogSSH("Server error: %v", err)
-		}
-	}()
+	// Accept connections in background
+	go s.acceptLoop()
 
 	return nil
+}
+
+// acceptLoop accepts incoming connections.
+func (s *Server) acceptLoop() {
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			select {
+			case <-s.stopChan:
+				return
+			default:
+				tui.DebugLogSSH("Accept error: %v", err)
+				continue
+			}
+		}
+
+		go s.handleConnection(conn)
+	}
+}
+
+// handleConnection handles a single TCP connection.
+func (s *Server) handleConnection(conn net.Conn) {
+	// Perform SSH handshake
+	sshConn, chans, reqs, err := gossh.NewServerConn(conn, s.sshConfig)
+	if err != nil {
+		tui.DebugLogSSH("SSH handshake failed from %s: %v", conn.RemoteAddr(), err)
+		conn.Close()
+		return
+	}
+
+	tui.DebugLogSSH("SSH connection from %s", sshConn.RemoteAddr())
+
+	// Discard global requests
+	go gossh.DiscardRequests(reqs)
+
+	// Handle channels
+	for newChannel := range chans {
+		if newChannel.ChannelType() != "session" {
+			newChannel.Reject(gossh.UnknownChannelType, "unknown channel type")
+			continue
+		}
+
+		channel, requests, err := newChannel.Accept()
+		if err != nil {
+			tui.DebugLogSSH("Could not accept channel: %v", err)
+			continue
+		}
+
+		go s.handleSession(sshConn, channel, requests)
+	}
+}
+
+// handleSession handles an SSH session channel.
+func (s *Server) handleSession(conn *gossh.ServerConn, channel gossh.Channel, requests <-chan *gossh.Request) {
+	session := &Session{
+		channel: channel,
+		conn:    conn,
+		winCh:   make(chan Window, 8),
+	}
+
+	remoteAddr := conn.RemoteAddr().String()
+
+	// Process session requests (pty-req, shell, window-change)
+	ptyRequested := false
+
+	for req := range requests {
+		switch req.Type {
+		case "pty-req":
+			ptyReq, err := parsePtyRequest(req.Payload)
+			if err != nil {
+				tui.DebugLogSSH("Invalid pty-req from %s: %v", remoteAddr, err)
+				if req.WantReply {
+					req.Reply(false, nil)
+				}
+				continue
+			}
+			session.ptyReq = ptyReq
+			ptyRequested = true
+			if req.WantReply {
+				req.Reply(true, nil)
+			}
+
+		case "shell":
+			if req.WantReply {
+				req.Reply(true, nil)
+			}
+
+			// Start session handling once we have both pty and shell
+			if ptyRequested {
+				go s.runSession(session)
+			}
+
+		case "window-change":
+			win, err := parseWindowChange(req.Payload)
+			if err != nil {
+				tui.DebugLogSSH("Invalid window-change from %s: %v", remoteAddr, err)
+				continue
+			}
+			// Update the tty's window size if it exists
+			if session.tty != nil {
+				session.tty.SetWindowSize(win.Width, win.Height)
+			}
+			// Non-blocking send for legacy handlers
+			select {
+			case session.winCh <- win:
+			default:
+			}
+
+		case "env":
+			// Accept but ignore environment variables
+			if req.WantReply {
+				req.Reply(true, nil)
+			}
+
+		default:
+			tui.DebugLogSSH("Unknown request type %s from %s", req.Type, remoteAddr)
+			if req.WantReply {
+				req.Reply(false, nil)
+			}
+		}
+	}
+
+	// Channel closed, clean up
+	session.Close()
+}
+
+// runSession runs the main session loop with an independent TUI.
+func (s *Server) runSession(session *Session) {
+	remoteAddr := session.RemoteAddr().String()
+	tui.DebugLogSSH("Session connected from %s", remoteAddr)
+
+	// Create SSHChannelTty from session's channel
+	tty := NewSSHChannelTty(
+		session.channel,
+		int(session.ptyReq.Width),
+		int(session.ptyReq.Height),
+	)
+	session.tty = tty
+
+	// Register session
+	s.sessionsMu.Lock()
+	s.sessions[session] = struct{}{}
+	s.sessionsMu.Unlock()
+
+	if s.onSessionConnect != nil {
+		s.onSessionConnect(remoteAddr)
+	}
+
+	// Create tcell screen from the tty
+	screen, err := tcell.NewTerminfoScreenFromTty(tty)
+	if err != nil {
+		tui.DebugLogSSH("Failed to create screen for %s: %v", remoteAddr, err)
+		s.cleanupSession(session, remoteAddr)
+		return
+	}
+
+	if err := screen.Init(); err != nil {
+		tui.DebugLogSSH("Failed to init screen for %s: %v", remoteAddr, err)
+		s.cleanupSession(session, remoteAddr)
+		return
+	}
+
+	// Create independent TUI instance with shared backend
+	app, err := tui.NewAppWithSharedBackend(screen, s.managers)
+	if err != nil {
+		tui.DebugLogSSH("Failed to create TUI for %s: %v", remoteAddr, err)
+		screen.Fini()
+		s.cleanupSession(session, remoteAddr)
+		return
+	}
+
+	// Set up disconnect callback - only closes THIS session
+	app.SetOnDisconnect(func() {
+		tui.DebugLogSSH("Disconnect requested from %s", remoteAddr)
+		app.Stop()
+	})
+
+	// Run TUI (blocks until session ends)
+	if err := app.Run(); err != nil {
+		tui.DebugLogSSH("TUI error for %s: %v", remoteAddr, err)
+	}
+
+	// Clean up
+	app.Shutdown()
+	screen.Fini()
+	s.cleanupSession(session, remoteAddr)
+}
+
+// cleanupSession removes a session from the server and calls disconnect callback.
+func (s *Server) cleanupSession(session *Session, remoteAddr string) {
+	s.sessionsMu.Lock()
+	delete(s.sessions, session)
+	s.sessionsMu.Unlock()
+
+	if s.onSessionDisconnect != nil {
+		s.onSessionDisconnect(remoteAddr)
+	}
+
+	session.Close()
+	tui.DebugLogSSH("Session disconnected from %s", remoteAddr)
+}
+
+// parsePtyRequest parses a pty-req payload.
+func parsePtyRequest(payload []byte) (*ptyRequest, error) {
+	// Format: string term, uint32 width, uint32 height, uint32 pixel_width, uint32 pixel_height, string modes
+	if len(payload) < 4 {
+		return nil, fmt.Errorf("payload too short")
+	}
+
+	termLen := binary.BigEndian.Uint32(payload[0:4])
+	if len(payload) < int(4+termLen+16) {
+		return nil, fmt.Errorf("payload too short for term")
+	}
+
+	term := string(payload[4 : 4+termLen])
+	offset := 4 + termLen
+
+	width := binary.BigEndian.Uint32(payload[offset : offset+4])
+	height := binary.BigEndian.Uint32(payload[offset+4 : offset+8])
+	// Skip pixel dimensions and modes
+
+	return &ptyRequest{
+		Term:   term,
+		Width:  width,
+		Height: height,
+	}, nil
+}
+
+// parseWindowChange parses a window-change payload.
+func parseWindowChange(payload []byte) (Window, error) {
+	// Format: uint32 width, uint32 height, uint32 pixel_width, uint32 pixel_height
+	if len(payload) < 8 {
+		return Window{}, fmt.Errorf("payload too short")
+	}
+
+	width := binary.BigEndian.Uint32(payload[0:4])
+	height := binary.BigEndian.Uint32(payload[4:8])
+
+	return Window{
+		Width:  int(width),
+		Height: int(height),
+	}, nil
 }
 
 // Stop stops the SSH server gracefully.
@@ -175,14 +498,6 @@ func (s *Server) Stop() error {
 		s.listener.Close()
 	}
 
-	// Close PTY
-	if s.ptyMaster != nil {
-		s.ptyMaster.Close()
-	}
-	if s.ptySlave != nil {
-		s.ptySlave.Close()
-	}
-
 	return nil
 }
 
@@ -200,107 +515,11 @@ func (s *Server) SessionCount() int {
 	return len(s.sessions)
 }
 
-// sessionHandler handles new SSH sessions.
-func (s *Server) sessionHandler(session ssh.Session) {
-	remoteAddr := session.RemoteAddr().String()
-	tui.DebugLogSSH("Session connected from %s", remoteAddr)
-
-	// Request PTY from client
-	ptyReq, winCh, isPty := session.Pty()
-	if !isPty {
-		io.WriteString(session, "PTY required\n")
-		return
-	}
-
-	// Set initial PTY size
-	if err := pty.Setsize(s.ptyMaster, &pty.Winsize{
-		Rows: uint16(ptyReq.Window.Height),
-		Cols: uint16(ptyReq.Window.Width),
-	}); err != nil {
-		tui.DebugLogSSH("Failed to set PTY size: %v", err)
-	}
-
-	// Register session
-	s.sessionsMu.Lock()
-	s.sessions[session] = struct{}{}
-	s.sessionsMu.Unlock()
-
-	if s.onSessionConnect != nil {
-		s.onSessionConnect(remoteAddr)
-	}
-
-	// Handle window size changes
-	go func() {
-		for win := range winCh {
-			if err := pty.Setsize(s.ptyMaster, &pty.Winsize{
-				Rows: uint16(win.Height),
-				Cols: uint16(win.Width),
-			}); err != nil {
-				tui.DebugLogSSH("Failed to resize PTY: %v", err)
-			}
-		}
-	}()
-
-	// Forward input from SSH session to PTY master
-	go func() {
-		io.Copy(s.ptyMaster, session)
-	}()
-
-	// Wait for session to end
-	<-session.Context().Done()
-
-	// Unregister session
-	s.sessionsMu.Lock()
-	delete(s.sessions, session)
-	s.sessionsMu.Unlock()
-
-	if s.onSessionDisconnect != nil {
-		s.onSessionDisconnect(remoteAddr)
-	}
-
-	tui.DebugLogSSH("Session disconnected from %s", remoteAddr)
-}
-
-// multiplexPTYOutput reads from PTY master and writes to all sessions.
-func (s *Server) multiplexPTYOutput() {
-	buf := make([]byte, 32*1024)
-	for {
-		select {
-		case <-s.stopChan:
-			return
-		default:
-		}
-
-		// Set read deadline to allow checking stop channel
-		s.ptyMaster.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		n, err := s.ptyMaster.Read(buf)
-		if err != nil {
-			if os.IsTimeout(err) {
-				continue
-			}
-			if s.running {
-				tui.DebugLogSSH("PTY read error: %v", err)
-			}
-			return
-		}
-
-		if n > 0 {
-			data := buf[:n]
-			s.sessionsMu.RLock()
-			for session := range s.sessions {
-				session.Write(data)
-			}
-			s.sessionsMu.RUnlock()
-		}
-	}
-}
-
 // DisconnectAllSessions closes all active SSH sessions.
-// In a multiplexed PTY setup, all sessions share the same view, so when
-// one user requests disconnect (Shift-Q), all sessions are disconnected.
+// Each session has its own TUI, so this method closes all of them.
 func (s *Server) DisconnectAllSessions() {
 	s.sessionsMu.Lock()
-	sessions := make([]ssh.Session, 0, len(s.sessions))
+	sessions := make([]*Session, 0, len(s.sessions))
 	for session := range s.sessions {
 		sessions = append(sessions, session)
 	}
@@ -308,7 +527,7 @@ func (s *Server) DisconnectAllSessions() {
 
 	// Close sessions in goroutines to avoid blocking
 	for _, session := range sessions {
-		go func(sess ssh.Session) {
+		go func(sess *Session) {
 			tui.DebugLogSSH("Closing session from %s", sess.RemoteAddr().String())
 			sess.Close()
 		}(session)

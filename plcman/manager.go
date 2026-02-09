@@ -630,6 +630,9 @@ func isLikelyConnectionError(err error) bool {
 		strings.Contains(errStr, "dial")
 }
 
+// ListenerID is a unique identifier for a registered listener.
+type ListenerID string
+
 // Manager manages multiple PLC connections and polling.
 type Manager struct {
 	plcs    map[string]*ManagedPLC
@@ -643,10 +646,16 @@ type Manager struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// Callbacks
+	// Legacy single callbacks (for backward compatibility)
 	onChange      func()
 	onValueChange func(changes []ValueChange)
 	onLog         func(format string, args ...interface{}) // Log callback for TUI integration
+
+	// Multi-listener support
+	changeListeners      map[ListenerID]func()
+	valueChangeListeners map[ListenerID]func([]ValueChange)
+	listenersMu          sync.RWMutex
+	listenerCounter      uint64
 
 	// Batched update channels
 	changeChan  chan []ValueChange // Aggregates value changes from workers
@@ -667,16 +676,19 @@ func NewManager(pollRate time.Duration) *Manager {
 		pollRate = time.Second
 	}
 	return &Manager{
-		plcs:          make(map[string]*ManagedPLC),
-		workers:       make(map[string]*PLCWorker),
-		pollRate:      pollRate,
-		batchInterval: 100 * time.Millisecond, // Batch UI updates every 100ms
-		changeChan:    make(chan []ValueChange, 100),
-		reconnecting:  make(map[string]bool),
+		plcs:                 make(map[string]*ManagedPLC),
+		workers:              make(map[string]*PLCWorker),
+		pollRate:             pollRate,
+		batchInterval:        100 * time.Millisecond, // Batch UI updates every 100ms
+		changeChan:           make(chan []ValueChange, 100),
+		reconnecting:         make(map[string]bool),
+		changeListeners:      make(map[ListenerID]func()),
+		valueChangeListeners: make(map[ListenerID]func([]ValueChange)),
 	}
 }
 
 // SetOnChange sets a callback that fires when PLC status changes.
+// For backward compatibility. Use AddOnChangeListener for multi-listener support.
 func (m *Manager) SetOnChange(fn func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -684,6 +696,7 @@ func (m *Manager) SetOnChange(fn func()) {
 }
 
 // SetOnValueChange sets a callback that fires when tag values change.
+// For backward compatibility. Use AddOnValueChangeListener for multi-listener support.
 func (m *Manager) SetOnValueChange(fn func(changes []ValueChange)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -695,6 +708,42 @@ func (m *Manager) SetOnLog(fn func(format string, args ...interface{})) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onLog = fn
+}
+
+// AddOnChangeListener registers a callback for PLC status changes.
+// Returns a ListenerID that can be used to remove the listener.
+// The callback is called in a goroutine to avoid blocking.
+func (m *Manager) AddOnChangeListener(cb func()) ListenerID {
+	m.listenersMu.Lock()
+	defer m.listenersMu.Unlock()
+	id := ListenerID(fmt.Sprintf("change-%d", atomic.AddUint64(&m.listenerCounter, 1)))
+	m.changeListeners[id] = cb
+	return id
+}
+
+// RemoveOnChangeListener removes a previously registered change listener.
+func (m *Manager) RemoveOnChangeListener(id ListenerID) {
+	m.listenersMu.Lock()
+	defer m.listenersMu.Unlock()
+	delete(m.changeListeners, id)
+}
+
+// AddOnValueChangeListener registers a callback for tag value changes.
+// Returns a ListenerID that can be used to remove the listener.
+// The callback is called in a goroutine to avoid blocking.
+func (m *Manager) AddOnValueChangeListener(cb func([]ValueChange)) ListenerID {
+	m.listenersMu.Lock()
+	defer m.listenersMu.Unlock()
+	id := ListenerID(fmt.Sprintf("value-%d", atomic.AddUint64(&m.listenerCounter, 1)))
+	m.valueChangeListeners[id] = cb
+	return id
+}
+
+// RemoveOnValueChangeListener removes a previously registered value change listener.
+func (m *Manager) RemoveOnValueChangeListener(id ListenerID) {
+	m.listenersMu.Lock()
+	defer m.listenersMu.Unlock()
+	delete(m.valueChangeListeners, id)
 }
 
 // log calls the logging callback if set.
@@ -1112,12 +1161,7 @@ func (m *Manager) batchedUpdateLoop() {
 		case <-ticker.C:
 			// Check if status update is needed
 			if atomic.CompareAndSwapInt32(&m.statusDirty, 1, 0) {
-				m.mu.RLock()
-				fn := m.onChange
-				m.mu.RUnlock()
-				if fn != nil {
-					fn()
-				}
+				m.fireOnChange()
 			}
 
 			// Flush pending value changes
@@ -1129,13 +1173,56 @@ func (m *Manager) batchedUpdateLoop() {
 	}
 }
 
-// flushValueChanges calls the value change callback with accumulated changes.
+// fireOnChange calls all registered change listeners in goroutines.
+func (m *Manager) fireOnChange() {
+	// Call legacy callback
+	m.mu.RLock()
+	fn := m.onChange
+	m.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+
+	// Call all multi-listener callbacks in goroutines
+	m.listenersMu.RLock()
+	listeners := make([]func(), 0, len(m.changeListeners))
+	for _, cb := range m.changeListeners {
+		listeners = append(listeners, cb)
+	}
+	m.listenersMu.RUnlock()
+
+	for _, cb := range listeners {
+		go cb()
+	}
+}
+
+// flushValueChanges calls all value change callbacks with accumulated changes.
 func (m *Manager) flushValueChanges(changes []ValueChange) {
+	if len(changes) == 0 {
+		return
+	}
+
+	// Call legacy callback
 	m.mu.RLock()
 	fn := m.onValueChange
 	m.mu.RUnlock()
-	if fn != nil && len(changes) > 0 {
+	if fn != nil {
 		fn(changes)
+	}
+
+	// Call all multi-listener callbacks in goroutines
+	m.listenersMu.RLock()
+	listeners := make([]func([]ValueChange), 0, len(m.valueChangeListeners))
+	for _, cb := range m.valueChangeListeners {
+		listeners = append(listeners, cb)
+	}
+	m.listenersMu.RUnlock()
+
+	// Make a copy for each listener to avoid races
+	for _, cb := range listeners {
+		changesCopy := make([]ValueChange, len(changes))
+		copy(changesCopy, changes)
+		go cb(changesCopy)
 	}
 }
 

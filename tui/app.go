@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -57,6 +56,11 @@ type App struct {
 	daemonMode       bool
 	onDisconnect     func() // Called when user requests disconnect in daemon mode
 	onShutdownDaemon func() // Called when daemon needs to shutdown
+
+	// Multi-listener IDs for shared backend mode
+	changeListenerID      plcman.ListenerID
+	valueChangeListenerID plcman.ListenerID
+	debugListenerID       DebugStoreListenerID
 }
 
 // NewApp creates a new TUI application.
@@ -123,9 +127,28 @@ func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Man
 	return a
 }
 
-// NewAppWithPTY creates a TUI application that uses the provided PTY file descriptors.
-// This is used for daemon mode where the TUI runs on a PTY for SSH multiplexing.
-func NewAppWithPTY(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, ptyFile *os.File) (*App, error) {
+
+// SharedManagers is imported from ssh package to avoid circular dependency.
+// This interface allows the TUI to accept shared managers from the SSH server.
+type SharedManagers interface {
+	GetConfig() *config.Config
+	GetConfigPath() string
+	GetPLCMan() *plcman.Manager
+	GetAPIServer() *api.Server
+	GetMQTTMgr() *mqtt.Manager
+	GetValkeyMgr() *valkey.Manager
+	GetKafkaMgr() *kafka.Manager
+	GetTriggerMgr() *trigger.Manager
+	GetPackMgr() *tagpack.Manager
+}
+
+// NewAppWithSharedBackend creates a TUI application that uses shared backend managers.
+// This is used for multi-SSH daemon mode where each session has its own TUI
+// but all share the same backend managers (PLC, MQTT, Kafka, Valkey, etc.).
+// The screen parameter should be a tcell.Screen created from an SSHChannelTty.
+func NewAppWithSharedBackend(screen tcell.Screen, managers SharedManagers) (*App, error) {
+	cfg := managers.GetConfig()
+
 	// Auto-detect ASCII mode based on locale, then allow config override
 	AutoDetectAndEnableASCIIMode()
 
@@ -137,36 +160,72 @@ func NewAppWithPTY(cfg *config.Config, configPath string, manager *plcman.Manage
 		EnableASCIIMode()
 	}
 
-	// Create a PTYTty wrapper that implements tcell.Tty
-	ptyTty := NewPTYTty(ptyFile)
-
-	// Create a tcell screen using the PTY
-	screen, err := tcell.NewTerminfoScreenFromTty(ptyTty)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := screen.Init(); err != nil {
-		return nil, err
-	}
-
 	a := &App{
 		app:        tview.NewApplication().SetScreen(screen),
 		config:     cfg,
-		configPath: configPath,
-		manager:    manager,
-		apiServer:  apiServer,
-		mqttMgr:    mqttMgr,
-		valkeyMgr:  valkeyMgr,
-		kafkaMgr:   kafkaMgr,
-		triggerMgr: triggerMgr,
+		configPath: managers.GetConfigPath(),
+		manager:    managers.GetPLCMan(),
+		apiServer:  managers.GetAPIServer(),
+		mqttMgr:    managers.GetMQTTMgr(),
+		valkeyMgr:  managers.GetValkeyMgr(),
+		kafkaMgr:   managers.GetKafkaMgr(),
+		triggerMgr: managers.GetTriggerMgr(),
+		packMgr:    managers.GetPackMgr(),
 		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabREST, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 		daemonMode: true,
 	}
 
 	a.setupUI()
+	a.registerListeners()
+
 	return a, nil
+}
+
+// registerListeners registers this app with the multi-listener pattern on shared managers.
+func (a *App) registerListeners() {
+	// Register for PLC changes
+	a.changeListenerID = a.manager.AddOnChangeListener(func() {
+		a.app.QueueUpdateDraw(func() {
+			if a.plcsTab != nil {
+				a.plcsTab.Refresh()
+			}
+			if a.browserTab != nil {
+				a.browserTab.Refresh()
+			}
+		})
+	})
+
+	// Register for debug log updates if the store exists
+	store := GetDebugStore()
+	if store != nil {
+		a.debugListenerID = store.Subscribe(func(msg LogMessage) {
+			a.app.QueueUpdateDraw(func() {
+				if a.debugTab != nil {
+					a.debugTab.Refresh()
+				}
+			})
+		})
+	}
+}
+
+// unregisterListeners removes this app's listeners from shared managers.
+func (a *App) unregisterListeners() {
+	if a.changeListenerID != "" {
+		a.manager.RemoveOnChangeListener(a.changeListenerID)
+		a.changeListenerID = ""
+	}
+	if a.valueChangeListenerID != "" {
+		a.manager.RemoveOnValueChangeListener(a.valueChangeListenerID)
+		a.valueChangeListenerID = ""
+	}
+	if a.debugListenerID != "" {
+		store := GetDebugStore()
+		if store != nil {
+			store.Unsubscribe(a.debugListenerID)
+		}
+		a.debugListenerID = ""
+	}
 }
 
 // SetDaemonMode sets whether the app is running in daemon mode.
@@ -855,7 +914,10 @@ func (a *App) Shutdown() {
 		close(a.stopChan)
 	}
 
-	// Clear callbacks to prevent updates during shutdown
+	// Unregister multi-listener callbacks (for shared backend mode)
+	a.unregisterListeners()
+
+	// Clear legacy callbacks to prevent updates during shutdown
 	a.manager.SetOnChange(nil)
 	a.manager.SetOnValueChange(nil)
 	a.manager.SetOnLog(nil)
@@ -863,6 +925,13 @@ func (a *App) Shutdown() {
 	// Stop the TUI immediately to prevent writes to closed PTY
 	// This is non-blocking - it just signals the event loop to stop
 	a.app.Stop()
+
+	// In shared backend mode (daemon with multi-SSH), don't stop shared services
+	// Only the main daemon process should stop those
+	if a.changeListenerID != "" || a.debugListenerID != "" {
+		// This is a shared backend session - don't stop services
+		return
+	}
 
 	// Stop all services with a single timeout
 	// All these operations can potentially block, so wrap them together
@@ -874,15 +943,23 @@ func (a *App) Shutdown() {
 		}
 
 		// Stop messaging services
-		a.mqttMgr.StopAll()
-		a.valkeyMgr.StopAll()
+		if a.mqttMgr != nil {
+			a.mqttMgr.StopAll()
+		}
+		if a.valkeyMgr != nil {
+			a.valkeyMgr.StopAll()
+		}
 		if a.kafkaMgr != nil {
 			a.kafkaMgr.StopAll()
 		}
 
 		// Stop API and manager
-		a.apiServer.Stop()
-		a.manager.Stop()
+		if a.apiServer != nil {
+			a.apiServer.Stop()
+		}
+		if a.manager != nil {
+			a.manager.Stop()
+		}
 
 		close(done)
 	}()
@@ -895,7 +972,9 @@ func (a *App) Shutdown() {
 	}
 
 	// Disconnect PLCs in background (don't wait - can be slow)
-	go a.manager.DisconnectAll()
+	if a.manager != nil {
+		go a.manager.DisconnectAll()
+	}
 }
 
 // Stop halts the TUI application.
