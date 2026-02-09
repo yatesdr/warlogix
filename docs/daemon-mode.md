@@ -521,6 +521,8 @@ Daemon mode supports the same logging options as local mode:
 ./warlogix -d --ssh-password "secret" --log-debug=mqtt,kafka
 ```
 
+**Warning:** Debug logging (`--log-debug`) generates extremely verbose output including protocol-level hex dumps. Log files can grow to gigabytes within hours on active systems. Use debug logging only for troubleshooting specific issues, not in typical deployments. Always specify a protocol filter (e.g., `--log-debug=s7`) rather than logging all protocols when possible.
+
 ## Configuration
 
 ### Configuration File Location
