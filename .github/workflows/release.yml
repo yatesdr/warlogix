@@ -61,12 +61,12 @@ jobs:
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
         run: |
-          tar -czvf warlogix-${{ matrix.suffix }}.tar.gz warlogix README.md LICENSE
+          tar -czvf warlogix-${{ matrix.suffix }}.tar.gz warlogix README.md
 
       - name: Package (zip)
         if: matrix.archive == 'zip'
         run: |
-          zip warlogix-${{ matrix.suffix }}.zip warlogix.exe README.md LICENSE
+          zip warlogix-${{ matrix.suffix }}.zip warlogix.exe README.md
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
