@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.4] - 2026-02-09
+
+### Added
+- **Documentation**: Comprehensive guides for API examples, best practices, migration, troubleshooting, and use cases
+
+### Fixed
+- **SSH Disconnect**: Shift-Q no longer requires double press to disconnect
+- **Terminal Restore**: Terminal properly restores after SSH disconnect without requiring keypress
+- **Daemon Mode Stability**: PLC tab now refreshes correctly after SSH reconnection
+- **SSH Protocol**: Added proper exit-status signaling for clean session termination
+
+### Changed
+- Cleaned up unused SSH code (AuthConfig, Session.Read/Write, window channels)
+
 ## [0.2.3] - 2026-02-09
 
 ### Changed
