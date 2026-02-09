@@ -174,9 +174,6 @@ ssh -p 2222 localhost
 
 See [Daemon Mode](docs/daemon-mode.md) for systemd setup, Docker deployment, and security options.
 
-## License
-
-Copyright held by author - inquire for usage rights.
 
 ## Acknowledgements
 
