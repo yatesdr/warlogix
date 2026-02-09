@@ -199,5 +199,4 @@ This project builds on excellent open source libraries:
 **User Interface:**
 - [tview](https://github.com/rivo/tview) - Terminal UI framework
 - [tcell](https://github.com/gdamore/tcell) - Terminal cell library
-- [gliderlabs/ssh](https://github.com/gliderlabs/ssh) - SSH server
-- [creack/pty](https://github.com/creack/pty) - PTY handling
+- [x/crypto/ssh](https://pkg.go.dev/golang.org/x/crypto/ssh) - SSH server
