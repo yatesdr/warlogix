@@ -344,6 +344,18 @@ func EncodeValue(value interface{}) ([]byte, uint16, error) {
 // EncodeValueWithType encodes a value using a specific type code.
 // This is used when we know the target type from symbol info.
 func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
+	// Handle array types - check both the typeCode flag and the value type
+	// TwinCAT often reports arrays with just the base type (no array flag)
+	baseType := typeCode
+	if IsArray(typeCode) {
+		baseType = BaseType(typeCode)
+	}
+
+	// Check if value is a slice - if so, encode as array regardless of typeCode flag
+	if isSliceValue(value) {
+		return encodeArrayValue(value, baseType)
+	}
+
 	size := TypeSize(typeCode)
 	if size == 0 && typeCode != TypeString && typeCode != TypeWString {
 		return nil, fmt.Errorf("cannot encode to type %s", TypeName(typeCode))
@@ -380,6 +392,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			return []byte{v}, nil
 		case int:
 			return []byte{byte(v)}, nil
+		case int32:
+			return []byte{byte(v)}, nil
 		case int64:
 			return []byte{byte(v)}, nil
 		default:
@@ -391,6 +405,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 		case int8:
 			return []byte{byte(v)}, nil
 		case int:
+			return []byte{byte(v)}, nil
+		case int32:
 			return []byte{byte(v)}, nil
 		case int64:
 			return []byte{byte(v)}, nil
@@ -404,6 +420,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 		case uint16:
 			binary.LittleEndian.PutUint16(buf, v)
 		case int:
+			binary.LittleEndian.PutUint16(buf, uint16(v))
+		case int32:
 			binary.LittleEndian.PutUint16(buf, uint16(v))
 		case int64:
 			binary.LittleEndian.PutUint16(buf, uint16(v))
@@ -419,6 +437,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint16(buf, uint16(v))
 		case int:
 			binary.LittleEndian.PutUint16(buf, uint16(v))
+		case int32:
+			binary.LittleEndian.PutUint16(buf, uint16(v))
 		case int64:
 			binary.LittleEndian.PutUint16(buf, uint16(v))
 		default:
@@ -432,6 +452,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 		case uint32:
 			binary.LittleEndian.PutUint32(buf, v)
 		case int:
+			binary.LittleEndian.PutUint32(buf, uint32(v))
+		case int32:
 			binary.LittleEndian.PutUint32(buf, uint32(v))
 		case int64:
 			binary.LittleEndian.PutUint32(buf, uint32(v))
@@ -461,6 +483,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint64(buf, v)
 		case int:
 			binary.LittleEndian.PutUint64(buf, uint64(v))
+		case int32:
+			binary.LittleEndian.PutUint64(buf, uint64(v))
 		case int64:
 			binary.LittleEndian.PutUint64(buf, uint64(v))
 		default:
@@ -474,6 +498,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 		case int64:
 			binary.LittleEndian.PutUint64(buf, uint64(v))
 		case int:
+			binary.LittleEndian.PutUint64(buf, uint64(v))
+		case int32:
 			binary.LittleEndian.PutUint64(buf, uint64(v))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to LINT", value)
@@ -489,6 +515,8 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint32(buf, math.Float32bits(float32(v)))
 		case int:
 			binary.LittleEndian.PutUint32(buf, math.Float32bits(float32(v)))
+		case int32:
+			binary.LittleEndian.PutUint32(buf, math.Float32bits(float32(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to REAL", value)
 		}
@@ -503,8 +531,61 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			binary.LittleEndian.PutUint64(buf, math.Float64bits(float64(v)))
 		case int:
 			binary.LittleEndian.PutUint64(buf, math.Float64bits(float64(v)))
+		case int32:
+			binary.LittleEndian.PutUint64(buf, math.Float64bits(float64(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to LREAL", value)
+		}
+		return buf, nil
+
+	case TypeLTime:
+		// LTIME is 64-bit nanoseconds
+		buf := make([]byte, 8)
+		switch v := value.(type) {
+		case int64:
+			binary.LittleEndian.PutUint64(buf, uint64(v))
+		case int:
+			binary.LittleEndian.PutUint64(buf, uint64(v))
+		case int32:
+			binary.LittleEndian.PutUint64(buf, uint64(v))
+		case uint64:
+			binary.LittleEndian.PutUint64(buf, v)
+		default:
+			return nil, fmt.Errorf("cannot convert %T to LTIME", value)
+		}
+		return buf, nil
+
+	case TypeTime:
+		// TIME is 32-bit milliseconds
+		buf := make([]byte, 4)
+		switch v := value.(type) {
+		case int32:
+			binary.LittleEndian.PutUint32(buf, uint32(v))
+		case int:
+			binary.LittleEndian.PutUint32(buf, uint32(v))
+		case int64:
+			binary.LittleEndian.PutUint32(buf, uint32(v))
+		case uint32:
+			binary.LittleEndian.PutUint32(buf, v)
+		default:
+			return nil, fmt.Errorf("cannot convert %T to TIME", value)
+		}
+		return buf, nil
+
+	case TypeDate, TypeTimeOfDay, TypeDateTime:
+		// DATE, TOD, DT are all 32-bit values
+		buf := make([]byte, 4)
+		switch v := value.(type) {
+		case int32:
+			binary.LittleEndian.PutUint32(buf, uint32(v))
+		case int:
+			binary.LittleEndian.PutUint32(buf, uint32(v))
+		case int64:
+			binary.LittleEndian.PutUint32(buf, uint32(v))
+		case uint32:
+			binary.LittleEndian.PutUint32(buf, v)
+		default:
+			return nil, fmt.Errorf("cannot convert %T to %s", value, TypeName(typeCode))
 		}
 		return buf, nil
 
@@ -518,7 +599,95 @@ func EncodeValueWithType(value interface{}, typeCode uint16) ([]byte, error) {
 			return nil, fmt.Errorf("cannot convert %T to STRING", value)
 		}
 
+	case TypeWString:
+		// WSTRING is UTF-16LE encoded with 2-byte null terminator
+		switch v := value.(type) {
+		case string:
+			buf := make([]byte, len(v)*2+2) // Each char becomes 2 bytes + null terminator
+			for i, r := range v {
+				buf[i*2] = byte(r)
+				buf[i*2+1] = byte(r >> 8)
+			}
+			// Last 2 bytes are already zero from make()
+			return buf, nil
+		default:
+			return nil, fmt.Errorf("cannot convert %T to WSTRING", value)
+		}
+
 	default:
 		return nil, fmt.Errorf("unsupported type code: %s", TypeName(typeCode))
 	}
+}
+
+// isSliceValue returns true if the value is a slice type that should be encoded as an array.
+func isSliceValue(value interface{}) bool {
+	switch value.(type) {
+	case []int32, []int64, []float32, []float64, []bool, []string, []byte:
+		return true
+	default:
+		return false
+	}
+}
+
+// encodeArrayValue encodes a slice of values for the given base type.
+func encodeArrayValue(value interface{}, baseType uint16) ([]byte, error) {
+	var result []byte
+
+	switch v := value.(type) {
+	case []int32:
+		for _, elem := range v {
+			encoded, err := EncodeValueWithType(elem, baseType)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []int64:
+		for _, elem := range v {
+			encoded, err := EncodeValueWithType(elem, baseType)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []float32:
+		for _, elem := range v {
+			encoded, err := EncodeValueWithType(elem, baseType)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []float64:
+		for _, elem := range v {
+			encoded, err := EncodeValueWithType(elem, baseType)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []bool:
+		for _, elem := range v {
+			encoded, err := EncodeValueWithType(elem, baseType)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []string:
+		for _, elem := range v {
+			encoded, err := EncodeValueWithType(elem, baseType)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, encoded...)
+		}
+	case []byte:
+		// Already in byte form, just return as-is
+		return v, nil
+	default:
+		return nil, fmt.Errorf("cannot convert %T to array of %s", value, TypeName(baseType))
+	}
+
+	return result, nil
 }

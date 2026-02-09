@@ -777,8 +777,23 @@ func (c *Client) Write(symbolName string, value interface{}) error {
 		return fmt.Errorf("symbol %q is read-only", symbolName)
 	}
 
-	// Encode value
-	data, err := EncodeValueWithType(value, entry.Info.TypeCode)
+	// Encode value - special handling for string arrays
+	var data []byte
+	if strSlice, ok := value.([]string); ok && (entry.Info.TypeCode == TypeString || entry.Info.TypeCode == TypeWString) {
+		// String array: need to pad each element to fixed size
+		// Get actual array element count from TypeName (e.g., "ARRAY [0..4] OF STRING")
+		arrayCount := parseArrayCountFromTypeName(entry.Info.TypeName)
+		if arrayCount < 1 {
+			arrayCount = len(strSlice) // Fallback to input length
+		}
+		elemSize := int(entry.Info.Size) / arrayCount
+		if elemSize < 1 {
+			elemSize = 81 // Default STRING size
+		}
+		data, err = encodeStringArray(strSlice, elemSize, entry.Info.TypeCode == TypeWString)
+	} else {
+		data, err = EncodeValueWithType(value, entry.Info.TypeCode)
+	}
 	if err != nil {
 		return fmt.Errorf("encode value: %w", err)
 	}
@@ -825,6 +840,43 @@ func (c *Client) Write(symbolName string, value interface{}) error {
 	}
 
 	return nil
+}
+
+// encodeStringArray encodes a string slice with fixed-size padding for each element.
+// This is needed for TwinCAT STRING arrays where each element has a fixed size.
+func encodeStringArray(strings []string, elemSize int, isWString bool) ([]byte, error) {
+	if elemSize <= 0 {
+		return nil, fmt.Errorf("invalid element size: %d", elemSize)
+	}
+
+	result := make([]byte, len(strings)*elemSize)
+
+	for i, s := range strings {
+		offset := i * elemSize
+		if isWString {
+			// WSTRING: UTF-16LE encoding with null terminator
+			// For now, just do simple ASCII to UTF-16LE conversion
+			maxChars := (elemSize - 2) / 2 // Reserve 2 bytes for null terminator
+			for j, r := range s {
+				if j >= maxChars {
+					break
+				}
+				result[offset+j*2] = byte(r)
+				result[offset+j*2+1] = 0
+			}
+		} else {
+			// STRING: null-terminated, pad rest with zeros
+			maxLen := elemSize - 1 // Reserve 1 byte for null terminator
+			copyLen := len(s)
+			if copyLen > maxLen {
+				copyLen = maxLen
+			}
+			copy(result[offset:offset+copyLen], s)
+			// Rest is already zero from make()
+		}
+	}
+
+	return result, nil
 }
 
 // getSymbolEntry retrieves a symbol entry from cache or discovers it from the PLC.
