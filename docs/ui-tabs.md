@@ -97,7 +97,7 @@ For Omron, also configure:
 
 ### Discovery
 
-Press `d` to discover Allen-Bradley PLCs on the local network. Discovery uses EtherNet/IP broadcast to find PLCs within 3 seconds. Select a discovered device to pre-fill the Add dialog.
+Press `d` to discover Logix, S7, Omron, or Beckhoff PLCs on the local network. Discovery uses EtherNet/IP broadcasts as well as UDP and TCP discovery to find PLCs within about 10 seconds. Select a discovered device to pre-fill the Add dialog.   Discovery may be finicky depending on your network topology and broadcast domain, especially for UDP discovered PLCs.   This is a limitation of networking technology and all known best practices to find and add PLC's have been implemented.
 
 ---
 
