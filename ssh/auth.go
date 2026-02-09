@@ -15,12 +15,6 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// AuthConfig holds SSH authentication configuration.
-type AuthConfig struct {
-	Password       string // Password for password authentication
-	AuthorizedKeys string // Path to authorized_keys file
-}
-
 // passwordCallback returns a gossh.PasswordCallback that validates against the configured password.
 // Uses constant-time comparison to prevent timing attacks.
 func passwordCallback(password string) func(conn gossh.ConnMetadata, pass []byte) (*gossh.Permissions, error) {

@@ -64,13 +64,12 @@ func (m *SharedManagers) GetPackMgr() *tagpack.Manager { return m.PackMgr }
 
 // Session represents an active SSH session.
 type Session struct {
-	channel  gossh.Channel
-	conn     *gossh.ServerConn
-	ptyReq   *ptyRequest
-	tty      *SSHChannelTty
-	winCh    chan Window
-	closeMu  sync.Mutex
-	closed   bool
+	channel gossh.Channel
+	conn    *gossh.ServerConn
+	ptyReq  *ptyRequest
+	tty     *SSHChannelTty
+	closeMu sync.Mutex
+	closed  bool
 }
 
 // RemoteAddr returns the remote address of the session.
@@ -78,17 +77,7 @@ func (s *Session) RemoteAddr() net.Addr {
 	return s.conn.RemoteAddr()
 }
 
-// Write writes data to the session.
-func (s *Session) Write(data []byte) (int, error) {
-	return s.channel.Write(data)
-}
-
-// Read reads data from the session.
-func (s *Session) Read(data []byte) (int, error) {
-	return s.channel.Read(data)
-}
-
-// Close closes the session.
+// Close closes the session channel with proper SSH protocol signaling.
 func (s *Session) Close() error {
 	s.closeMu.Lock()
 	defer s.closeMu.Unlock()
@@ -96,13 +85,26 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
-	if s.winCh != nil {
-		close(s.winCh)
-	}
 	if s.tty != nil {
 		s.tty.Stop()
 	}
+	// Send exit-status to signal shell has ended (SSH protocol)
+	// Status 0 = success. This helps the client know the session ended cleanly.
+	exitStatus := []byte{0, 0, 0, 0} // uint32 big-endian
+	s.channel.SendRequest("exit-status", false, exitStatus)
+	// Close write side to send EOF, then close the channel
+	s.channel.CloseWrite()
 	return s.channel.Close()
+}
+
+// CloseConnection closes the underlying SSH connection.
+// This should be called after screen.Fini() to ensure terminal restore
+// sequences are sent before the connection is terminated.
+func (s *Session) CloseConnection() error {
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+	return nil
 }
 
 // Window represents terminal window dimensions.
@@ -215,7 +217,6 @@ func (s *Server) Start() error {
 	}
 	s.listener = listener
 	s.running = true
-	s.stopChan = make(chan struct{})
 	s.mu.Unlock()
 
 	tui.DebugLogSSH("Server started on port %d", s.config.Port)
@@ -281,7 +282,6 @@ func (s *Server) handleSession(conn *gossh.ServerConn, channel gossh.Channel, re
 	session := &Session{
 		channel: channel,
 		conn:    conn,
-		winCh:   make(chan Window, 8),
 	}
 
 	remoteAddr := conn.RemoteAddr().String()
@@ -322,14 +322,8 @@ func (s *Server) handleSession(conn *gossh.ServerConn, channel gossh.Channel, re
 				tui.DebugLogSSH("Invalid window-change from %s: %v", remoteAddr, err)
 				continue
 			}
-			// Update the tty's window size if it exists
 			if session.tty != nil {
 				session.tty.SetWindowSize(win.Width, win.Height)
-			}
-			// Non-blocking send for legacy handlers
-			select {
-			case session.winCh <- win:
-			default:
 			}
 
 		case "env":
@@ -390,10 +384,20 @@ func (s *Server) runSession(session *Session) {
 		return
 	}
 
+	// Track if screen was finalized in disconnect callback
+	screenFinalized := false
+
 	// Set up disconnect callback - only closes THIS session
 	app.SetOnDisconnect(func() {
 		tui.DebugLogSSH("Disconnect requested from %s", remoteAddr)
-		app.Stop()
+		screenFinalized = true
+		// Send terminal restore sequences BEFORE closing the channel.
+		// These sequences exit alternate screen mode and show the cursor.
+		// We send them directly because screen.Fini() will deadlock if called here,
+		// and won't work after we close the channel.
+		session.channel.Write([]byte("\x1b[?1049l\x1b[?25h\x1b[0m"))
+		// Now close the channel to interrupt the blocked Read() in tcell's input goroutine
+		tty.Close()
 	})
 
 	// Run TUI (blocks until session ends)
@@ -404,7 +408,11 @@ func (s *Server) runSession(session *Session) {
 
 	// Clean up
 	app.Shutdown()
-	screen.Fini()
+	// Only finalize screen if not already done in disconnect callback
+	if !screenFinalized {
+		screen.Fini()
+	}
+	session.CloseConnection()
 	s.cleanupSession(session, remoteAddr)
 }
 

@@ -806,18 +806,21 @@ func (a *App) SaveConfig() error {
 
 // Run starts the TUI application.
 func (a *App) Run() error {
-	// Set up manager change callback to trigger UI updates
-	a.manager.SetOnChange(func() {
-		a.app.QueueUpdateDraw(func() {
-			a.plcsTab.Refresh()
-			a.browserTab.Refresh()
+	// Set up manager callbacks for non-daemon mode only.
+	// In daemon mode, registerListeners() sets up multi-listener callbacks instead.
+	// Using legacy callbacks in daemon mode causes races when sessions disconnect.
+	if !a.daemonMode {
+		a.manager.SetOnChange(func() {
+			a.app.QueueUpdateDraw(func() {
+				a.plcsTab.Refresh()
+				a.browserTab.Refresh()
+			})
 		})
-	})
 
-	// Set up manager logging to go to debug panel
-	a.manager.SetOnLog(func(format string, args ...interface{}) {
-		DebugLog(format, args...)
-	})
+		a.manager.SetOnLog(func(format string, args ...interface{}) {
+			DebugLog(format, args...)
+		})
+	}
 
 	// Refresh all tabs to reflect current state after auto-connect/auto-start
 	a.plcsTab.Refresh()
@@ -947,21 +950,20 @@ func (a *App) Shutdown() {
 	// Unregister multi-listener callbacks (for shared backend mode)
 	a.unregisterListeners()
 
-	// Clear legacy callbacks to prevent updates during shutdown
-	a.manager.SetOnChange(nil)
-	a.manager.SetOnValueChange(nil)
-	a.manager.SetOnLog(nil)
-
 	// Stop the TUI immediately to prevent writes to closed PTY
 	// This is non-blocking - it just signals the event loop to stop
 	a.app.Stop()
 
-	// In shared backend mode (daemon with multi-SSH), don't stop shared services
-	// Only the main daemon process should stop those
-	if a.changeListenerID != "" || a.debugListenerID != "" {
-		// This is a shared backend session - don't stop services
+	// In daemon mode (shared backend), don't clear legacy callbacks or stop services.
+	// Other SSH sessions may still be using them.
+	if a.daemonMode {
 		return
 	}
+
+	// Clear legacy callbacks to prevent updates during shutdown (non-daemon mode only)
+	a.manager.SetOnChange(nil)
+	a.manager.SetOnValueChange(nil)
+	a.manager.SetOnLog(nil)
 
 	// Stop all services with a single timeout
 	// All these operations can potentially block, so wrap them together

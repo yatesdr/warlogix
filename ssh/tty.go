@@ -18,7 +18,6 @@ type SSHChannelTty struct {
 	mu       sync.RWMutex
 	resizeCb func()
 	resizeMu sync.Mutex
-	stopChan chan struct{}
 	stopped  bool
 }
 
@@ -29,11 +28,10 @@ func NewSSHChannelTty(channel gossh.Channel, term string, initialWidth, initialH
 		term = "xterm-256color"
 	}
 	return &SSHChannelTty{
-		channel:  channel,
-		term:     term,
-		width:    initialWidth,
-		height:   initialHeight,
-		stopChan: make(chan struct{}),
+		channel: channel,
+		term:    term,
+		width:   initialWidth,
+		height:  initialHeight,
 	}
 }
 
@@ -49,13 +47,13 @@ func (t *SSHChannelTty) Start() error {
 }
 
 // Stop signals that the tty should stop.
+// It sets a flag that causes Read() to return EOF on the next call.
+// The channel is NOT closed here - it stays open so screen.Fini() can
+// send terminal restore sequences.
 func (t *SSHChannelTty) Stop() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !t.stopped {
-		t.stopped = true
-		close(t.stopChan)
-	}
+	t.stopped = true
 	return nil
 }
 
@@ -101,7 +99,24 @@ func (t *SSHChannelTty) SetWindowSize(width, height int) {
 
 // Read reads from the SSH channel.
 func (t *SSHChannelTty) Read(b []byte) (int, error) {
-	return t.channel.Read(b)
+	// Check if stopped before reading
+	t.mu.RLock()
+	stopped := t.stopped
+	t.mu.RUnlock()
+	if stopped {
+		return 0, io.EOF
+	}
+	n, err := t.channel.Read(b)
+	// If the channel was closed while reading, return EOF
+	if err != nil {
+		t.mu.RLock()
+		stopped = t.stopped
+		t.mu.RUnlock()
+		if stopped {
+			return 0, io.EOF
+		}
+	}
+	return n, err
 }
 
 // Write writes to the SSH channel.
@@ -120,11 +135,6 @@ func (t *SSHChannelTty) Stopped() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.stopped
-}
-
-// StopChan returns a channel that is closed when the tty is stopped.
-func (t *SSHChannelTty) StopChan() <-chan struct{} {
-	return t.stopChan
 }
 
 // Verify SSHChannelTty implements tcell.Tty
