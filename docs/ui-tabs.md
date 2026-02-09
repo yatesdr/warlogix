@@ -176,7 +176,7 @@ By default, all services are enabled. Disable services to reduce network traffic
 
 <img width="390" height="183" alt="image" src="https://github.com/user-attachments/assets/edbc5d29-5709-4d14-8c15-89021fc3df97" />
 
-When you select a UDT tag, press `Enter` to expand it and see its members. Each member can be independently enabled for publishing.
+When you select a UDT tag, press `Enter` to expand it and see its members. Each member can be independently enabled for publishing, or the entire UDT can be published, or some combination of both if desired.
 
 **Ignore List:** Mark volatile UDT members (timestamps, counters, heartbeats) as "ignored" using `i`. Ignored members are still included in published data but don't trigger republishing when they change. This reduces message volume for frequently-changing status structures.
 
