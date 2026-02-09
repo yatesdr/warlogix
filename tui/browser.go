@@ -1754,12 +1754,28 @@ func (t *BrowserTab) applyFilter(filterText string) {
 	t.loadTags() // Rebuild tree with filter applied
 }
 
-// matchesFilter returns true if the tag name matches the current filter.
+// matchesFilter returns true if the tag name or alias matches the current filter.
 func (t *BrowserTab) matchesFilter(tagName string) bool {
 	if t.filterText == "" {
 		return true
 	}
-	return strings.Contains(strings.ToLower(tagName), t.filterText)
+	// Check tag name
+	if strings.Contains(strings.ToLower(tagName), t.filterText) {
+		return true
+	}
+	// Also check alias for manually-configured tags
+	cfg := t.app.config.FindPLC(t.selectedPLC)
+	if cfg != nil {
+		for _, sel := range cfg.Tags {
+			if sel.Name == tagName && sel.Alias != "" {
+				if strings.Contains(strings.ToLower(sel.Alias), t.filterText) {
+					return true
+				}
+				break
+			}
+		}
+	}
+	return false
 }
 
 // isManualPLC returns true if the currently selected PLC is a non-discovery type.

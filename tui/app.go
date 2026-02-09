@@ -281,6 +281,14 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		return event
 	}
 
+	// Don't intercept keys when an input field or dropdown has focus
+	// Note: DropDown uses a List internally when open, so we check for that too
+	focused := a.app.GetFocus()
+	switch focused.(type) {
+	case *tview.InputField, *tview.DropDown, *tview.List:
+		return event
+	}
+
 	// Handle quit: Shift+Q (uppercase Q) - only when not in a modal
 	if event.Rune() == 'Q' {
 		if a.daemonMode {
