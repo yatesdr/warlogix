@@ -584,6 +584,7 @@ type MQTTData struct {
 	Name        string
 	Broker      string
 	Port        int
+	UseTLS      bool
 	Status      string
 	StatusClass string
 	Enabled     bool
@@ -609,6 +610,7 @@ func (h *Handlers) getMQTTData() []MQTTData {
 			Name:        mqttCfg.Name,
 			Broker:      mqttCfg.Broker,
 			Port:        mqttCfg.Port,
+			UseTLS:      mqttCfg.UseTLS,
 			Status:      status,
 			StatusClass: statusClass,
 			Enabled:     mqttCfg.Enabled,

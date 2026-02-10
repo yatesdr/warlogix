@@ -104,10 +104,10 @@ function appendLogEntry(data) {
     logContainer.appendChild(div);
 
     // Trim to max lines
-    var lines = logContainer.querySelectorAll('.log-line');
-    while (lines.length > MAX_LOG_LINES) {
-        lines[0].remove();
-        lines = logContainer.querySelectorAll('.log-line');
+    var lines = logContainer.querySelectorAll('.log-line:not(.empty)');
+    var excess = lines.length - MAX_LOG_LINES;
+    for (var i = 0; i < excess; i++) {
+        lines[i].remove();
     }
 
     // Update count

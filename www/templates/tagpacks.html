@@ -241,6 +241,7 @@ function toggleMemberIgnore(packName, index, checkbox) {
 
 function removeMember(event, packName, index) {
     event.stopPropagation();
+    if (!confirm('Remove this member from "' + packName + '"?')) return;
     WarLink.api.del('/htmx/tagpacks/' + encodeURIComponent(packName) + '/members/' + index).then(function() {
         reloadPackMembers(packName);
         WarLink.toast('Member removed', 'success');

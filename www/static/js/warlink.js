@@ -221,36 +221,90 @@ var WarLink = (function() {
         var currentPLC = opts.plc || '';
         var currentValue = opts.value || '';
         var allowEmpty = opts.allowEmpty || false;
-        var placeholder = opts.placeholder || 'Search tags...';
+        var placeholder = opts.placeholder || 'Select a tag...';
         var onSelect = opts.onSelect || function() {};
         var allTags = [];
         var filteredTags = [];
         var highlightIndex = -1;
         var isOpen = false;
         var maxVisible = 200;
+        var loading = false;
 
         // Build DOM
         var wrapper = document.createElement('div');
         wrapper.className = 'tag-picker';
 
-        var input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'tag-picker-input';
-        input.placeholder = placeholder;
-        if (currentValue) input.value = currentValue;
+        var display = document.createElement('div');
+        display.className = 'tag-picker-display';
+        display.tabIndex = 0;
+
+        var displayText = document.createElement('span');
+        displayText.className = 'tag-picker-display-text';
+        displayText.textContent = currentValue || placeholder;
+        if (!currentValue) displayText.classList.add('placeholder');
+
+        var arrow = document.createElement('span');
+        arrow.className = 'tag-picker-arrow';
+        arrow.innerHTML = '&#9662;';
+
+        display.appendChild(displayText);
+        display.appendChild(arrow);
 
         var dropdown = document.createElement('div');
         dropdown.className = 'tag-picker-dropdown';
         dropdown.style.display = 'none';
 
+        var filterInput = document.createElement('input');
+        filterInput.type = 'text';
+        filterInput.className = 'tag-picker-filter';
+        filterInput.placeholder = 'Type to filter...';
+
         var list = document.createElement('div');
         list.className = 'tag-picker-list';
-        dropdown.appendChild(list);
 
-        wrapper.appendChild(input);
+        var status = document.createElement('div');
+        status.className = 'tag-picker-status';
+
+        dropdown.appendChild(filterInput);
+        dropdown.appendChild(list);
+        dropdown.appendChild(status);
+
+        wrapper.appendChild(display);
         wrapper.appendChild(dropdown);
         containerEl.innerHTML = '';
         containerEl.appendChild(wrapper);
+
+        function updateDisplay() {
+            if (currentValue) {
+                displayText.textContent = currentValue;
+                displayText.classList.remove('placeholder');
+            } else {
+                displayText.textContent = placeholder;
+                displayText.classList.add('placeholder');
+            }
+        }
+
+        function updateStatus() {
+            if (loading) {
+                status.textContent = 'Loading tags...';
+                status.style.display = '';
+            } else if (!currentPLC) {
+                status.textContent = 'Select a PLC first';
+                status.style.display = '';
+            } else if (allTags.length === 0) {
+                status.textContent = 'No tags available';
+                status.style.display = '';
+            } else if (filteredTags.length === 0) {
+                status.textContent = 'No matching tags';
+                status.style.display = '';
+            } else if (filteredTags.length > maxVisible) {
+                status.textContent = 'Showing ' + maxVisible + ' of ' + filteredTags.length + ' tags';
+                status.style.display = '';
+            } else {
+                status.textContent = filteredTags.length + ' tag' + (filteredTags.length !== 1 ? 's' : '');
+                status.style.display = '';
+            }
+        }
 
         function fetchTags() {
             if (!currentPLC) {
@@ -263,18 +317,22 @@ var WarLink = (function() {
                 render();
                 return;
             }
+            loading = true;
+            render();
             api.get('/htmx/plc-tags/' + encodeURIComponent(currentPLC)).then(function(tags) {
                 allTags = tags || [];
                 tagPickerCache[currentPLC] = allTags;
+                loading = false;
                 render();
             }).catch(function() {
                 allTags = [];
+                loading = false;
                 render();
             });
         }
 
         function render() {
-            var query = input.value.toLowerCase();
+            var query = filterInput.value.toLowerCase();
             filteredTags = [];
 
             if (allowEmpty) {
@@ -291,52 +349,61 @@ var WarLink = (function() {
             list.innerHTML = '';
             var limit = Math.min(filteredTags.length, maxVisible);
 
-            if (filteredTags.length === 0) {
-                var empty = document.createElement('div');
-                empty.className = 'tag-picker-empty';
-                empty.textContent = currentPLC ? 'No matching tags' : 'Select a PLC first';
-                list.appendChild(empty);
-            } else {
-                if (filteredTags.length > maxVisible) {
-                    var hint = document.createElement('div');
-                    hint.className = 'tag-picker-empty';
-                    hint.textContent = 'Showing ' + maxVisible + ' of ' + filteredTags.length + ' — type to filter...';
-                    list.appendChild(hint);
-                }
-                for (var j = 0; j < limit; j++) {
-                    var item = document.createElement('div');
-                    item.className = 'tag-picker-item';
-                    if (j === highlightIndex) item.classList.add('highlighted');
-                    item.dataset.index = j;
+            for (var j = 0; j < limit; j++) {
+                var item = document.createElement('div');
+                item.className = 'tag-picker-item';
+                if (filteredTags[j].name === currentValue) item.classList.add('current');
+                if (j === highlightIndex) item.classList.add('highlighted');
+                item.dataset.index = j;
 
-                    var nameSpan = document.createElement('span');
-                    nameSpan.className = 'tag-picker-item-name';
-                    nameSpan.textContent = filteredTags[j].name || '(none)';
+                var nameSpan = document.createElement('span');
+                nameSpan.className = 'tag-picker-item-name';
+                nameSpan.textContent = filteredTags[j].name || '(none)';
 
-                    var typeSpan = document.createElement('span');
-                    typeSpan.className = 'tag-picker-item-type';
-                    typeSpan.textContent = filteredTags[j].type;
+                var typeSpan = document.createElement('span');
+                typeSpan.className = 'tag-picker-item-type';
+                typeSpan.textContent = filteredTags[j].type;
 
-                    item.appendChild(nameSpan);
-                    item.appendChild(typeSpan);
-                    list.appendChild(item);
-                }
+                item.appendChild(nameSpan);
+                item.appendChild(typeSpan);
+                list.appendChild(item);
             }
 
             if (highlightIndex >= limit) highlightIndex = limit - 1;
+            updateStatus();
+        }
+
+        function positionDropdown() {
+            // Reset to default (below)
+            wrapper.classList.remove('dropup');
+            var rect = display.getBoundingClientRect();
+            var spaceBelow = window.innerHeight - rect.bottom;
+            var dropdownHeight = Math.min(dropdown.scrollHeight, 320);
+            if (spaceBelow < dropdownHeight && rect.top > spaceBelow) {
+                wrapper.classList.add('dropup');
+            }
         }
 
         function open() {
             if (isOpen) return;
             isOpen = true;
+            wrapper.classList.add('open');
             dropdown.style.display = '';
+            filterInput.value = '';
             highlightIndex = -1;
             render();
+            positionDropdown();
+            filterInput.focus();
+            // Scroll current value into view
+            var cur = list.querySelector('.tag-picker-item.current');
+            if (cur) cur.scrollIntoView({block: 'nearest'});
         }
 
         function close() {
             if (!isOpen) return;
             isOpen = false;
+            wrapper.classList.remove('open');
+            wrapper.classList.remove('dropup');
             dropdown.style.display = 'none';
         }
 
@@ -344,32 +411,30 @@ var WarLink = (function() {
             if (idx < 0 || idx >= filteredTags.length) return;
             var tag = filteredTags[idx];
             currentValue = tag.name;
-            input.value = tag.name;
+            updateDisplay();
             close();
             onSelect(tag.name, tag.type);
         }
 
-        // Event: input focus
-        input.addEventListener('focus', function() {
-            open();
+        // Event: click display to toggle
+        display.addEventListener('click', function() {
+            if (isOpen) { close(); } else { open(); }
+        });
+        display.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (!isOpen) open();
+            }
         });
 
-        // Event: input typing
-        input.addEventListener('input', function() {
+        // Event: filter typing
+        filterInput.addEventListener('input', function() {
             highlightIndex = -1;
-            if (!isOpen) open();
             render();
         });
 
-        // Event: keyboard navigation
-        input.addEventListener('keydown', function(e) {
-            if (!isOpen) {
-                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-                    open();
-                    e.preventDefault();
-                }
-                return;
-            }
+        // Event: keyboard navigation in filter
+        filterInput.addEventListener('keydown', function(e) {
             var limit = Math.min(filteredTags.length, maxVisible);
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
@@ -388,7 +453,7 @@ var WarLink = (function() {
                 }
             } else if (e.key === 'Escape') {
                 close();
-                input.value = currentValue;
+                display.focus();
             }
         });
 
@@ -409,28 +474,25 @@ var WarLink = (function() {
         function onDocClick(e) {
             if (!wrapper.contains(e.target)) {
                 close();
-                // Restore current value if input was changed but not selected
-                if (input.value !== currentValue) {
-                    input.value = currentValue;
-                }
             }
         }
         document.addEventListener('mousedown', onDocClick);
 
         // Initial fetch
         if (currentPLC) fetchTags();
+        updateDisplay();
 
         return {
             setPLC: function(plcName) {
                 if (plcName === currentPLC) return;
                 currentPLC = plcName;
                 currentValue = '';
-                input.value = '';
+                updateDisplay();
                 fetchTags();
             },
             setValue: function(val) {
                 currentValue = val || '';
-                input.value = currentValue;
+                updateDisplay();
             },
             getValue: function() {
                 return currentValue;
