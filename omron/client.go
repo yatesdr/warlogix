@@ -1000,15 +1000,33 @@ func (c *Client) sendCIPRequest(req cip.Request) ([]byte, error) {
 	respData := resp.Items[1].Data
 	logging.DebugRX("eip", respData)
 
-	// Log CIP response header if available
-	if len(respData) >= 4 {
-		replyService := respData[0]
-		status := respData[2]
-		logging.DebugLog("Omron", "sendCIPRequest response: service=0x%02X status=0x%02X dataLen=%d",
-			replyService, status, len(respData))
+	// Parse and strip the CIP reply header:
+	//   [0] reply service code (original | 0x80)
+	//   [1] reserved
+	//   [2] general status
+	//   [3] extended status size (in 16-bit words)
+	//   [4..] data
+	if len(respData) < 4 {
+		return nil, fmt.Errorf("CIP response too short: %d bytes", len(respData))
 	}
 
-	return respData, nil
+	status := respData[2]
+	extStatusSize := int(respData[3]) * 2 // size in bytes (words * 2)
+	dataStart := 4 + extStatusSize
+
+	logging.DebugLog("Omron", "sendCIPRequest response: service=0x%02X status=0x%02X extStatus=%d dataLen=%d",
+		respData[0], status, extStatusSize, len(respData))
+
+	// Status 0x00 = success, 0x06 = partial transfer (OK for reads)
+	if status != 0x00 && status != 0x06 {
+		return nil, fmt.Errorf("CIP error 0x%02X", status)
+	}
+
+	if dataStart > len(respData) {
+		return nil, fmt.Errorf("CIP response truncated: expected %d bytes, got %d", dataStart, len(respData))
+	}
+
+	return respData[dataStart:], nil
 }
 
 // Write writes a value to an address.

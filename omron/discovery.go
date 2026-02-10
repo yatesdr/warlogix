@@ -37,15 +37,6 @@ const (
 	// Attempting to use 0x55 returns CIP status 0x08 ("service not supported").
 )
 
-// CIP status codes.
-const (
-	statusSuccess             byte = 0x00 // Success
-	statusPartialTransfer     byte = 0x06 // More data available (pagination - not used by Omron)
-	statusPathDestUnknown     byte = 0x05 // Path destination unknown
-	statusServiceNotSupported byte = 0x08 // Service not supported
-	statusAttrNotSupported    byte = 0x14 // Attribute not supported
-	statusObjectNotExists     byte = 0x16 // Object does not exist
-)
 
 // listSymbols queries the Symbol Object (class 0x6B) for tag information.
 // Uses Omron-specific instance-by-instance iteration with Get Attributes All (0x01).
@@ -139,29 +130,13 @@ func (c *Client) getSymbolTableCount() uint32 {
 		return 0
 	}
 
-	// Parse CIP response header
-	if len(respData) < 4 {
-		logging.DebugLog("EIP/Discovery", "Symbol table response too short: %d bytes", len(respData))
+	if len(respData) == 0 {
+		logging.DebugLog("EIP/Discovery", "Symbol table response has no data")
 		return 0
 	}
 
-	status := respData[2]
-	if status != statusSuccess {
-		logging.DebugLog("EIP/Discovery", "Symbol table query status error: 0x%02X (%s)",
-			status, cipStatusMessage(status))
-		return 0
-	}
-
-	// Skip CIP header to get attribute data
-	addlStatusSize := int(respData[3]) * 2
-	dataStart := 4 + addlStatusSize
-	if dataStart >= len(respData) {
-		logging.DebugLog("EIP/Discovery", "Symbol table response has no data after header")
-		return 0
-	}
-
-	attrData := respData[dataStart:]
-	logging.DebugLog("EIP/Discovery", "Symbol table attributes (%d bytes): %X", len(attrData), attrData)
+	logging.DebugLog("EIP/Discovery", "Symbol table attributes (%d bytes): %X", len(respData), respData)
+	attrData := respData
 
 	// The Symbol Table class typically returns 4 UINT values (8 bytes):
 	// - Attribute 1: Number of instances
@@ -203,36 +178,12 @@ func (c *Client) getSymbolInstance(instance uint32) (TagInfo, error) {
 		return tag, fmt.Errorf("instance %d: %w", instance, err)
 	}
 
-	// Parse CIP response header
-	if len(respData) < 4 {
-		return tag, fmt.Errorf("instance %d: response too short (%d bytes)", instance, len(respData))
-	}
-
-	replyService := respData[0]
-	status := respData[2]
-	addlStatusSize := int(respData[3]) * 2
-
-	// Verify it's a reply to Get Attributes All
-	if replyService != (svcGetAttributesAll | 0x80) {
-		return tag, fmt.Errorf("instance %d: unexpected service 0x%02X", instance, replyService)
-	}
-
-	// Check status
-	if status != statusSuccess {
-		return tag, fmt.Errorf("instance %d: CIP status 0x%02X (%s)",
-			instance, status, cipStatusMessage(status))
-	}
-
-	// Skip header to get attribute data
-	dataStart := 4 + addlStatusSize
-	if dataStart >= len(respData) {
+	if len(respData) == 0 {
 		return tag, fmt.Errorf("instance %d: no attribute data", instance)
 	}
 
-	attrData := respData[dataStart:]
-
 	// Parse Omron-specific symbol attributes
-	tag = c.parseOmronSymbolAttributes(attrData, instance)
+	tag = c.parseOmronSymbolAttributes(respData, instance)
 
 	return tag, nil
 }
