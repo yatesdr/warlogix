@@ -1,4 +1,8 @@
 // Package api provides a REST API server for PLC data.
+//
+// Deprecated: The standalone api.Server is deprecated.
+// Use web.Server which mounts the API via api.NewRouter().
+// This file is kept for backwards compatibility during migration.
 package api
 
 import (

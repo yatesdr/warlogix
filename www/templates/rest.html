@@ -1,0 +1,92 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>REST API</h1>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>API Status</h2>
+    </div>
+    <div class="card-body">
+        <table class="info-table">
+            <tr>
+                <th>Enabled:</th>
+                <td><span class="status-badge {{if .APIEnabled}}status-connected{{else}}status-disconnected{{end}}">{{if .APIEnabled}}Yes{{else}}No{{end}}</span></td>
+            </tr>
+            <tr>
+                <th>Host:</th>
+                <td>{{.Host}}</td>
+            </tr>
+            <tr>
+                <th>Port:</th>
+                <td>{{.Port}}</td>
+            </tr>
+            <tr>
+                <th>Base URL:</th>
+                <td><code>http://{{.Host}}:{{.Port}}/api</code></td>
+            </tr>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>API Endpoints</h2>
+    </div>
+    <div class="card-body">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Method</th>
+                    <th>Endpoint</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><span class="method-get">GET</span></td>
+                    <td><code>/api/</code></td>
+                    <td>List all PLCs</td>
+                </tr>
+                <tr>
+                    <td><span class="method-get">GET</span></td>
+                    <td><code>/api/{plc}</code></td>
+                    <td>Get PLC details</td>
+                </tr>
+                <tr>
+                    <td><span class="method-get">GET</span></td>
+                    <td><code>/api/{plc}/health</code></td>
+                    <td>Get PLC health status</td>
+                </tr>
+                <tr>
+                    <td><span class="method-get">GET</span></td>
+                    <td><code>/api/{plc}/tags</code></td>
+                    <td>List all tags</td>
+                </tr>
+                <tr>
+                    <td><span class="method-get">GET</span></td>
+                    <td><code>/api/{plc}/tags/{tag}</code></td>
+                    <td>Get tag value</td>
+                </tr>
+                <tr>
+                    <td><span class="method-post">POST</span></td>
+                    <td><code>/api/{plc}/write</code></td>
+                    <td>Write tag value</td>
+                </tr>
+                <tr>
+                    <td><span class="method-get">GET</span></td>
+                    <td><code>/api/tagpack</code></td>
+                    <td>List all TagPacks</td>
+                </tr>
+                <tr>
+                    <td><span class="method-get">GET</span></td>
+                    <td><code>/api/tagpack/{pack}</code></td>
+                    <td>Get TagPack values</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{{template "footer" .}}

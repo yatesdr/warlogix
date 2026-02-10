@@ -1,0 +1,140 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>Debug Log</h1>
+</div>
+
+<div class="action-bar">
+    <div class="filter-bar">
+        <span class="filter-label">Filter:</span>
+        <select id="level-filter" onchange="filterLogs()">
+            <option value="">All</option>
+            <option value="ERROR">ERROR</option>
+            <option value="MQTT">MQTT</option>
+            <option value="VALKEY">VALKEY</option>
+            <option value="KAFKA">KAFKA</option>
+            <option value="SSH">SSH</option>
+            <option value="LOGIX">LOGIX</option>
+        </select>
+        <span id="log-count" class="filter-label"></span>
+    </div>
+    {{if .IsAdmin}}
+    <button class="btn btn-sm" onclick="clearLogs()">Clear</button>
+    {{end}}
+</div>
+
+<div id="debug-log" class="debug-log-container">
+    {{range .LogEntries}}
+    <div class="log-line" data-level="{{.Level}}">
+        <span class="log-timestamp">{{.Timestamp}}</span>
+        {{if .Level}}<span class="log-level log-level-{{.Level | lower}}">{{.Level}}</span>{{end}}
+        <span class="log-message">{{.Message}}</span>
+    </div>
+    {{else}}
+    <div class="log-line empty" id="empty-log">No log entries</div>
+    {{end}}
+</div>
+
+<script>
+var MAX_LOG_LINES = 1000;
+var autoScroll = true;
+var logContainer = document.getElementById('debug-log');
+var currentFilter = '';
+
+// Track scroll position for auto-scroll
+logContainer.addEventListener('scroll', function() {
+    var atBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 30;
+    autoScroll = atBottom;
+});
+
+function filterLogs() {
+    currentFilter = document.getElementById('level-filter').value;
+    var lines = logContainer.querySelectorAll('.log-line:not(.empty)');
+    var visible = 0;
+    lines.forEach(function(line) {
+        if (!currentFilter || line.dataset.level === currentFilter) {
+            line.style.display = '';
+            visible++;
+        } else {
+            line.style.display = 'none';
+        }
+    });
+    updateCount(visible, lines.length);
+}
+
+function updateCount(visible, total) {
+    var el = document.getElementById('log-count');
+    if (currentFilter) {
+        el.textContent = visible + ' / ' + total + ' entries';
+    } else {
+        el.textContent = total + ' entries';
+    }
+}
+
+function clearLogs() {
+    WarLink.api.post('/htmx/debug/clear').then(function() {
+        logContainer.innerHTML = '<div class="log-line empty" id="empty-log">No log entries</div>';
+        updateCount(0, 0);
+    }).catch(function(err) {
+        WarLink.toast('Error clearing logs: ' + err.message, 'error');
+    });
+}
+
+function appendLogEntry(data) {
+    // Remove empty placeholder
+    var empty = document.getElementById('empty-log');
+    if (empty) empty.remove();
+
+    var div = document.createElement('div');
+    div.className = 'log-line';
+    div.dataset.level = data.level || '';
+
+    var html = '<span class="log-timestamp">' + WarLink.escapeHtml(data.timestamp) + '</span>';
+    if (data.level) {
+        html += '<span class="log-level log-level-' + data.level.toLowerCase() + '">' + WarLink.escapeHtml(data.level) + '</span>';
+    }
+    html += '<span class="log-message">' + WarLink.escapeHtml(data.message) + '</span>';
+    div.innerHTML = html;
+
+    // Apply current filter
+    if (currentFilter && data.level !== currentFilter) {
+        div.style.display = 'none';
+    }
+
+    logContainer.appendChild(div);
+
+    // Trim to max lines
+    var lines = logContainer.querySelectorAll('.log-line');
+    while (lines.length > MAX_LOG_LINES) {
+        lines[0].remove();
+        lines = logContainer.querySelectorAll('.log-line');
+    }
+
+    // Update count
+    var allLines = logContainer.querySelectorAll('.log-line:not(.empty)');
+    var visibleLines = currentFilter ? logContainer.querySelectorAll('.log-line:not(.empty):not([style*="display: none"])') : allLines;
+    updateCount(visibleLines.length, allLines.length);
+
+    // Auto-scroll if at bottom
+    if (autoScroll) {
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+}
+
+// SSE connection for debug logs
+WarLink.createSSE('/events/republisher', {
+    onDebugLog: function(data) {
+        appendLogEntry(data);
+    }
+});
+
+// Initial count
+(function() {
+    var lines = logContainer.querySelectorAll('.log-line:not(.empty)');
+    updateCount(lines.length, lines.length);
+    // Scroll to bottom on load
+    logContainer.scrollTop = logContainer.scrollHeight;
+})();
+</script>
+
+{{template "footer" .}}

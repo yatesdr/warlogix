@@ -1,0 +1,434 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>Kafka Clusters</h1>
+</div>
+
+{{if .IsAdmin}}
+<div class="action-bar">
+    <button class="btn btn-primary" onclick="showAddModal()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;vertical-align:-2px">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Add Cluster
+    </button>
+</div>
+{{end}}
+
+<div id="kafka-container">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Brokers</th>
+                <th>TLS</th>
+                <th>SASL</th>
+                <th>Status</th>
+                {{if .IsAdmin}}<th>Actions</th>{{end}}
+            </tr>
+        </thead>
+        <tbody id="kafka-tbody">
+            {{range .Clusters}}
+            <tr class="kafka-row" data-name="{{.Name}}" data-status="{{.Status}}" data-status-class="{{.StatusClass}}">
+                <td>{{.Name}}</td>
+                <td>{{.Brokers}}</td>
+                <td>{{if .Enabled}}Yes{{else}}No{{end}}</td>
+                <td>-</td>
+                <td>
+                    {{if $.IsAdmin}}
+                    <button class="status-indicator {{.StatusClass}}"
+                            onclick="toggleKafka('{{.Name}}', '{{.Status}}')"
+                            title="{{if eq .Status "Connected"}}Click to disconnect{{else}}Click to connect{{end}}">
+                        {{.Status}}
+                    </button>
+                    {{else}}
+                    <span class="status-badge {{.StatusClass}}">{{.Status}}</span>
+                    {{end}}
+                </td>
+                {{if $.IsAdmin}}
+                <td class="actions">
+                    <button class="btn-icon" title="Edit" onclick="showEditModal('{{.Name}}')">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/>
+                            <path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/>
+                        </svg>
+                    </button>
+                    <button class="btn-icon btn-icon-danger" title="Delete" onclick="deleteKafka('{{.Name}}')">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/>
+                            <path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                            <path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                            <path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/>
+                        </svg>
+                    </button>
+                </td>
+                {{end}}
+            </tr>
+            {{else}}
+            <tr id="empty-row">
+                <td colspan="{{if .IsAdmin}}6{{else}}5{{end}}" class="empty-cell">No Kafka clusters configured</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+
+<!-- Add Modal -->
+<div id="kafka-add-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Add Kafka Cluster</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('kafka-add-modal')">&times;</button>
+        </div>
+        <form id="kafka-add-form" onsubmit="addKafka(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="add-name" required placeholder="my-cluster">
+                </div>
+                <div class="form-group">
+                    <label>Brokers (comma-separated)</label>
+                    <input type="text" id="add-brokers" required placeholder="broker1:9092, broker2:9092">
+                </div>
+                <div class="form-group">
+                    <label>Selector (sub-namespace)</label>
+                    <input type="text" id="add-selector" placeholder="optional">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-tls"> Use TLS
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-tls-skip-verify"> Skip TLS Verify
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>SASL Mechanism</label>
+                    <select id="add-sasl-mechanism">
+                        <option value="">None</option>
+                        <option value="PLAIN">PLAIN</option>
+                        <option value="SCRAM-SHA-256">SCRAM-SHA-256</option>
+                        <option value="SCRAM-SHA-512">SCRAM-SHA-512</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" id="add-username">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="add-password">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-publish-changes"> Publish Changes
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-writeback"> Enable Writeback
+                        </label>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-auto-create" checked> Auto Create Topics
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-enabled" checked> Enabled
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('kafka-add-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Cluster</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div id="kafka-edit-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Edit Kafka Cluster</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('kafka-edit-modal')">&times;</button>
+        </div>
+        <form id="kafka-edit-form" onsubmit="saveKafka(event)">
+            <input type="hidden" id="edit-name">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Brokers (comma-separated)</label>
+                    <input type="text" id="edit-brokers" required>
+                </div>
+                <div class="form-group">
+                    <label>Selector</label>
+                    <input type="text" id="edit-selector">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-tls"> Use TLS
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-tls-skip-verify"> Skip TLS Verify
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>SASL Mechanism</label>
+                    <select id="edit-sasl-mechanism">
+                        <option value="">None</option>
+                        <option value="PLAIN">PLAIN</option>
+                        <option value="SCRAM-SHA-256">SCRAM-SHA-256</option>
+                        <option value="SCRAM-SHA-512">SCRAM-SHA-512</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" id="edit-username">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="edit-password">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-publish-changes"> Publish Changes
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-writeback"> Enable Writeback
+                        </label>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-auto-create"> Auto Create Topics
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-enabled"> Enabled
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('kafka-edit-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showAddModal() {
+    document.getElementById('kafka-add-form').reset();
+    document.getElementById('add-enabled').checked = true;
+    document.getElementById('add-auto-create').checked = true;
+    WarLink.showModal('kafka-add-modal');
+}
+
+function addKafka(e) {
+    e.preventDefault();
+    var data = {
+        name: document.getElementById('add-name').value,
+        brokers: document.getElementById('add-brokers').value,
+        selector: document.getElementById('add-selector').value,
+        use_tls: document.getElementById('add-tls').checked,
+        tls_skip_verify: document.getElementById('add-tls-skip-verify').checked,
+        sasl_mechanism: document.getElementById('add-sasl-mechanism').value,
+        username: document.getElementById('add-username').value,
+        password: document.getElementById('add-password').value,
+        publish_changes: document.getElementById('add-publish-changes').checked,
+        enable_writeback: document.getElementById('add-writeback').checked,
+        auto_create_topics: document.getElementById('add-auto-create').checked,
+        enabled: document.getElementById('add-enabled').checked
+    };
+
+    WarLink.api.post('/htmx/kafka', data).then(function() {
+        WarLink.hideModal('kafka-add-modal');
+        var tbody = document.getElementById('kafka-tbody');
+        var empty = document.getElementById('empty-row');
+        if (empty) empty.remove();
+
+        var tr = document.createElement('tr');
+        tr.className = 'kafka-row';
+        tr.dataset.name = data.name;
+        tr.dataset.status = 'Stopped';
+        tr.dataset.statusClass = 'status-disconnected';
+        tr.innerHTML = buildRowHtml(data.name, data.brokers, data.use_tls, data.sasl_mechanism, 'Stopped', 'status-disconnected');
+        tbody.appendChild(tr);
+        WarLink.toast('Cluster added', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function showEditModal(name) {
+    WarLink.api.get('/htmx/kafka/' + encodeURIComponent(name)).then(function(data) {
+        document.getElementById('edit-name').value = data.name;
+        document.getElementById('edit-brokers').value = Array.isArray(data.brokers) ? data.brokers.join(', ') : data.brokers;
+        document.getElementById('edit-selector').value = data.selector || '';
+        document.getElementById('edit-tls').checked = data.use_tls;
+        document.getElementById('edit-tls-skip-verify').checked = data.tls_skip_verify;
+        document.getElementById('edit-sasl-mechanism').value = data.sasl_mechanism || '';
+        document.getElementById('edit-username').value = data.username || '';
+        document.getElementById('edit-password').value = data.password || '';
+        document.getElementById('edit-publish-changes').checked = data.publish_changes;
+        document.getElementById('edit-writeback').checked = data.enable_writeback;
+        document.getElementById('edit-auto-create').checked = data.auto_create_topics;
+        document.getElementById('edit-enabled').checked = data.enabled;
+        WarLink.showModal('kafka-edit-modal');
+    }).catch(function(err) {
+        WarLink.toast('Error loading cluster: ' + err.message, 'error');
+    });
+}
+
+function saveKafka(e) {
+    e.preventDefault();
+    var name = document.getElementById('edit-name').value;
+    var data = {
+        brokers: document.getElementById('edit-brokers').value,
+        selector: document.getElementById('edit-selector').value,
+        use_tls: document.getElementById('edit-tls').checked,
+        tls_skip_verify: document.getElementById('edit-tls-skip-verify').checked,
+        sasl_mechanism: document.getElementById('edit-sasl-mechanism').value,
+        username: document.getElementById('edit-username').value,
+        password: document.getElementById('edit-password').value,
+        publish_changes: document.getElementById('edit-publish-changes').checked,
+        enable_writeback: document.getElementById('edit-writeback').checked,
+        auto_create_topics: document.getElementById('edit-auto-create').checked,
+        enabled: document.getElementById('edit-enabled').checked
+    };
+
+    WarLink.api.put('/htmx/kafka/' + encodeURIComponent(name), data).then(function() {
+        WarLink.hideModal('kafka-edit-modal');
+        var row = document.querySelector('.kafka-row[data-name="' + name + '"]');
+        if (row) {
+            row.cells[1].textContent = data.brokers;
+            row.cells[2].textContent = data.use_tls ? 'Yes' : 'No';
+            row.cells[3].textContent = data.sasl_mechanism || '-';
+        }
+        WarLink.toast('Cluster updated', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function deleteKafka(name) {
+    if (!confirm('Delete Kafka cluster "' + name + '"?')) return;
+
+    WarLink.api.del('/htmx/kafka/' + encodeURIComponent(name)).then(function() {
+        var row = document.querySelector('.kafka-row[data-name="' + name + '"]');
+        if (row) row.remove();
+        var rows = document.querySelectorAll('.kafka-row');
+        if (rows.length === 0) {
+            var tbody = document.getElementById('kafka-tbody');
+            var tr = document.createElement('tr');
+            tr.id = 'empty-row';
+            tr.innerHTML = '<td colspan="{{if .IsAdmin}}6{{else}}5{{end}}" class="empty-cell">No Kafka clusters configured</td>';
+            tbody.appendChild(tr);
+        }
+        WarLink.toast('Cluster deleted', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function toggleKafka(name, currentStatus) {
+    var action = currentStatus === 'Connected' ? 'disconnect' : 'connect';
+    var row = document.querySelector('.kafka-row[data-name="' + name + '"]');
+    if (row) {
+        var btn = row.querySelector('.status-indicator');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = action === 'connect' ? 'Connecting...' : 'Disconnecting...';
+        }
+    }
+
+    WarLink.api.post('/htmx/kafka/' + encodeURIComponent(name) + '/' + action).then(function() {
+        // SSE will update the status
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function buildRowHtml(name, brokers, tls, sasl, status, statusClass) {
+    var html = '<td>' + WarLink.escapeHtml(name) + '</td>' +
+        '<td>' + WarLink.escapeHtml(brokers) + '</td>' +
+        '<td>' + (tls ? 'Yes' : 'No') + '</td>' +
+        '<td>' + (sasl ? WarLink.escapeHtml(sasl) : '-') + '</td>' +
+        '<td>';
+    {{if .IsAdmin}}
+    html += '<button class="status-indicator ' + statusClass + '" onclick="toggleKafka(\'' + WarLink.escapeHtml(name) + '\', \'' + status + '\')">' + status + '</button>';
+    html += '</td><td class="actions">';
+    html += '<button class="btn-icon" title="Edit" onclick="showEditModal(\'' + WarLink.escapeHtml(name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/></svg></button>';
+    html += '<button class="btn-icon btn-icon-danger" title="Delete" onclick="deleteKafka(\'' + WarLink.escapeHtml(name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/><path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/></svg></button>';
+    {{else}}
+    html += '<span class="status-badge ' + statusClass + '">' + status + '</span>';
+    {{end}}
+    html += '</td>';
+    return html;
+}
+
+// SSE for real-time status updates
+WarLink.createSSE('/events/republisher', {
+    onKafkaStatus: function(data) {
+        var row = document.querySelector('.kafka-row[data-name="' + data.name + '"]');
+        if (!row) return;
+
+        var status = WarLink.capitalizeFirst(data.status);
+        row.dataset.status = status;
+        row.dataset.statusClass = data.statusClass;
+
+        var btn = row.querySelector('.status-indicator');
+        if (btn) {
+            btn.className = 'status-indicator ' + data.statusClass;
+            btn.textContent = status;
+            btn.disabled = false;
+            btn.onclick = function() { toggleKafka(data.name, status); };
+            btn.title = status === 'Connected' ? 'Click to disconnect' : 'Click to connect';
+        }
+        var badge = row.querySelector('.status-badge');
+        if (badge) {
+            badge.className = 'status-badge ' + data.statusClass;
+            badge.textContent = status;
+        }
+    },
+    onEntityChange: function(data) {
+        if (data.entityType !== 'kafka') return;
+        if (data.action === 'remove') {
+            var row = document.querySelector('.kafka-row[data-name="' + data.name + '"]');
+            if (row) row.remove();
+        }
+        if (data.action === 'add' || data.action === 'update') {
+            var existing = document.querySelector('.kafka-row[data-name="' + data.name + '"]');
+            if (!existing && data.action === 'add') {
+                location.reload();
+            }
+        }
+    }
+});
+</script>
+
+{{template "footer" .}}

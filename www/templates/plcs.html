@@ -1,0 +1,798 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>PLCs</h1>
+</div>
+
+{{if .IsAdmin}}
+<div class="action-bar">
+    <button class="btn btn-primary" onclick="showAddPLCModal()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;vertical-align:-2px">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Add PLC
+    </button>
+    <button class="btn" onclick="detectPLCs()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;vertical-align:-2px">
+            <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        Detect
+    </button>
+</div>
+{{end}}
+
+<div id="plcs-container">
+    {{template "plcs_table.html" .}}
+</div>
+
+<!-- Info Modal -->
+<div id="plc-info-modal" class="modal" style="display:none">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h2>PLC Information</h2>
+            <button class="modal-close" onclick="hideInfoModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="plc-info-content">
+            Loading...
+        </div>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div id="plc-edit-modal" class="modal" style="display:none">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h2>Edit PLC</h2>
+            <button class="modal-close" onclick="hideEditModal()">&times;</button>
+        </div>
+        <form id="plc-edit-form" onsubmit="savePLC(event)">
+            <input type="hidden" id="edit-plc-name" name="name">
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-address">Address</label>
+                        <input type="text" id="edit-address" name="address" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-slot">Slot</label>
+                        <input type="number" id="edit-slot" name="slot" min="0" max="255">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="edit-family">Family</label>
+                        <select id="edit-family" name="family">
+                            <option value="logix">Allen-Bradley Logix</option>
+                            <option value="micro800">Allen-Bradley Micro800</option>
+                            <option value="s7">Siemens S7</option>
+                            <option value="beckhoff">Beckhoff TwinCAT</option>
+                            <option value="omron">Omron</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-poll-rate">Poll Rate</label>
+                        <input type="text" id="edit-poll-rate" name="poll_rate" placeholder="e.g., 250ms, 1s">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="edit-enabled" name="enabled">
+                        Auto-connect
+                    </label>
+                </div>
+
+                <!-- Beckhoff-specific fields -->
+                <div id="beckhoff-fields" class="family-fields" style="display:none">
+                    <h4>Beckhoff Settings</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="edit-ams-net-id">AMS Net ID</label>
+                            <input type="text" id="edit-ams-net-id" name="ams_net_id" placeholder="e.g., 192.168.1.100.1.1">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-ams-port">AMS Port</label>
+                            <input type="number" id="edit-ams-port" name="ams_port" value="851">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Omron-specific fields -->
+                <div id="omron-fields" class="family-fields" style="display:none">
+                    <h4>Omron Settings</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="edit-protocol">Protocol</label>
+                            <select id="edit-protocol" name="protocol">
+                                <option value="fins">FINS</option>
+                                <option value="eip">EtherNet/IP</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-fins-port">FINS Port</label>
+                            <input type="number" id="edit-fins-port" name="fins_port" value="9600">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="edit-fins-network">FINS Network</label>
+                            <input type="number" id="edit-fins-network" name="fins_network" min="0" max="255">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-fins-node">FINS Node</label>
+                            <input type="number" id="edit-fins-node" name="fins_node" min="0" max="255">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-fins-unit">FINS Unit</label>
+                            <input type="number" id="edit-fins-unit" name="fins_unit" min="0" max="255">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="hideEditModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Add PLC Modal -->
+<div id="plc-add-modal" class="modal" style="display:none">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h2>Add PLC</h2>
+            <button class="modal-close" onclick="hideAddPLCModal()">&times;</button>
+        </div>
+        <form id="plc-add-form" onsubmit="addPLC(event)">
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="add-name">Name</label>
+                        <input type="text" id="add-name" name="name" required pattern="[a-zA-Z0-9_-]+" title="Letters, numbers, underscore, dash only">
+                    </div>
+                    <div class="form-group">
+                        <label for="add-family">Family</label>
+                        <select id="add-family" name="family" onchange="updateAddFamilyFields()">
+                            <option value="logix">Allen-Bradley Logix</option>
+                            <option value="micro800">Allen-Bradley Micro800</option>
+                            <option value="s7">Siemens S7</option>
+                            <option value="beckhoff">Beckhoff TwinCAT</option>
+                            <option value="omron">Omron</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="add-address">Address</label>
+                        <input type="text" id="add-address" name="address" required placeholder="e.g., 192.168.1.100">
+                    </div>
+                    <div class="form-group">
+                        <label for="add-slot">Slot</label>
+                        <input type="number" id="add-slot" name="slot" min="0" max="255" value="0">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="add-poll-rate">Poll Rate</label>
+                        <input type="text" id="add-poll-rate" name="poll_rate" placeholder="e.g., 250ms, 1s">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="add-enabled" name="enabled" checked>
+                            Auto-connect
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Beckhoff-specific fields -->
+                <div id="add-beckhoff-fields" class="family-fields" style="display:none">
+                    <h4>Beckhoff Settings</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="add-ams-net-id">AMS Net ID</label>
+                            <input type="text" id="add-ams-net-id" name="ams_net_id" placeholder="e.g., 192.168.1.100.1.1">
+                        </div>
+                        <div class="form-group">
+                            <label for="add-ams-port">AMS Port</label>
+                            <input type="number" id="add-ams-port" name="ams_port" value="851">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Omron-specific fields -->
+                <div id="add-omron-fields" class="family-fields" style="display:none">
+                    <h4>Omron Settings</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="add-protocol">Protocol</label>
+                            <select id="add-protocol" name="protocol">
+                                <option value="fins">FINS</option>
+                                <option value="eip">EtherNet/IP</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="add-fins-port">FINS Port</label>
+                            <input type="number" id="add-fins-port" name="fins_port" value="9600">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="hideAddPLCModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add PLC</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Detect PLCs Modal -->
+<div id="plc-detect-modal" class="modal" style="display:none">
+    <div class="modal-content modal-xl">
+        <div class="modal-header">
+            <h2>Detect PLCs</h2>
+            <button class="modal-close" onclick="hideDetectModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="detect-status" class="detect-status">
+                <div class="spinner"></div>
+                <span>Scanning network for PLCs...</span>
+            </div>
+            <div id="detect-results" style="display:none">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>Family</th>
+                            <th>Product</th>
+                            <th>Vendor</th>
+                            <th>Protocol</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="detect-results-body">
+                    </tbody>
+                </table>
+            </div>
+            <div id="detect-empty" style="display:none" class="empty-cell">
+                No PLCs found on the network.
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn" onclick="hideDetectModal()">Close</button>
+            <button type="button" class="btn btn-primary" onclick="detectPLCs()">Rescan</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function showInfoFromRow(btn) {
+    var row = btn.closest('.plc-row');
+    if (!row) return;
+
+    var d = row.dataset;
+    var modal = document.getElementById('plc-info-modal');
+    var content = document.getElementById('plc-info-content');
+
+    var html = '<table class="info-table">';
+    html += '<tr><th>Name</th><td>' + escapeHtml(d.name) + '</td></tr>';
+    html += '<tr><th>Address</th><td>' + escapeHtml(d.address) + '</td></tr>';
+    html += '<tr><th>Family</th><td>' + escapeHtml(d.family) + '</td></tr>';
+    html += '<tr><th>Slot</th><td>' + d.slot + '</td></tr>';
+    html += '<tr><th>Status</th><td><span class="status-badge ' + d.statusClass + '">' + escapeHtml(d.status) + '</span></td></tr>';
+    html += '<tr><th>Auto-connect</th><td>' + (d.enabled === 'true' ? 'Yes' : 'No') + '</td></tr>';
+    if (d.product) {
+        html += '<tr><th>Product</th><td>' + escapeHtml(d.product) + '</td></tr>';
+    }
+    if (d.serial) {
+        html += '<tr><th>Serial</th><td>' + escapeHtml(d.serial) + '</td></tr>';
+    }
+    if (d.vendor) {
+        html += '<tr><th>Vendor</th><td>' + escapeHtml(d.vendor) + '</td></tr>';
+    }
+    html += '<tr><th>Tags</th><td>' + d.tags + '</td></tr>';
+    if (d.pollRate && d.pollRate !== '' && d.pollRate !== '0s') {
+        html += '<tr><th>Poll Rate</th><td>' + escapeHtml(d.pollRate) + '</td></tr>';
+    }
+    if (d.error) {
+        html += '<tr><th>Error</th><td class="text-danger">' + escapeHtml(d.error) + '</td></tr>';
+    }
+
+    // Family-specific info
+    if (d.family === 'Beckhoff') {
+        if (d.amsNetId) {
+            html += '<tr><th>AMS Net ID</th><td>' + escapeHtml(d.amsNetId) + '</td></tr>';
+        }
+        if (d.amsPort && d.amsPort !== '0') {
+            html += '<tr><th>AMS Port</th><td>' + d.amsPort + '</td></tr>';
+        }
+    }
+    if (d.family === 'Omron') {
+        if (d.protocol) {
+            html += '<tr><th>Protocol</th><td>' + escapeHtml(d.protocol) + '</td></tr>';
+        }
+        if (d.finsPort && d.finsPort !== '0') {
+            html += '<tr><th>FINS Port</th><td>' + d.finsPort + '</td></tr>';
+        }
+    }
+
+    html += '</table>';
+    content.innerHTML = html;
+    modal.style.display = 'flex';
+}
+
+function hideInfoModal() {
+    document.getElementById('plc-info-modal').style.display = 'none';
+}
+
+function showEditModal(name) {
+    fetch('/htmx/plcs/' + encodeURIComponent(name))
+        .then(function(response) {
+            if (!response.ok) throw new Error('Failed to load PLC');
+            return response.json();
+        })
+        .then(function(data) {
+            console.log('PLC data received:', data);
+            console.log('poll_rate value:', data.poll_rate, 'type:', typeof data.poll_rate);
+            document.getElementById('edit-plc-name').value = data.name;
+            document.getElementById('edit-address').value = data.address;
+            document.getElementById('edit-slot').value = data.slot;
+            document.getElementById('edit-family').value = data.family.toLowerCase();
+            document.getElementById('edit-enabled').checked = data.enabled;
+            document.getElementById('edit-poll-rate').value = data.poll_rate !== '0s' ? data.poll_rate : '';
+
+            // Beckhoff fields
+            document.getElementById('edit-ams-net-id').value = data.ams_net_id || '';
+            document.getElementById('edit-ams-port').value = data.ams_port || 851;
+
+            // Omron fields
+            document.getElementById('edit-protocol').value = data.protocol || 'fins';
+            document.getElementById('edit-fins-port').value = data.fins_port || 9600;
+            document.getElementById('edit-fins-network').value = data.fins_network || 0;
+            document.getElementById('edit-fins-node').value = data.fins_node || 0;
+            document.getElementById('edit-fins-unit').value = data.fins_unit || 0;
+
+            updateFamilyFields();
+            document.getElementById('plc-edit-modal').style.display = 'flex';
+        })
+        .catch(function(err) {
+            alert('Error loading PLC: ' + err.message);
+        });
+}
+
+function hideEditModal() {
+    document.getElementById('plc-edit-modal').style.display = 'none';
+}
+
+function updateFamilyFields() {
+    var family = document.getElementById('edit-family').value;
+    document.getElementById('beckhoff-fields').style.display = family === 'beckhoff' ? 'block' : 'none';
+    document.getElementById('omron-fields').style.display = family === 'omron' ? 'block' : 'none';
+}
+
+document.getElementById('edit-family').addEventListener('change', updateFamilyFields);
+
+function savePLC(e) {
+    e.preventDefault();
+    var name = document.getElementById('edit-plc-name').value;
+    var data = {
+        address: document.getElementById('edit-address').value,
+        slot: parseInt(document.getElementById('edit-slot').value) || 0,
+        family: document.getElementById('edit-family').value,
+        enabled: document.getElementById('edit-enabled').checked,
+        poll_rate: document.getElementById('edit-poll-rate').value,
+        ams_net_id: document.getElementById('edit-ams-net-id').value,
+        ams_port: parseInt(document.getElementById('edit-ams-port').value) || 851,
+        protocol: document.getElementById('edit-protocol').value,
+        fins_port: parseInt(document.getElementById('edit-fins-port').value) || 9600,
+        fins_network: parseInt(document.getElementById('edit-fins-network').value) || 0,
+        fins_node: parseInt(document.getElementById('edit-fins-node').value) || 0,
+        fins_unit: parseInt(document.getElementById('edit-fins-unit').value) || 0
+    };
+
+    fetch('/htmx/plcs/' + encodeURIComponent(name), {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(function(response) {
+        if (!response.ok) {
+            return response.text().then(function(msg) { throw new Error(msg); });
+        }
+        hideEditModal();
+        // Update the row in place with the edited values
+        var row = document.querySelector('.plc-row[data-name="' + name + '"]');
+        if (row) {
+            row.dataset.address = data.address;
+            row.dataset.slot = data.slot;
+            row.dataset.family = data.family;
+            row.dataset.enabled = data.enabled;
+            row.dataset.pollRate = data.poll_rate;
+            row.dataset.amsNetId = data.ams_net_id || '';
+            row.dataset.amsPort = data.ams_port || '';
+            row.dataset.protocol = data.protocol || '';
+            row.dataset.finsPort = data.fins_port || '';
+            // Update visible cells
+            row.cells[1].textContent = data.address;
+            row.cells[2].textContent = data.family;
+        }
+        // SSE will handle status updates
+    })
+    .catch(function(err) {
+        alert('Error saving PLC: ' + err.message);
+    });
+}
+
+// Add PLC functions
+function showAddPLCModal() {
+    document.getElementById('plc-add-form').reset();
+    document.getElementById('add-enabled').checked = true;
+    updateAddFamilyFields();
+    document.getElementById('plc-add-modal').style.display = 'flex';
+}
+
+function hideAddPLCModal() {
+    document.getElementById('plc-add-modal').style.display = 'none';
+}
+
+function updateAddFamilyFields() {
+    var family = document.getElementById('add-family').value;
+    document.getElementById('add-beckhoff-fields').style.display = family === 'beckhoff' ? 'block' : 'none';
+    document.getElementById('add-omron-fields').style.display = family === 'omron' ? 'block' : 'none';
+}
+
+function addPLC(e) {
+    e.preventDefault();
+    var data = {
+        name: document.getElementById('add-name').value,
+        address: document.getElementById('add-address').value,
+        slot: parseInt(document.getElementById('add-slot').value) || 0,
+        family: document.getElementById('add-family').value,
+        enabled: document.getElementById('add-enabled').checked,
+        poll_rate: document.getElementById('add-poll-rate').value,
+        ams_net_id: document.getElementById('add-ams-net-id').value,
+        ams_port: parseInt(document.getElementById('add-ams-port').value) || 851,
+        protocol: document.getElementById('add-protocol').value,
+        fins_port: parseInt(document.getElementById('add-fins-port').value) || 9600
+    };
+
+    fetch('/htmx/plcs', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    })
+    .then(function(response) {
+        if (!response.ok) {
+            return response.text().then(function(msg) { throw new Error(msg); });
+        }
+        hideAddPLCModal();
+        // Add the new row to the table
+        var tbody = document.querySelector('#plcs-container tbody');
+        if (!tbody) return;
+        // Remove "No PLCs configured" row if present
+        var emptyCell = tbody.querySelector('.empty-cell');
+        if (emptyCell) {
+            emptyCell.parentElement.remove();
+        }
+        var tr = document.createElement('tr');
+        tr.className = 'plc-row';
+        tr.dataset.name = data.name;
+        tr.dataset.address = data.address;
+        tr.dataset.slot = data.slot;
+        tr.dataset.family = data.family;
+        tr.dataset.status = 'Disconnected';
+        tr.dataset.statusClass = 'status-disconnected';
+        tr.dataset.enabled = data.enabled;
+        tr.dataset.product = '';
+        tr.dataset.serial = '';
+        tr.dataset.vendor = '';
+        tr.dataset.tags = '0';
+        tr.dataset.pollRate = data.poll_rate || '';
+        tr.dataset.error = '';
+        tr.dataset.amsNetId = data.ams_net_id || '';
+        tr.dataset.amsPort = data.ams_port || '';
+        tr.dataset.protocol = data.protocol || '';
+        tr.dataset.finsPort = data.fins_port || '';
+        var statusCell = '{{if .IsAdmin}}<button class="status-indicator status-disconnected" onclick="toggleConnection(\'' + escapeHtml(data.name) + '\')" title="Click to connect">Disconnected</button>{{else}}<span class="status-badge status-disconnected">Disconnected</span>{{end}}';
+        var actionsHtml = '<button class="btn-icon" title="Info" onclick="showInfoFromRow(this)"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><text x="8" y="11.5" text-anchor="middle" font-size="9" font-weight="bold" fill="currentColor">i</text></svg></button>';
+        {{if .IsAdmin}}
+        actionsHtml += '<button class="btn-icon" title="Settings" onclick="showEditModal(\'' + escapeHtml(data.name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/></svg></button>';
+        actionsHtml += '<button class="btn-icon btn-icon-danger" title="Delete" onclick="deletePLC(\'' + escapeHtml(data.name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/><path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/></svg></button>';
+        {{end}}
+        tr.innerHTML = '<td>' + escapeHtml(data.name) + '</td>' +
+            '<td>' + escapeHtml(data.address) + '</td>' +
+            '<td>' + escapeHtml(data.family) + '</td>' +
+            '<td></td>' +
+            '<td>0</td>' +
+            '<td>' + statusCell + '</td>' +
+            '<td class="actions">' + actionsHtml + '</td>';
+        tbody.appendChild(tr);
+        // SSE will update status once the PLC connects
+    })
+    .catch(function(err) {
+        alert('Error adding PLC: ' + err.message);
+    });
+}
+
+function deletePLC(name) {
+    if (!confirm('Delete PLC "' + name + '"? This cannot be undone.')) return;
+
+    fetch('/htmx/plcs/' + encodeURIComponent(name), {
+        method: 'DELETE'
+    })
+    .then(function(response) {
+        if (!response.ok) {
+            return response.text().then(function(msg) { throw new Error(msg); });
+        }
+        // Remove the row from DOM
+        var row = document.querySelector('.plc-row[data-name="' + name + '"]');
+        if (row) {
+            // Also remove error row if present
+            var nextRow = row.nextElementSibling;
+            if (nextRow && nextRow.classList.contains('error-row')) {
+                nextRow.remove();
+            }
+            row.remove();
+        }
+        // Check if table is now empty
+        var tbody = document.querySelector('#plcs-container tbody');
+        if (tbody && tbody.querySelectorAll('.plc-row').length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">No PLCs configured</td></tr>';
+        }
+    })
+    .catch(function(err) {
+        alert('Error deleting PLC: ' + err.message);
+    });
+}
+
+function toggleConnection(name) {
+    // Read current status from the row's data attribute (kept up-to-date by SSE)
+    var row = document.querySelector('.plc-row[data-name="' + name + '"]');
+    if (!row) return;
+    var currentStatus = row.dataset.status || 'Disconnected';
+    var action = currentStatus === 'Connected' ? 'disconnect' : 'connect';
+
+    // Immediately update button and suppress SSE updates briefly so they
+    // don't revert the button before the server-side state catches up
+    row.dataset.statusLock = String(Date.now() + 3000);
+    var btn = row.querySelector('.status-indicator');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = action === 'connect' ? 'Connecting...' : 'Disconnecting...';
+        btn.className = 'status-indicator status-connecting';
+    }
+
+    fetch('/htmx/plcs/' + encodeURIComponent(name) + '/' + action, {
+        method: 'POST'
+    })
+    .then(function(response) {
+        if (!response.ok) {
+            return response.text().then(function(msg) { throw new Error(msg); });
+        }
+        // SSE will update the status
+    })
+    .catch(function(err) {
+        delete row.dataset.statusLock;
+        alert('Error: ' + err.message);
+        // Revert on error - SSE should correct it anyway
+    });
+}
+
+function detectPLCs() {
+    var modal = document.getElementById('plc-detect-modal');
+    var status = document.getElementById('detect-status');
+    var results = document.getElementById('detect-results');
+    var empty = document.getElementById('detect-empty');
+    var tbody = document.getElementById('detect-results-body');
+
+    // Show modal and loading state
+    modal.style.display = 'flex';
+    status.style.display = 'flex';
+    results.style.display = 'none';
+    empty.style.display = 'none';
+    tbody.innerHTML = '';
+
+    fetch('/htmx/discover')
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Discovery failed');
+            }
+            return response.json();
+        })
+        .then(function(devices) {
+            status.style.display = 'none';
+
+            if (!devices || devices.length === 0) {
+                empty.style.display = 'block';
+                return;
+            }
+
+            results.style.display = 'block';
+            devices.forEach(function(dev) {
+                var tr = document.createElement('tr');
+                tr.innerHTML = '<td>' + escapeHtml(dev.ip) + '</td>' +
+                    '<td>' + escapeHtml(formatFamily(dev.family)) + '</td>' +
+                    '<td>' + escapeHtml(dev.product_name || '-') + '</td>' +
+                    '<td>' + escapeHtml(dev.vendor || '-') + '</td>' +
+                    '<td>' + escapeHtml(dev.protocol || '-') + '</td>' +
+                    '<td><button class="btn btn-sm btn-primary" onclick="addFromDetected(\'' +
+                        escapeHtml(dev.ip) + '\', \'' +
+                        escapeHtml(dev.family) + '\', \'' +
+                        escapeHtml(dev.product_name || '') + '\', \'' +
+                        escapeHtml(dev.extra && dev.extra.amsNetId || '') + '\')">Add</button></td>';
+                tbody.appendChild(tr);
+            });
+        })
+        .catch(function(err) {
+            status.style.display = 'none';
+            empty.style.display = 'block';
+            empty.textContent = 'Error: ' + err.message;
+        });
+}
+
+function hideDetectModal() {
+    document.getElementById('plc-detect-modal').style.display = 'none';
+}
+
+function formatFamily(family) {
+    var families = {
+        'logix': 'Allen-Bradley Logix',
+        'micro800': 'Allen-Bradley Micro800',
+        's7': 'Siemens S7',
+        'beckhoff': 'Beckhoff TwinCAT',
+        'omron': 'Omron'
+    };
+    return families[family] || family;
+}
+
+function addFromDetected(ip, family, productName, amsNetId) {
+    // Generate a name from the IP
+    var name = 'plc_' + ip.replace(/\./g, '_');
+
+    document.getElementById('add-name').value = name;
+    document.getElementById('add-address').value = ip;
+    document.getElementById('add-family').value = family;
+    document.getElementById('add-enabled').checked = true;
+
+    // Set Beckhoff-specific fields
+    if (family === 'beckhoff' && amsNetId) {
+        document.getElementById('add-ams-net-id').value = amsNetId;
+    }
+
+    updateAddFamilyFields();
+    hideDetectModal();
+    document.getElementById('plc-add-modal').style.display = 'flex';
+}
+
+function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// SSE client for real-time PLC updates
+var PLCsSSE = (function() {
+    var es = null;
+    var reconnectTimeout = null;
+
+    function connect() {
+        if (es) {
+            es.close();
+        }
+
+        es = new EventSource('/events/republisher');
+
+        es.addEventListener('status-change', function(e) {
+            try {
+                var data = JSON.parse(e.data);
+                onStatusChange(data);
+            } catch (err) {
+                console.error('SSE status-change parse error:', err);
+            }
+        });
+
+        es.onerror = function() {
+            es.close();
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            reconnectTimeout = setTimeout(connect, 1000);
+        };
+    }
+
+    function onStatusChange(data) {
+        // Find the PLC row
+        var row = document.querySelector('.plc-row[data-name="' + data.plc + '"]');
+        if (!row) return;
+
+        var statusText = capitalizeFirst(data.status);
+
+        // Update data attributes (always, these don't trigger reflow)
+        row.dataset.status = statusText;
+        row.dataset.statusClass = data.statusClass;
+        row.dataset.tags = data.tagCount;
+        row.dataset.error = data.error || '';
+        if (data.productName) row.dataset.product = data.productName;
+        if (data.serialNumber) row.dataset.serial = data.serialNumber;
+        if (data.vendor) row.dataset.vendor = data.vendor;
+
+        // If user just clicked connect/disconnect, suppress SSE button updates
+        // briefly so stale events don't revert the button
+        var lockUntil = parseInt(row.dataset.statusLock, 10);
+        if (lockUntil && Date.now() < lockUntil) {
+            return;
+        }
+        if (lockUntil) {
+            // Lock just expired — clear it and force a full DOM update
+            delete row.dataset.statusLock;
+            delete row.dataset.lastStatusEvent;
+        }
+
+        // Skip DOM updates if nothing visible changed (avoids reflow that can swallow clicks)
+        var eventKey = data.status + '|' + data.tagCount + '|' + (data.error || '');
+        if (row.dataset.lastStatusEvent === eventKey) {
+            return;
+        }
+        row.dataset.lastStatusEvent = eventKey;
+
+        // Update status button/badge
+        var statusCell = row.cells[5];
+        var statusBtn = statusCell.querySelector('.status-indicator');
+        var statusBadge = statusCell.querySelector('.status-badge');
+
+        if (statusBtn) {
+            var newClass = 'status-indicator ' + data.statusClass;
+            if (statusBtn.className !== newClass) statusBtn.className = newClass;
+            if (statusBtn.textContent !== statusText) statusBtn.textContent = statusText;
+            var shouldDisable = data.status !== 'connected' && data.status !== 'disconnected';
+            if (statusBtn.disabled !== shouldDisable) statusBtn.disabled = shouldDisable;
+            var newTitle = shouldDisable ? statusText : (data.status === 'connected' ? 'Click to disconnect' : 'Click to connect');
+            if (statusBtn.title !== newTitle) statusBtn.title = newTitle;
+        } else if (statusBadge) {
+            var newClass = 'status-badge ' + data.statusClass;
+            if (statusBadge.className !== newClass) statusBadge.className = newClass;
+            if (statusBadge.textContent !== statusText) statusBadge.textContent = statusText;
+        }
+
+        // Update tag count
+        var tagStr = String(data.tagCount);
+        if (row.cells[4].textContent !== tagStr) row.cells[4].textContent = tagStr;
+
+        // Update product name if available
+        if (data.productName && row.cells[3].textContent !== data.productName) {
+            row.cells[3].textContent = data.productName;
+        }
+
+        // Handle error row
+        var nextRow = row.nextElementSibling;
+        var hasErrorRow = nextRow && nextRow.classList.contains('error-row');
+
+        if (data.error) {
+            if (hasErrorRow) {
+                nextRow.querySelector('td').textContent = data.error;
+            } else {
+                var errorRow = document.createElement('tr');
+                errorRow.className = 'error-row';
+                errorRow.innerHTML = '<td colspan="7" class="error-cell">' + escapeHtml(data.error) + '</td>';
+                row.parentNode.insertBefore(errorRow, row.nextSibling);
+            }
+        } else if (hasErrorRow) {
+            nextRow.remove();
+        }
+    }
+
+    function capitalizeFirst(str) {
+        return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+
+    // Auto-connect
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', connect);
+    } else {
+        connect();
+    }
+
+    return { connect: connect };
+})();
+</script>
+
+{{template "footer" .}}

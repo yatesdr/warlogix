@@ -6,6 +6,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"warlink/api"
 	"warlink/brokertest"
@@ -27,6 +31,7 @@ import (
 	"warlink/trigger"
 	"warlink/tui"
 	"warlink/valkey"
+	"warlink/web"
 )
 
 // Version is set at build time via -ldflags
@@ -70,6 +75,12 @@ var (
 	testTags     = flag.Int("test-tags", 100, "Number of simulated tags for stress test")
 	testPLCs     = flag.Int("test-plcs", 50, "Number of simulated PLCs for stress test")
 	testYes      = flag.Bool("y", false, "Skip confirmation prompt for stress tests")
+
+	// Web server flags
+	webAdminUser = flag.String("web-admin-user", "", "Create/update admin user for web UI")
+	webAdminPass = flag.String("web-admin-pass", "", "Password for admin user")
+	webPort      = flag.Int("web-port", 0, "Override web server port")
+	webHost      = flag.String("web-host", "", "Override web server host")
 )
 
 func main() {
@@ -112,6 +123,49 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("Namespace set to '%s' and saved to config\n", *namespace)
+	}
+
+	// Override web config from flags
+	if *webPort != 0 {
+		cfg.Web.Port = *webPort
+	}
+	if *webHost != "" {
+		cfg.Web.Host = *webHost
+	}
+
+	// Create/update admin user if credentials provided
+	if *webAdminUser != "" && *webAdminPass != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(*webAdminPass), bcrypt.DefaultCost)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error hashing password: %v\n", err)
+			os.Exit(1)
+		}
+
+		if existing := cfg.FindWebUser(*webAdminUser); existing != nil {
+			existing.PasswordHash = string(hash)
+			existing.Role = config.RoleAdmin
+		} else {
+			cfg.AddWebUser(config.WebUser{
+				Username:     *webAdminUser,
+				PasswordHash: string(hash),
+				Role:         config.RoleAdmin,
+			})
+		}
+
+		// Generate session secret if not set
+		if cfg.Web.UI.SessionSecret == "" {
+			secret := make([]byte, 32)
+			rand.Read(secret)
+			cfg.Web.UI.SessionSecret = base64.StdEncoding.EncodeToString(secret)
+		}
+
+		cfg.Web.Enabled = true
+		cfg.Web.UI.Enabled = true
+		if err := cfg.Save(*configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Admin user '%s' configured for web UI\n", *webAdminUser)
 	}
 
 	// Daemon mode requires namespace to be configured
@@ -222,8 +276,14 @@ func runLocalMode(cfg *config.Config) {
 	manager := plcman.NewManager(cfg.PollRate)
 	manager.LoadFromConfig(cfg)
 
-	// Create REST API server
+	// Create REST API server (legacy, for TUI compatibility)
 	apiServer := api.NewServer(manager, &cfg.REST)
+
+	// Create local managers wrapper for web server
+	localManagers := &localManagersWrapper{
+		config:     cfg,
+		configPath: *configPath,
+	}
 
 	// Create MQTT manager
 	mqttMgr := mqtt.NewManager()
@@ -352,11 +412,36 @@ func runLocalMode(cfg *config.Config) {
 		app.ForcePublishAllValuesToValkey()
 	})
 
+	// Complete local managers wrapper
+	localManagers.plcMan = manager
+	localManagers.mqttMgr = mqttMgr
+	localManagers.valkeyMgr = valkeyMgr
+	localManagers.kafkaMgr = kafkaMgr
+	localManagers.triggerMgr = triggerMgr
+	localManagers.packMgr = packMgr
+
 	// Start manager polling
 	manager.Start()
 
-	// Auto-start REST server if enabled
-	if cfg.REST.Enabled {
+	// Create and start web server if enabled
+	var webServer *web.Server
+	if cfg.Web.Enabled {
+		webServer = web.NewServer(&cfg.Web, localManagers)
+		if err := webServer.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to start web server: %v\n", err)
+		} else {
+			fmt.Printf("Web server at %s\n", webServer.Address())
+			if cfg.Web.API.Enabled {
+				fmt.Printf("  REST API: %s/api/\n", webServer.Address())
+			}
+			if cfg.Web.UI.Enabled {
+				fmt.Printf("  Browser UI: %s/\n", webServer.Address())
+			}
+		}
+	}
+
+	// Auto-start legacy REST server if enabled (and web server not enabled)
+	if cfg.REST.Enabled && !cfg.Web.Enabled {
 		if err := apiServer.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to start REST server: %v\n", err)
 		}
@@ -590,8 +675,25 @@ func runDaemonMode(cfg *config.Config) {
 		tui.StoreLog(format, args...)
 	})
 
-	// Auto-start REST server if enabled
-	if cfg.REST.Enabled {
+	// Create and start web server if enabled
+	var webServer *web.Server
+	if cfg.Web.Enabled {
+		webServer = web.NewServer(&cfg.Web, sharedManagers)
+		if err := webServer.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to start web server: %v\n", err)
+		} else {
+			fmt.Printf("Web server at %s\n", webServer.Address())
+			if cfg.Web.API.Enabled {
+				fmt.Printf("  REST API: %s/api/\n", webServer.Address())
+			}
+			if cfg.Web.UI.Enabled {
+				fmt.Printf("  Browser UI: %s/\n", webServer.Address())
+			}
+		}
+	}
+
+	// Auto-start legacy REST server if enabled (and web server not enabled)
+	if cfg.REST.Enabled && !cfg.Web.Enabled {
 		if err := apiServer.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: Failed to start REST server: %v\n", err)
 		}
@@ -650,6 +752,11 @@ func runDaemonMode(cfg *config.Config) {
 		mqttMgr.StopAll()
 		valkeyMgr.StopAll()
 		kafkaMgr.StopAll()
+
+		// Stop web server
+		if webServer != nil {
+			webServer.Stop()
+		}
 
 		// Stop API and manager
 		apiServer.Stop()
@@ -879,3 +986,24 @@ func (p *plcDataProvider) GetPLCMetadata(plcName string) tagpack.PLCMetadata {
 
 	return meta
 }
+
+// localManagersWrapper wraps managers for local mode to implement web.Managers.
+type localManagersWrapper struct {
+	config     *config.Config
+	configPath string
+	plcMan     *plcman.Manager
+	mqttMgr    *mqtt.Manager
+	valkeyMgr  *valkey.Manager
+	kafkaMgr   *kafka.Manager
+	triggerMgr *trigger.Manager
+	packMgr    *tagpack.Manager
+}
+
+func (m *localManagersWrapper) GetConfig() *config.Config       { return m.config }
+func (m *localManagersWrapper) GetConfigPath() string           { return m.configPath }
+func (m *localManagersWrapper) GetPLCMan() *plcman.Manager      { return m.plcMan }
+func (m *localManagersWrapper) GetMQTTMgr() *mqtt.Manager       { return m.mqttMgr }
+func (m *localManagersWrapper) GetValkeyMgr() *valkey.Manager   { return m.valkeyMgr }
+func (m *localManagersWrapper) GetKafkaMgr() *kafka.Manager     { return m.kafkaMgr }
+func (m *localManagersWrapper) GetTriggerMgr() *trigger.Manager { return m.triggerMgr }
+func (m *localManagersWrapper) GetPackMgr() *tagpack.Manager    { return m.packMgr }

@@ -1,0 +1,9 @@
+{{define "debug_log.html"}}
+<div class="debug-log">
+    {{range .Logs}}
+    <div class="log-line">{{.}}</div>
+    {{else}}
+    <div class="log-line empty">No log entries</div>
+    {{end}}
+</div>
+{{end}}

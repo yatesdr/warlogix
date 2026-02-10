@@ -1,0 +1,26 @@
+{{define "users_table.html"}}
+<table class="table">
+    <thead>
+        <tr>
+            <th>Username</th>
+            <th>Role</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Users}}
+        <tr>
+            <td>{{.Username}}</td>
+            <td><span class="role-badge {{if .IsAdmin}}role-admin{{else}}role-viewer{{end}}">{{.Role}}</span></td>
+            <td class="actions">
+                <button class="btn btn-sm btn-danger" onclick="deleteUser('{{.Username}}')">Delete</button>
+            </td>
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="3" class="empty-cell">No users configured</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{end}}

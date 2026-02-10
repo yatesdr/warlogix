@@ -1,0 +1,435 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>TagPacks</h1>
+</div>
+
+{{if .IsAdmin}}
+<div class="action-bar">
+    <button class="btn btn-primary" onclick="showAddModal()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;vertical-align:-2px">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Add TagPack
+    </button>
+</div>
+{{end}}
+
+<div id="tagpacks-list" class="tagpacks-list">
+    {{range $pack := .TagPacks}}
+    <div class="tagpack-item collapsed" data-name="{{$pack.Name}}" data-enabled="{{$pack.Enabled}}"
+         data-mqtt="{{$pack.MQTT}}" data-kafka="{{$pack.Kafka}}" data-valkey="{{$pack.Valkey}}">
+        <div class="tagpack-header" onclick="toggleExpand(this)">
+            <span class="tagpack-expand">&#9660;</span>
+            <span class="tagpack-name">{{$pack.Name}}</span>
+            <span class="tagpack-member-count">{{len $pack.Members}} member{{if ne (len $pack.Members) 1}}s{{end}}</span>
+            <span class="tagpack-services">
+                {{if $.IsAdmin}}
+                <button class="service-toggle {{if $pack.MQTT}}service-on{{else}}service-off{{end}}" title="Toggle MQTT"
+                        onclick="toggleService(event, '{{$pack.Name}}', 'mqtt')">MQTT</button>
+                <button class="service-toggle {{if $pack.Kafka}}service-on{{else}}service-off{{end}}" title="Toggle Kafka"
+                        onclick="toggleService(event, '{{$pack.Name}}', 'kafka')">Kafka</button>
+                <button class="service-toggle {{if $pack.Valkey}}service-on{{else}}service-off{{end}}" title="Toggle Valkey"
+                        onclick="toggleService(event, '{{$pack.Name}}', 'valkey')">Valkey</button>
+                {{else}}
+                <span class="service-toggle {{if $pack.MQTT}}service-on{{else}}service-off{{end}}">MQTT</span>
+                <span class="service-toggle {{if $pack.Kafka}}service-on{{else}}service-off{{end}}">Kafka</span>
+                <span class="service-toggle {{if $pack.Valkey}}service-on{{else}}service-off{{end}}">Valkey</span>
+                {{end}}
+            </span>
+            {{if $.IsAdmin}}
+            <button class="status-indicator {{if $pack.Enabled}}status-connected{{else}}status-disconnected{{end}}"
+                    onclick="togglePack(event, '{{$pack.Name}}')">
+                {{if $pack.Enabled}}Enabled{{else}}Disabled{{end}}
+            </button>
+            <button class="btn-icon btn-icon-danger" title="Delete" onclick="deletePack(event, '{{$pack.Name}}')">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/>
+                    <path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                    <path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                    <path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/>
+                </svg>
+            </button>
+            {{else}}
+            <span class="status-badge {{if $pack.Enabled}}status-connected{{else}}status-disconnected{{end}}">
+                {{if $pack.Enabled}}Enabled{{else}}Disabled{{end}}
+            </span>
+            {{end}}
+        </div>
+        <div class="tagpack-members">
+            {{if $pack.Members}}
+            {{range $i, $m := $pack.Members}}
+            <div class="member-row" data-index="{{$i}}">
+                <span class="member-plc">{{$m.PLC}}</span>
+                <span class="member-tag">{{$m.Tag}}</span>
+                {{if $.IsAdmin}}
+                <label class="member-ignore-label" onclick="event.stopPropagation()">
+                    <input type="checkbox" {{if $m.IgnoreChanges}}checked{{end}}
+                           onchange="toggleMemberIgnore('{{$pack.Name}}', {{$i}}, this)">
+                    <span>Ignore</span>
+                </label>
+                <button class="btn-icon btn-icon-danger" title="Remove member"
+                        onclick="removeMember(event, '{{$pack.Name}}', {{$i}})">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+                {{else}}
+                {{if $m.IgnoreChanges}}
+                <span class="indicator indicator-ignore" title="Ignore Changes">I</span>
+                {{end}}
+                {{end}}
+            </div>
+            {{end}}
+            {{else}}
+            <div class="member-empty">No members</div>
+            {{end}}
+            {{if $.IsAdmin}}
+            <div class="add-member-row">
+                <select class="add-member-plc" onchange="onMemberPLCChange(this)">
+                    <option value="">PLC...</option>
+                </select>
+                <div class="add-member-tag-container"></div>
+                <button class="btn btn-sm" onclick="addMember(this)">Add</button>
+            </div>
+            {{end}}
+        </div>
+    </div>
+    {{else}}
+    <div id="empty-state" class="empty-state">No TagPacks configured</div>
+    {{end}}
+</div>
+
+<!-- Add Modal -->
+<div id="tagpack-add-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Add TagPack</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('tagpack-add-modal')">&times;</button>
+        </div>
+        <form id="tagpack-add-form" onsubmit="addPack(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="add-name" required placeholder="my-pack">
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="add-enabled" checked> Enabled
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('tagpack-add-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add TagPack</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// Tag picker instances keyed by pack name
+var memberTagPickers = {};
+
+function toggleExpand(headerEl) {
+    var item = headerEl.closest('.tagpack-item');
+    item.classList.toggle('collapsed');
+
+    // Load PLCs for add-member dropdown on first expand
+    if (!item.classList.contains('collapsed')) {
+        var plcSelect = item.querySelector('.add-member-plc');
+        if (plcSelect && plcSelect.options.length <= 1) {
+            loadPLCsForItem(plcSelect);
+        }
+        // Initialize tag picker if not yet done
+        var name = item.dataset.name;
+        if (!memberTagPickers[name]) {
+            var container = item.querySelector('.add-member-tag-container');
+            if (container) {
+                memberTagPickers[name] = WarLink.TagPicker(container, {
+                    placeholder: 'Search tags...'
+                });
+            }
+        }
+    }
+}
+
+function showAddModal() {
+    document.getElementById('tagpack-add-form').reset();
+    document.getElementById('add-enabled').checked = true;
+    WarLink.showModal('tagpack-add-modal');
+}
+
+function addPack(e) {
+    e.preventDefault();
+    var data = {
+        name: document.getElementById('add-name').value,
+        enabled: document.getElementById('add-enabled').checked,
+        mqtt_enabled: true,
+        kafka_enabled: false,
+        valkey_enabled: false
+    };
+
+    WarLink.api.post('/htmx/tagpacks', data).then(function() {
+        WarLink.hideModal('tagpack-add-modal');
+        location.reload();
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function togglePack(event, name) {
+    event.stopPropagation();
+    WarLink.api.patch('/htmx/tagpacks/' + encodeURIComponent(name)).then(function(data) {
+        var item = document.querySelector('.tagpack-item[data-name="' + name + '"]');
+        if (!item) return;
+        var enabled = data.enabled;
+        item.dataset.enabled = enabled;
+        var btn = item.querySelector('.tagpack-header .status-indicator');
+        if (btn) {
+            btn.className = 'status-indicator ' + (enabled ? 'status-connected' : 'status-disconnected');
+            btn.textContent = enabled ? 'Enabled' : 'Disabled';
+        }
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function toggleService(event, name, service) {
+    event.stopPropagation();
+    var btn = event.currentTarget;
+    WarLink.api.post('/htmx/tagpacks/' + encodeURIComponent(name) + '/service/' + service).then(function(data) {
+        var enabled = data.enabled;
+        btn.className = 'service-toggle ' + (enabled ? 'service-on' : 'service-off');
+        var item = btn.closest('.tagpack-item');
+        if (item) item.dataset[service] = enabled;
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function deletePack(event, name) {
+    event.stopPropagation();
+    if (!confirm('Delete TagPack "' + name + '"?')) return;
+
+    WarLink.api.del('/htmx/tagpacks/' + encodeURIComponent(name)).then(function() {
+        if (memberTagPickers[name]) {
+            memberTagPickers[name].destroy();
+            delete memberTagPickers[name];
+        }
+        var item = document.querySelector('.tagpack-item[data-name="' + name + '"]');
+        if (item) item.remove();
+        if (document.querySelectorAll('.tagpack-item').length === 0) {
+            var list = document.getElementById('tagpacks-list');
+            list.innerHTML = '<div id="empty-state" class="empty-state">No TagPacks configured</div>';
+        }
+        WarLink.toast('TagPack deleted', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function toggleMemberIgnore(packName, index, checkbox) {
+    event.stopPropagation();
+    WarLink.api.patch('/htmx/tagpacks/' + encodeURIComponent(packName) + '/members/' + index).then(function(data) {
+        checkbox.checked = data.ignore_changes;
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+        checkbox.checked = !checkbox.checked;
+    });
+}
+
+function removeMember(event, packName, index) {
+    event.stopPropagation();
+    WarLink.api.del('/htmx/tagpacks/' + encodeURIComponent(packName) + '/members/' + index).then(function() {
+        reloadPackMembers(packName);
+        WarLink.toast('Member removed', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function onMemberPLCChange(plcSelect) {
+    var item = plcSelect.closest('.tagpack-item');
+    var name = item.dataset.name;
+    var plc = plcSelect.value;
+    var picker = memberTagPickers[name];
+    if (picker) {
+        picker.setPLC(plc);
+    }
+}
+
+function addMember(btn) {
+    var item = btn.closest('.tagpack-item');
+    var name = item.dataset.name;
+    var plcSelect = item.querySelector('.add-member-plc');
+    var picker = memberTagPickers[name];
+    var plc = plcSelect.value;
+    var tag = picker ? picker.getValue() : '';
+
+    if (!plc || !tag) {
+        WarLink.toast('Select a PLC and tag', 'error');
+        return;
+    }
+
+    var data = {plc: plc, tag: tag, ignore_changes: false};
+    WarLink.api.post('/htmx/tagpacks/' + encodeURIComponent(name) + '/members', data).then(function() {
+        reloadPackMembers(name);
+        if (picker) picker.setValue('');
+        WarLink.toast('Member added', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function reloadPackMembers(packName) {
+    WarLink.api.get('/htmx/tagpacks/' + encodeURIComponent(packName)).then(function(data) {
+        var item = document.querySelector('.tagpack-item[data-name="' + packName + '"]');
+        if (!item) return;
+
+        var members = data.Members || data.members || [];
+        var membersContainer = item.querySelector('.tagpack-members');
+
+        // Update member count
+        var countEl = item.querySelector('.tagpack-member-count');
+        if (countEl) {
+            countEl.textContent = members.length + ' member' + (members.length !== 1 ? 's' : '');
+        }
+
+        // Rebuild members section
+        var html = '';
+        if (members.length === 0) {
+            html += '<div class="member-empty">No members</div>';
+        } else {
+            for (var i = 0; i < members.length; i++) {
+                var m = members[i];
+                var mPLC = m.PLC || m.plc || '';
+                var mTag = m.Tag || m.tag || '';
+                var mIgnore = m.IgnoreChanges || m.ignore_changes || false;
+                html += '<div class="member-row" data-index="' + i + '">';
+                html += '<span class="member-plc">' + WarLink.escapeHtml(mPLC) + '</span>';
+                html += '<span class="member-tag">' + WarLink.escapeHtml(mTag) + '</span>';
+                {{if .IsAdmin}}
+                html += '<label class="member-ignore-label" onclick="event.stopPropagation()">';
+                html += '<input type="checkbox" ' + (mIgnore ? 'checked' : '') +
+                    ' onchange="toggleMemberIgnore(\'' + WarLink.escapeHtml(packName) + '\', ' + i + ', this)">';
+                html += '<span>Ignore</span></label>';
+                html += '<button class="btn-icon btn-icon-danger" title="Remove member" ' +
+                    'onclick="removeMember(event, \'' + WarLink.escapeHtml(packName) + '\', ' + i + ')">' +
+                    '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">' +
+                    '<path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+                    '</svg></button>';
+                {{end}}
+                html += '</div>';
+            }
+        }
+
+        {{if .IsAdmin}}
+        html += '<div class="add-member-row">';
+        html += '<select class="add-member-plc" onchange="onMemberPLCChange(this)"><option value="">PLC...</option></select>';
+        html += '<div class="add-member-tag-container"></div>';
+        html += '<button class="btn btn-sm" onclick="addMember(this)">Add</button>';
+        html += '</div>';
+        {{end}}
+
+        membersContainer.innerHTML = html;
+
+        // Re-initialize PLC dropdown and tag picker
+        var newPlcSelect = membersContainer.querySelector('.add-member-plc');
+        if (newPlcSelect) {
+            loadPLCsForItem(newPlcSelect);
+        }
+
+        // Cleanup old picker and create new one
+        if (memberTagPickers[packName]) {
+            memberTagPickers[packName].destroy();
+            delete memberTagPickers[packName];
+        }
+        var container = membersContainer.querySelector('.add-member-tag-container');
+        if (container) {
+            memberTagPickers[packName] = WarLink.TagPicker(container, {
+                placeholder: 'Search tags...'
+            });
+        }
+    });
+}
+
+function loadPLCsForItem(plcSelect) {
+    WarLink.api.get('/htmx/available-tags').then(function(tags) {
+        var plcs = {};
+        (tags || []).forEach(function(t) { plcs[t.plc] = true; });
+        plcSelect.innerHTML = '<option value="">PLC...</option>';
+        Object.keys(plcs).sort().forEach(function(name) {
+            plcSelect.innerHTML += '<option value="' + WarLink.escapeHtml(name) + '">' + WarLink.escapeHtml(name) + '</option>';
+        });
+    });
+}
+
+// SSE for entity changes from other tabs
+WarLink.createSSE('/events/republisher', {
+    onEntityChange: function(data) {
+        if (data.entityType !== 'tagpack') return;
+        if (data.action === 'remove') {
+            var name = data.name;
+            if (memberTagPickers[name]) {
+                memberTagPickers[name].destroy();
+                delete memberTagPickers[name];
+            }
+            var item = document.querySelector('.tagpack-item[data-name="' + name + '"]');
+            if (item) item.remove();
+            if (document.querySelectorAll('.tagpack-item').length === 0) {
+                var list = document.getElementById('tagpacks-list');
+                list.innerHTML = '<div id="empty-state" class="empty-state">No TagPacks configured</div>';
+            }
+        }
+        if (data.action === 'add') {
+            location.reload();
+        }
+        if (data.action === 'update') {
+            reloadPackState(data.name);
+        }
+    }
+});
+
+function reloadPackState(packName) {
+    WarLink.api.get('/htmx/tagpacks/' + encodeURIComponent(packName)).then(function(data) {
+        var item = document.querySelector('.tagpack-item[data-name="' + packName + '"]');
+        if (!item) return;
+
+        var enabled = data.Enabled || data.enabled;
+        var mqtt = data.MQTTEnabled || data.mqtt_enabled;
+        var kafka = data.KafkaEnabled || data.kafka_enabled;
+        var valkey = data.ValkeyEnabled || data.valkey_enabled;
+
+        item.dataset.enabled = enabled;
+        item.dataset.mqtt = mqtt;
+        item.dataset.kafka = kafka;
+        item.dataset.valkey = valkey;
+
+        // Update enabled button/badge
+        var enabledEl = item.querySelector('.tagpack-header .status-indicator');
+        if (enabledEl) {
+            enabledEl.className = 'status-indicator ' + (enabled ? 'status-connected' : 'status-disconnected');
+            enabledEl.textContent = enabled ? 'Enabled' : 'Disabled';
+        }
+        var enabledBadge = item.querySelector('.tagpack-header .status-badge');
+        if (enabledBadge) {
+            enabledBadge.className = 'status-badge ' + (enabled ? 'status-connected' : 'status-disconnected');
+            enabledBadge.textContent = enabled ? 'Enabled' : 'Disabled';
+        }
+
+        // Update service toggles
+        var services = item.querySelectorAll('.service-toggle');
+        services.forEach(function(s) {
+            var text = s.textContent.trim().toLowerCase();
+            var isOn = false;
+            if (text === 'mqtt') isOn = mqtt;
+            else if (text === 'kafka') isOn = kafka;
+            else if (text === 'valkey') isOn = valkey;
+            s.className = 'service-toggle ' + (isOn ? 'service-on' : 'service-off');
+        });
+    }).catch(function() {});
+}
+</script>
+
+{{template "footer" .}}

@@ -1,0 +1,63 @@
+{{define "republisher_tree.html"}}
+{{if .PLCs}}
+{{range .PLCs}}
+<div class="plc-group" id="plc-{{.Name}}" data-plc="{{.Name}}">
+    <div class="plc-header" onclick="togglePLC(this)">
+        <span class="plc-expand">&#9660;</span>
+        <span class="plc-name">{{.Name}}</span>
+        <span class="status-dot {{.StatusClass}}"></span>
+        <span class="tag-count">{{countTags .Sections}} tags</span>
+    </div>
+    <div class="plc-tags">
+        {{if .Sections}}
+        {{range .Sections}}
+        <div class="section-group" data-section="{{.Name}}">
+            <div class="section-header" onclick="toggleSection(this)">
+                <span class="section-expand">&#9660;</span>
+                <span class="section-name">{{.Name}}</span>
+                <span class="section-count">({{len .Tags}})</span>
+            </div>
+            <div class="section-tags">
+                {{range .Tags}}
+                <div class="tag-item{{if .IsStruct}} has-children collapsed{{end}}"
+                     data-name="{{.Name}}"
+                     data-type="{{.Type}}"
+                     data-value="{{.Value}}"
+                     data-json="{{.JSONValue}}"
+                     data-alias="{{.Alias}}"
+                     data-writable="{{.Writable}}"
+                     data-enabled="{{.Enabled}}"
+                     data-is-struct="{{.IsStruct}}"
+                     data-field-count="{{.FieldCount}}"
+                     data-has-ignores="{{.HasIgnores}}"
+                     data-ignore-count="{{.IgnoreCount}}"
+                     data-ignore-list="{{json .IgnoreList}}"
+                     data-published-children="{{json .PublishedChildren}}"
+                     data-last-poll="{{.LastPoll}}"
+                     data-last-changed="{{.LastChanged}}">
+                    <div class="tag-row{{if .Enabled}} monitored{{end}}" onclick="handleTagClick(event, this)">
+                        {{if .IsStruct}}<span class="tag-expand" onclick="toggleTagExpand(event, this)">&#9660;</span>{{end}}
+                        <span class="tag-indicators">
+                            {{if .Enabled}}<span class="indicator indicator-publish" title="Published">P</span>{{end}}
+                            {{if .HasIgnores}}<span class="indicator indicator-ignore" title="Has {{.IgnoreCount}} ignored members">I</span>{{end}}
+                            {{if .Writable}}<span class="indicator indicator-write" title="Writable">W</span>{{end}}
+                        </span>
+                        <span class="tag-name" title="{{.Name}}">{{.TreeDisplay}}</span>
+                        {{if not .IsStruct}}<span class="tag-value">{{.Value}}</span>{{end}}
+                    </div>
+                    {{if .IsStruct}}<div class="tag-children"></div>{{end}}
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+        {{else}}
+        <div class="tag-row empty">No tags available</div>
+        {{end}}
+    </div>
+</div>
+{{end}}
+{{else}}
+<div class="empty-state">No PLCs configured</div>
+{{end}}
+{{end}}

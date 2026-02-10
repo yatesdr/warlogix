@@ -1,0 +1,45 @@
+{{define "kafka_table.html"}}
+<table class="table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Brokers</th>
+            <th>Status</th>
+            {{if .IsAdmin}}<th>Actions</th>{{end}}
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Clusters}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>{{.Brokers}}</td>
+            <td><span class="status-badge {{.StatusClass}}">{{.Status}}</span></td>
+            {{if $.IsAdmin}}
+            <td class="actions">
+                {{if eq .Status "Connected"}}
+                <button class="btn btn-sm btn-danger"
+                        hx-post="/htmx/kafka/{{.Name}}/disconnect"
+                        hx-target="#kafka-container"
+                        hx-swap="innerHTML">Disconnect</button>
+                {{else if eq .Status "Connecting"}}
+                <button class="btn btn-sm btn-danger"
+                        hx-post="/htmx/kafka/{{.Name}}/disconnect"
+                        hx-target="#kafka-container"
+                        hx-swap="innerHTML">Disconnect</button>
+                {{else}}
+                <button class="btn btn-sm btn-primary"
+                        hx-post="/htmx/kafka/{{.Name}}/connect"
+                        hx-target="#kafka-container"
+                        hx-swap="innerHTML">Connect</button>
+                {{end}}
+            </td>
+            {{end}}
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="{{if .IsAdmin}}4{{else}}3{{end}}" class="empty-cell">No Kafka clusters configured</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{end}}

@@ -1312,72 +1312,103 @@ func (t *BrowserTab) RefreshTheme() {
 }
 
 // ReloadConfigState reloads the enabled/writable/ignored state from config.
-// This is called when config changes from another TUI session.
+// This is called when config changes from another session (SSH or web UI).
+// Updates changed nodes in-place to avoid rebuilding the tree, which would
+// reset cursor position and lose expanded UDT state.
 func (t *BrowserTab) ReloadConfigState() {
 	if t.selectedPLC == "" {
 		return
 	}
 
-	// Find the PLC config
-	var cfg *config.PLCConfig
-	for i := range t.app.config.PLCs {
-		if t.app.config.PLCs[i].Name == t.selectedPLC {
-			cfg = &t.app.config.PLCs[i]
-			break
-		}
-	}
+	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg == nil {
 		return
 	}
 
-	// Check if any config values actually changed
-	changed := false
+	// Track which tags changed and whether their ignore lists changed
+	type tagChange struct {
+		name          string
+		ignoreChanged bool
+	}
+	var changes []tagChange
+
 	for _, sel := range cfg.Tags {
+		tagChanged := false
+		ignoreChanged := false
+
 		if t.enabledTags[sel.Name] != sel.Enabled {
 			t.enabledTags[sel.Name] = sel.Enabled
-			changed = true
+			tagChanged = true
 		}
 		if t.writableTags[sel.Name] != sel.Writable {
 			t.writableTags[sel.Name] = sel.Writable
-			changed = true
+			tagChanged = true
 		}
-		if len(sel.IgnoreChanges) > 0 {
-			if t.ignoredMembers[sel.Name] == nil {
-				t.ignoredMembers[sel.Name] = make(map[string]bool)
-				changed = true
+
+		// Sync ignore list (detect both additions and removals)
+		desiredIgnored := make(map[string]bool, len(sel.IgnoreChanges))
+		for _, member := range sel.IgnoreChanges {
+			desiredIgnored[member] = true
+		}
+		currentIgnored := t.ignoredMembers[sel.Name]
+		if len(desiredIgnored) != len(currentIgnored) {
+			ignoreChanged = true
+		} else {
+			for member := range desiredIgnored {
+				if !currentIgnored[member] {
+					ignoreChanged = true
+					break
+				}
 			}
-			for _, member := range sel.IgnoreChanges {
-				if !t.ignoredMembers[sel.Name][member] {
-					t.ignoredMembers[sel.Name][member] = true
-					changed = true
+		}
+
+		if ignoreChanged {
+			if len(desiredIgnored) > 0 {
+				t.ignoredMembers[sel.Name] = desiredIgnored
+			} else {
+				delete(t.ignoredMembers, sel.Name)
+			}
+			tagChanged = true
+		}
+
+		if tagChanged {
+			changes = append(changes, tagChange{name: sel.Name, ignoreChanged: ignoreChanged})
+		}
+	}
+
+	if len(changes) == 0 {
+		return
+	}
+
+	// Update changed nodes in-place (no tree rebuild, no cursor disruption)
+	for _, change := range changes {
+		// Update the tag's own node
+		if node, ok := t.tagNodes[change.name]; ok {
+			if ref := node.GetReference(); ref != nil {
+				if tagInfo, ok := ref.(*driver.TagInfo); ok {
+					t.updateNodeText(node, tagInfo, t.enabledTags[change.name], t.writableTags[change.name])
+				}
+			}
+		}
+
+		// If ignore list changed, update any expanded member nodes
+		if change.ignoreChanged {
+			prefix := change.name + "."
+			altPrefix := change.name + "["
+			for nodeName, node := range t.tagNodes {
+				if strings.HasPrefix(nodeName, prefix) || strings.HasPrefix(nodeName, altPrefix) {
+					if ref := node.GetReference(); ref != nil {
+						if tagInfo, ok := ref.(*driver.TagInfo); ok {
+							t.updateNodeText(node, tagInfo, t.enabledTags[nodeName], t.writableTags[nodeName])
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// Only refresh if something actually changed
-	if !changed {
-		return
-	}
-
-	// Save current selection
-	currentNode := t.tree.GetCurrentNode()
-	var currentTagName string
-	if currentNode != nil {
-		if ref := currentNode.GetReference(); ref != nil {
-			if tagInfo, ok := ref.(*driver.TagInfo); ok {
-				currentTagName = tagInfo.Name
-			}
-		}
-	}
-
-	// Refresh the tree to show updated state
-	t.loadTags()
-
-	// Restore selection if we had one
-	if currentTagName != "" {
-		t.selectTagByName(currentTagName)
-	}
+	// Update status bar to reflect new enabled count
+	t.updateStatus()
 }
 
 // selectTagByName finds and selects a tag node by its name.

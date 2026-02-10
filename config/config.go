@@ -63,7 +63,8 @@ func (f PLCFamily) Driver() string {
 type Config struct {
 	Namespace string           `yaml:"namespace"` // Required: instance namespace for topic/key isolation
 	PLCs      []PLCConfig      `yaml:"plcs"`
-	REST      RESTConfig       `yaml:"rest"`
+	REST      RESTConfig       `yaml:"rest,omitempty"` // Deprecated: use Web instead
+	Web       WebConfig        `yaml:"web"`
 	MQTT      []MQTTConfig     `yaml:"mqtt"`
 	Valkey    []ValkeyConfig   `yaml:"valkey,omitempty"`
 	Kafka     []KafkaConfig    `yaml:"kafka,omitempty"`
@@ -238,11 +239,46 @@ func (t *TagSelection) RemoveIgnoreMember(memberName string) {
 }
 
 // RESTConfig holds REST API server configuration.
+// Deprecated: Use WebConfig instead. Kept for backwards compatibility during migration.
 type RESTConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Port    int    `yaml:"port"`
 	Host    string `yaml:"host"`
 }
+
+// WebConfig holds unified web server configuration.
+type WebConfig struct {
+	Enabled bool         `yaml:"enabled"`
+	Host    string       `yaml:"host"`
+	Port    int          `yaml:"port"`
+	API     WebAPIConfig `yaml:"api"`
+	UI      WebUIConfig  `yaml:"ui"`
+}
+
+// WebAPIConfig holds REST API settings.
+type WebAPIConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// WebUIConfig holds browser UI settings.
+type WebUIConfig struct {
+	Enabled       bool      `yaml:"enabled"`
+	SessionSecret string    `yaml:"session_secret,omitempty"`
+	Users         []WebUser `yaml:"users,omitempty"`
+}
+
+// WebUser represents a web interface user.
+type WebUser struct {
+	Username     string `yaml:"username"`
+	PasswordHash string `yaml:"password_hash"` // bcrypt
+	Role         string `yaml:"role"`          // "admin" or "viewer"
+}
+
+// Web user roles
+const (
+	RoleAdmin  = "admin"
+	RoleViewer = "viewer"
+)
 
 // MQTTConfig holds MQTT publisher configuration.
 type MQTTConfig struct {
@@ -332,6 +368,17 @@ func DefaultConfig() *Config {
 			Enabled: false,
 			Port:    8080,
 			Host:    "0.0.0.0",
+		},
+		Web: WebConfig{
+			Enabled: false,
+			Host:    "0.0.0.0",
+			Port:    8080,
+			API: WebAPIConfig{
+				Enabled: true,
+			},
+			UI: WebUIConfig{
+				Enabled: false,
+			},
 		},
 		MQTT:     []MQTTConfig{},
 		Valkey:   []ValkeyConfig{},
@@ -732,4 +779,41 @@ func IsValidNamespace(ns string) bool {
 		}
 	}
 	return true
+}
+
+// FindWebUser returns the web user with the given username, or nil if not found.
+func (c *Config) FindWebUser(username string) *WebUser {
+	for i := range c.Web.UI.Users {
+		if c.Web.UI.Users[i].Username == username {
+			return &c.Web.UI.Users[i]
+		}
+	}
+	return nil
+}
+
+// AddWebUser adds a new web user.
+func (c *Config) AddWebUser(user WebUser) {
+	c.Web.UI.Users = append(c.Web.UI.Users, user)
+}
+
+// RemoveWebUser removes a web user by username.
+func (c *Config) RemoveWebUser(username string) bool {
+	for i, u := range c.Web.UI.Users {
+		if u.Username == username {
+			c.Web.UI.Users = append(c.Web.UI.Users[:i], c.Web.UI.Users[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// UpdateWebUser updates an existing web user.
+func (c *Config) UpdateWebUser(username string, updated WebUser) bool {
+	for i, u := range c.Web.UI.Users {
+		if u.Username == username {
+			c.Web.UI.Users[i] = updated
+			return true
+		}
+	}
+	return false
 }

@@ -1,0 +1,639 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>Triggers</h1>
+</div>
+
+{{if .IsAdmin}}
+<div class="action-bar">
+    <button class="btn btn-primary" onclick="showAddModal()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;vertical-align:-2px">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Add Trigger
+    </button>
+</div>
+{{end}}
+
+<div id="triggers-list" class="tagpacks-list">
+    {{range $trig := .Triggers}}
+    <div class="tagpack-item collapsed" data-name="{{$trig.Name}}" data-status="{{$trig.Status}}" data-status-class="{{$trig.StatusClass}}">
+        <div class="tagpack-header" onclick="toggleExpand(this)">
+            <span class="tagpack-expand">&#9660;</span>
+            <span class="tagpack-name">{{$trig.Name}}</span>
+            <span class="trigger-condition" title="{{$trig.PLC}} / {{$trig.TriggerTag}} {{$trig.Operator}} {{$trig.Value}}">
+                {{$trig.PLC}}: {{$trig.TriggerTag}} {{$trig.Operator}} {{$trig.Value}}
+            </span>
+            <span class="tagpack-member-count">{{len $trig.Tags}} tag{{if ne (len $trig.Tags) 1}}s{{end}}</span>
+            {{if $.IsAdmin}}
+            <button class="status-indicator {{$trig.StatusClass}}" onclick="toggleTrigger(event, '{{$trig.Name}}', '{{$trig.Status}}')"
+                    title="{{if or (eq $trig.Status "Armed") (eq $trig.Status "Firing")}}Click to stop{{else}}Click to start{{end}}">
+                {{$trig.Status}}
+            </button>
+            <button class="btn-icon" title="Test Fire" onclick="testFire(event, '{{$trig.Name}}')">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 1l2.5 5H13l-3.5 4 1.5 5L8 12.5 5 15l1.5-5L3 6h2.5z"/>
+                </svg>
+            </button>
+            <button class="btn-icon" title="Edit" onclick="showEditModal(event, '{{$trig.Name}}')">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/>
+                    <path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/>
+                </svg>
+            </button>
+            <button class="btn-icon btn-icon-danger" title="Delete" onclick="deleteTrigger(event, '{{$trig.Name}}')">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/>
+                    <path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                    <path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                    <path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/>
+                </svg>
+            </button>
+            {{else}}
+            <span class="status-badge {{$trig.StatusClass}}">{{$trig.Status}}</span>
+            {{end}}
+        </div>
+        <div class="tagpack-members">
+            {{if $trig.Tags}}
+            {{range $i, $tag := $trig.Tags}}
+            <div class="member-row" data-index="{{$i}}">
+                <span class="member-tag">{{$tag}}</span>
+                {{if $.IsAdmin}}
+                <button class="btn-icon btn-icon-danger" title="Remove tag"
+                        onclick="removeDataTag(event, '{{$trig.Name}}', {{$i}})">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+                {{end}}
+            </div>
+            {{end}}
+            {{else}}
+            <div class="member-empty">No data tags</div>
+            {{end}}
+            {{if $.IsAdmin}}
+            <div class="add-member-row">
+                <div class="add-trigger-tag-container"></div>
+                <button class="btn btn-sm" onclick="addDataTag(this)">Add</button>
+            </div>
+            {{end}}
+        </div>
+    </div>
+    {{else}}
+    <div id="empty-state" class="empty-state">No triggers configured</div>
+    {{end}}
+</div>
+
+<!-- Add Modal -->
+<div id="trigger-add-modal" class="modal" style="display:none">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h2>Add Trigger</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('trigger-add-modal')">&times;</button>
+        </div>
+        <form id="trigger-add-form" onsubmit="addTrigger(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="add-name" required placeholder="my-trigger">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>PLC</label>
+                        <select id="add-plc" required onchange="onAddPLCChange()">
+                            <option value="">Select PLC...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Trigger Tag</label>
+                        <div id="add-trigger-tag-container"></div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Operator</label>
+                        <select id="add-operator" required>
+                            <option value="==">== (equals)</option>
+                            <option value="!=">!= (not equals)</option>
+                            <option value=">">&gt; (greater than)</option>
+                            <option value="<">&lt; (less than)</option>
+                            <option value=">=">&gt;= (greater or equal)</option>
+                            <option value="<=">&lt;= (less or equal)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Value</label>
+                        <input type="text" id="add-value" required placeholder="1">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Ack Tag (optional)</label>
+                        <div id="add-ack-tag-container"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Debounce (ms)</label>
+                        <input type="number" id="add-debounce" value="0">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>MQTT Broker</label>
+                        <input type="text" id="add-mqtt-broker" placeholder="all, none, or broker name">
+                    </div>
+                    <div class="form-group">
+                        <label>Kafka Cluster</label>
+                        <input type="text" id="add-kafka-cluster" placeholder="all, none, or cluster name">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Selector</label>
+                        <input type="text" id="add-selector" placeholder="optional">
+                    </div>
+                    <div class="form-group">
+                        <label>Publish Pack</label>
+                        <input type="text" id="add-publish-pack" placeholder="optional tagpack name">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="add-enabled" checked> Enabled
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('trigger-add-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Trigger</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div id="trigger-edit-modal" class="modal" style="display:none">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h2>Edit Trigger: <span id="edit-trigger-title"></span></h2>
+            <button class="modal-close" onclick="WarLink.hideModal('trigger-edit-modal')">&times;</button>
+        </div>
+        <form id="trigger-edit-form" onsubmit="saveTrigger(event)">
+            <input type="hidden" id="edit-name">
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>PLC</label>
+                        <select id="edit-plc" required onchange="onEditPLCChange()">
+                            <option value="">Select PLC...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Trigger Tag</label>
+                        <div id="edit-trigger-tag-container"></div>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Operator</label>
+                        <select id="edit-operator" required>
+                            <option value="==">== (equals)</option>
+                            <option value="!=">!= (not equals)</option>
+                            <option value=">">&gt; (greater than)</option>
+                            <option value="<">&lt; (less than)</option>
+                            <option value=">=">&gt;= (greater or equal)</option>
+                            <option value="<=">&lt;= (less or equal)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Value</label>
+                        <input type="text" id="edit-value" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Ack Tag</label>
+                        <div id="edit-ack-tag-container"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Debounce (ms)</label>
+                        <input type="number" id="edit-debounce" value="0">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>MQTT Broker</label>
+                        <input type="text" id="edit-mqtt-broker">
+                    </div>
+                    <div class="form-group">
+                        <label>Kafka Cluster</label>
+                        <input type="text" id="edit-kafka-cluster">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Selector</label>
+                        <input type="text" id="edit-selector">
+                    </div>
+                    <div class="form-group">
+                        <label>Publish Pack</label>
+                        <input type="text" id="edit-publish-pack">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="edit-enabled"> Enabled
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('trigger-edit-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// Tag picker instances
+var addTriggerTagPicker = null;
+var addAckTagPicker = null;
+var editTriggerTagPicker = null;
+var editAckTagPicker = null;
+var inlineTagPickers = {}; // keyed by trigger name
+
+function toggleExpand(headerEl) {
+    var item = headerEl.closest('.tagpack-item');
+    item.classList.toggle('collapsed');
+
+    // Create inline tag picker on first expand
+    if (!item.classList.contains('collapsed')) {
+        var container = item.querySelector('.add-trigger-tag-container');
+        if (container && !inlineTagPickers[item.dataset.name]) {
+            initInlinePicker(item);
+        }
+    }
+}
+
+function initInlinePicker(item) {
+    var name = item.dataset.name;
+    var container = item.querySelector('.add-trigger-tag-container');
+    if (!container) return;
+
+    WarLink.api.get('/htmx/triggers/' + encodeURIComponent(name)).then(function(data) {
+        var plc = data.plc;
+        if (!plc) return;
+        inlineTagPickers[name] = WarLink.TagPicker(container, {
+            plc: plc,
+            placeholder: 'Search tags...'
+        });
+    });
+}
+
+function loadPLCOptions(selectId) {
+    WarLink.api.get('/htmx/available-tags').then(function(tags) {
+        var select = document.getElementById(selectId);
+        var plcs = {};
+        (tags || []).forEach(function(t) { plcs[t.plc] = true; });
+        var current = select.value;
+        select.innerHTML = '<option value="">Select PLC...</option>';
+        Object.keys(plcs).sort().forEach(function(name) {
+            select.innerHTML += '<option value="' + WarLink.escapeHtml(name) + '"' + (name === current ? ' selected' : '') + '>' + WarLink.escapeHtml(name) + '</option>';
+        });
+    });
+}
+
+function onAddPLCChange() {
+    var plc = document.getElementById('add-plc').value;
+    if (addTriggerTagPicker) addTriggerTagPicker.setPLC(plc);
+    if (addAckTagPicker) addAckTagPicker.setPLC(plc);
+}
+
+function onEditPLCChange() {
+    var plc = document.getElementById('edit-plc').value;
+    if (editTriggerTagPicker) editTriggerTagPicker.setPLC(plc);
+    if (editAckTagPicker) editAckTagPicker.setPLC(plc);
+}
+
+function parseValue(str) {
+    if (str === 'true') return true;
+    if (str === 'false') return false;
+    var num = Number(str);
+    if (!isNaN(num) && str !== '') return num;
+    return str;
+}
+
+function showAddModal() {
+    document.getElementById('trigger-add-form').reset();
+    document.getElementById('add-enabled').checked = true;
+    loadPLCOptions('add-plc');
+
+    // Create tag pickers
+    if (addTriggerTagPicker) addTriggerTagPicker.destroy();
+    if (addAckTagPicker) addAckTagPicker.destroy();
+
+    addTriggerTagPicker = WarLink.TagPicker(document.getElementById('add-trigger-tag-container'), {
+        placeholder: 'Search trigger tag...'
+    });
+    addAckTagPicker = WarLink.TagPicker(document.getElementById('add-ack-tag-container'), {
+        allowEmpty: true,
+        placeholder: 'Search ack tag...'
+    });
+
+    WarLink.showModal('trigger-add-modal');
+}
+
+function addTrigger(e) {
+    e.preventDefault();
+    var triggerTag = addTriggerTagPicker ? addTriggerTagPicker.getValue() : '';
+    var ackTag = addAckTagPicker ? addAckTagPicker.getValue() : '';
+
+    if (!triggerTag) {
+        WarLink.toast('Select a trigger tag', 'error');
+        return;
+    }
+
+    var data = {
+        name: document.getElementById('add-name').value,
+        plc: document.getElementById('add-plc').value,
+        trigger_tag: triggerTag,
+        condition: {
+            operator: document.getElementById('add-operator').value,
+            value: parseValue(document.getElementById('add-value').value)
+        },
+        ack_tag: ackTag,
+        debounce_ms: parseInt(document.getElementById('add-debounce').value) || 0,
+        mqtt_broker: document.getElementById('add-mqtt-broker').value,
+        kafka_cluster: document.getElementById('add-kafka-cluster').value,
+        selector: document.getElementById('add-selector').value,
+        publish_pack: document.getElementById('add-publish-pack').value,
+        enabled: document.getElementById('add-enabled').checked,
+        tags: []
+    };
+
+    WarLink.api.post('/htmx/triggers', data).then(function() {
+        WarLink.hideModal('trigger-add-modal');
+        location.reload();
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function showEditModal(event, name) {
+    event.stopPropagation();
+    WarLink.api.get('/htmx/triggers/' + encodeURIComponent(name)).then(function(data) {
+        document.getElementById('edit-name').value = data.name;
+        document.getElementById('edit-trigger-title').textContent = data.name;
+
+        loadPLCOptions('edit-plc');
+
+        // Create tag pickers
+        if (editTriggerTagPicker) editTriggerTagPicker.destroy();
+        if (editAckTagPicker) editAckTagPicker.destroy();
+
+        editTriggerTagPicker = WarLink.TagPicker(document.getElementById('edit-trigger-tag-container'), {
+            plc: data.plc,
+            value: data.trigger_tag,
+            placeholder: 'Search trigger tag...'
+        });
+        editAckTagPicker = WarLink.TagPicker(document.getElementById('edit-ack-tag-container'), {
+            plc: data.plc,
+            value: data.ack_tag || '',
+            allowEmpty: true,
+            placeholder: 'Search ack tag...'
+        });
+
+        setTimeout(function() {
+            document.getElementById('edit-plc').value = data.plc;
+        }, 200);
+
+        document.getElementById('edit-operator').value = data.condition ? data.condition.operator : '==';
+        document.getElementById('edit-value').value = data.condition ? String(data.condition.value) : '';
+        document.getElementById('edit-debounce').value = data.debounce_ms || 0;
+        document.getElementById('edit-mqtt-broker').value = data.mqtt_broker || '';
+        document.getElementById('edit-kafka-cluster').value = data.kafka_cluster || '';
+        document.getElementById('edit-selector').value = data.selector || '';
+        document.getElementById('edit-publish-pack').value = data.publish_pack || '';
+        document.getElementById('edit-enabled').checked = data.enabled;
+
+        WarLink.showModal('trigger-edit-modal');
+    }).catch(function(err) {
+        WarLink.toast('Error loading trigger: ' + err.message, 'error');
+    });
+}
+
+function saveTrigger(e) {
+    e.preventDefault();
+    var name = document.getElementById('edit-name').value;
+    var triggerTag = editTriggerTagPicker ? editTriggerTagPicker.getValue() : '';
+    var ackTag = editAckTagPicker ? editAckTagPicker.getValue() : '';
+
+    // Get current tags from the trigger (don't change them via edit modal)
+    WarLink.api.get('/htmx/triggers/' + encodeURIComponent(name)).then(function(current) {
+        var data = {
+            plc: document.getElementById('edit-plc').value,
+            trigger_tag: triggerTag,
+            condition: {
+                operator: document.getElementById('edit-operator').value,
+                value: parseValue(document.getElementById('edit-value').value)
+            },
+            ack_tag: ackTag,
+            debounce_ms: parseInt(document.getElementById('edit-debounce').value) || 0,
+            mqtt_broker: document.getElementById('edit-mqtt-broker').value,
+            kafka_cluster: document.getElementById('edit-kafka-cluster').value,
+            selector: document.getElementById('edit-selector').value,
+            publish_pack: document.getElementById('edit-publish-pack').value,
+            enabled: document.getElementById('edit-enabled').checked,
+            tags: current.tags || []
+        };
+
+        WarLink.api.put('/htmx/triggers/' + encodeURIComponent(name), data).then(function() {
+            WarLink.hideModal('trigger-edit-modal');
+            var item = document.querySelector('.tagpack-item[data-name="' + name + '"]');
+            if (item) {
+                var condEl = item.querySelector('.trigger-condition');
+                if (condEl) {
+                    condEl.textContent = data.plc + ': ' + data.trigger_tag + ' ' + data.condition.operator + ' ' + data.condition.value;
+                }
+            }
+            WarLink.toast('Trigger updated', 'success');
+        }).catch(function(err) {
+            WarLink.toast('Error: ' + err.message, 'error');
+        });
+    });
+}
+
+function deleteTrigger(event, name) {
+    event.stopPropagation();
+    if (!confirm('Delete trigger "' + name + '"?')) return;
+
+    WarLink.api.del('/htmx/triggers/' + encodeURIComponent(name)).then(function() {
+        // Cleanup inline picker
+        if (inlineTagPickers[name]) {
+            inlineTagPickers[name].destroy();
+            delete inlineTagPickers[name];
+        }
+        var item = document.querySelector('.tagpack-item[data-name="' + name + '"]');
+        if (item) item.remove();
+        if (document.querySelectorAll('.tagpack-item').length === 0) {
+            var list = document.getElementById('triggers-list');
+            list.innerHTML = '<div id="empty-state" class="empty-state">No triggers configured</div>';
+        }
+        WarLink.toast('Trigger deleted', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function toggleTrigger(event, name, currentStatus) {
+    event.stopPropagation();
+    var action = (currentStatus === 'Armed' || currentStatus === 'Firing') ? 'stop' : 'start';
+    var btn = event.currentTarget;
+    btn.disabled = true;
+    btn.textContent = action === 'start' ? 'Starting...' : 'Stopping...';
+
+    WarLink.api.post('/htmx/triggers/' + encodeURIComponent(name) + '/' + action).then(function() {
+        // SSE will update the status
+    }).catch(function(err) {
+        btn.disabled = false;
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function testFire(event, name) {
+    event.stopPropagation();
+    WarLink.api.post('/htmx/triggers/' + encodeURIComponent(name) + '/test').then(function() {
+        WarLink.toast('Test fire sent', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function addDataTag(btn) {
+    var item = btn.closest('.tagpack-item');
+    var name = item.dataset.name;
+    var picker = inlineTagPickers[name];
+    var tag = picker ? picker.getValue() : '';
+    if (!tag) {
+        WarLink.toast('Select a tag', 'error');
+        return;
+    }
+
+    WarLink.api.post('/htmx/triggers/' + encodeURIComponent(name) + '/tags', {tag: tag}).then(function() {
+        reloadTriggerTags(name);
+        if (picker) picker.setValue('');
+        WarLink.toast('Tag added', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function removeDataTag(event, triggerName, index) {
+    event.stopPropagation();
+    WarLink.api.del('/htmx/triggers/' + encodeURIComponent(triggerName) + '/tags/' + index).then(function() {
+        reloadTriggerTags(triggerName);
+        WarLink.toast('Tag removed', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function reloadTriggerTags(triggerName) {
+    WarLink.api.get('/htmx/triggers/' + encodeURIComponent(triggerName)).then(function(data) {
+        var item = document.querySelector('.tagpack-item[data-name="' + triggerName + '"]');
+        if (!item) return;
+
+        var tags = data.tags || [];
+        var membersContainer = item.querySelector('.tagpack-members');
+
+        // Update tag count
+        var countEl = item.querySelector('.tagpack-member-count');
+        if (countEl) {
+            countEl.textContent = tags.length + ' tag' + (tags.length !== 1 ? 's' : '');
+        }
+
+        // Rebuild tags section
+        var html = '';
+        if (tags.length === 0) {
+            html += '<div class="member-empty">No data tags</div>';
+        } else {
+            for (var i = 0; i < tags.length; i++) {
+                html += '<div class="member-row" data-index="' + i + '">';
+                html += '<span class="member-tag">' + WarLink.escapeHtml(tags[i]) + '</span>';
+                {{if .IsAdmin}}
+                html += '<button class="btn-icon btn-icon-danger" title="Remove tag" ' +
+                    'onclick="removeDataTag(event, \'' + WarLink.escapeHtml(triggerName) + '\', ' + i + ')">' +
+                    '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">' +
+                    '<path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+                    '</svg></button>';
+                {{end}}
+                html += '</div>';
+            }
+        }
+
+        {{if .IsAdmin}}
+        html += '<div class="add-member-row">';
+        html += '<div class="add-trigger-tag-container"></div>';
+        html += '<button class="btn btn-sm" onclick="addDataTag(this)">Add</button>';
+        html += '</div>';
+        {{end}}
+
+        membersContainer.innerHTML = html;
+
+        // Re-initialize inline picker
+        if (inlineTagPickers[triggerName]) {
+            inlineTagPickers[triggerName].destroy();
+            delete inlineTagPickers[triggerName];
+        }
+        if (!item.classList.contains('collapsed')) {
+            initInlinePicker(item);
+        }
+    });
+}
+
+// SSE for real-time status updates
+WarLink.createSSE('/events/republisher', {
+    onTriggerStatus: function(data) {
+        var item = document.querySelector('.tagpack-item[data-name="' + data.name + '"]');
+        if (!item) return;
+
+        var status = WarLink.capitalizeFirst(data.status);
+        item.dataset.status = status;
+        item.dataset.statusClass = data.statusClass;
+
+        var btn = item.querySelector('.status-indicator');
+        if (btn) {
+            btn.className = 'status-indicator ' + data.statusClass;
+            btn.textContent = status;
+            btn.disabled = false;
+            btn.onclick = function(e) { toggleTrigger(e, data.name, status); };
+            btn.title = (status === 'Armed' || status === 'Firing') ? 'Click to stop' : 'Click to start';
+        }
+        var badge = item.querySelector('.status-badge');
+        if (badge) {
+            badge.className = 'status-badge ' + data.statusClass;
+            badge.textContent = status;
+        }
+    },
+    onEntityChange: function(data) {
+        if (data.entityType !== 'trigger') return;
+        if (data.action === 'remove') {
+            var name = data.name;
+            if (inlineTagPickers[name]) {
+                inlineTagPickers[name].destroy();
+                delete inlineTagPickers[name];
+            }
+            var item = document.querySelector('.tagpack-item[data-name="' + name + '"]');
+            if (item) item.remove();
+            if (document.querySelectorAll('.tagpack-item').length === 0) {
+                var list = document.getElementById('triggers-list');
+                list.innerHTML = '<div id="empty-state" class="empty-state">No triggers configured</div>';
+            }
+        }
+        if (data.action === 'add') {
+            location.reload();
+        }
+    }
+});
+</script>
+
+{{template "footer" .}}

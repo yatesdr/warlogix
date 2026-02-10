@@ -1,0 +1,30 @@
+{{define "tagpacks_table.html"}}
+<table class="table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Members</th>
+            <th>MQTT</th>
+            <th>Kafka</th>
+            <th>Valkey</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .TagPacks}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>{{.MemberCount}}</td>
+            <td>{{if .MQTT}}Yes{{else}}No{{end}}</td>
+            <td>{{if .Kafka}}Yes{{else}}No{{end}}</td>
+            <td>{{if .Valkey}}Yes{{else}}No{{end}}</td>
+            <td><span class="status-badge {{if .Enabled}}status-connected{{else}}status-disconnected{{end}}">{{if .Enabled}}Enabled{{else}}Disabled{{end}}</span></td>
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="6" class="empty-cell">No TagPacks configured</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{end}}

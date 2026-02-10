@@ -1,0 +1,383 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>MQTT Brokers</h1>
+</div>
+
+{{if .IsAdmin}}
+<div class="action-bar">
+    <button class="btn btn-primary" onclick="showAddModal()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;vertical-align:-2px">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Add Broker
+    </button>
+</div>
+{{end}}
+
+<div id="mqtt-container">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Broker</th>
+                <th>Port</th>
+                <th>TLS</th>
+                <th>Status</th>
+                {{if .IsAdmin}}<th>Actions</th>{{end}}
+            </tr>
+        </thead>
+        <tbody id="mqtt-tbody">
+            {{range .Brokers}}
+            <tr class="mqtt-row" data-name="{{.Name}}" data-status="{{.Status}}" data-status-class="{{.StatusClass}}">
+                <td>{{.Name}}</td>
+                <td>{{.Broker}}</td>
+                <td>{{.Port}}</td>
+                <td>{{if .Enabled}}Yes{{else}}No{{end}}</td>
+                <td>
+                    {{if $.IsAdmin}}
+                    <button class="status-indicator {{.StatusClass}}"
+                            onclick="toggleMQTT('{{.Name}}', '{{.Status}}')"
+                            title="{{if eq .Status "Connected"}}Click to stop{{else}}Click to start{{end}}">
+                        {{.Status}}
+                    </button>
+                    {{else}}
+                    <span class="status-badge {{.StatusClass}}">{{.Status}}</span>
+                    {{end}}
+                </td>
+                {{if $.IsAdmin}}
+                <td class="actions">
+                    <button class="btn-icon" title="Edit" onclick="showEditModal('{{.Name}}')">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/>
+                            <path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/>
+                        </svg>
+                    </button>
+                    <button class="btn-icon btn-icon-danger" title="Delete" onclick="deleteMQTT('{{.Name}}')">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/>
+                            <path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                            <path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                            <path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/>
+                        </svg>
+                    </button>
+                </td>
+                {{end}}
+            </tr>
+            {{else}}
+            <tr id="empty-row">
+                <td colspan="{{if .IsAdmin}}6{{else}}5{{end}}" class="empty-cell">No MQTT brokers configured</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+
+<!-- Add Modal -->
+<div id="mqtt-add-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Add MQTT Broker</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('mqtt-add-modal')">&times;</button>
+        </div>
+        <form id="mqtt-add-form" onsubmit="addMQTT(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="add-name" required placeholder="my-broker">
+                </div>
+                <div class="form-group">
+                    <label>Broker Address</label>
+                    <input type="text" id="add-broker" required placeholder="192.168.1.100">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Port</label>
+                        <input type="number" id="add-port" value="1883">
+                    </div>
+                    <div class="form-group">
+                        <label>Client ID</label>
+                        <input type="text" id="add-client-id" placeholder="warlink">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Selector (sub-namespace)</label>
+                    <input type="text" id="add-selector" placeholder="optional">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" id="add-username">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="add-password">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-tls"> Use TLS
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-enabled" checked> Enabled
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('mqtt-add-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Broker</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div id="mqtt-edit-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Edit MQTT Broker</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('mqtt-edit-modal')">&times;</button>
+        </div>
+        <form id="mqtt-edit-form" onsubmit="saveMQTT(event)">
+            <input type="hidden" id="edit-name">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Broker Address</label>
+                    <input type="text" id="edit-broker" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Port</label>
+                        <input type="number" id="edit-port" value="1883">
+                    </div>
+                    <div class="form-group">
+                        <label>Client ID</label>
+                        <input type="text" id="edit-client-id">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Selector</label>
+                    <input type="text" id="edit-selector">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" id="edit-username">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="edit-password">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-tls"> Use TLS
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-enabled"> Enabled
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('mqtt-edit-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showAddModal() {
+    document.getElementById('mqtt-add-form').reset();
+    document.getElementById('add-enabled').checked = true;
+    document.getElementById('add-port').value = '1883';
+    WarLink.showModal('mqtt-add-modal');
+}
+
+function addMQTT(e) {
+    e.preventDefault();
+    var data = {
+        name: document.getElementById('add-name').value,
+        broker: document.getElementById('add-broker').value,
+        port: parseInt(document.getElementById('add-port').value) || 1883,
+        client_id: document.getElementById('add-client-id').value,
+        selector: document.getElementById('add-selector').value,
+        username: document.getElementById('add-username').value,
+        password: document.getElementById('add-password').value,
+        use_tls: document.getElementById('add-tls').checked,
+        enabled: document.getElementById('add-enabled').checked
+    };
+
+    WarLink.api.post('/htmx/mqtt', data).then(function() {
+        WarLink.hideModal('mqtt-add-modal');
+        // Add row to table
+        var tbody = document.getElementById('mqtt-tbody');
+        var empty = document.getElementById('empty-row');
+        if (empty) empty.remove();
+
+        var tr = document.createElement('tr');
+        tr.className = 'mqtt-row';
+        tr.dataset.name = data.name;
+        tr.dataset.status = 'Stopped';
+        tr.dataset.statusClass = 'status-disconnected';
+        tr.innerHTML = buildRowHtml(data.name, data.broker, data.port, data.use_tls, 'Stopped', 'status-disconnected');
+        tbody.appendChild(tr);
+        WarLink.toast('Broker added', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function showEditModal(name) {
+    WarLink.api.get('/htmx/mqtt/' + encodeURIComponent(name)).then(function(data) {
+        document.getElementById('edit-name').value = data.name;
+        document.getElementById('edit-broker').value = data.broker;
+        document.getElementById('edit-port').value = data.port;
+        document.getElementById('edit-client-id').value = data.client_id || '';
+        document.getElementById('edit-selector').value = data.selector || '';
+        document.getElementById('edit-username').value = data.username || '';
+        document.getElementById('edit-password').value = data.password || '';
+        document.getElementById('edit-tls').checked = data.use_tls;
+        document.getElementById('edit-enabled').checked = data.enabled;
+        WarLink.showModal('mqtt-edit-modal');
+    }).catch(function(err) {
+        WarLink.toast('Error loading broker: ' + err.message, 'error');
+    });
+}
+
+function saveMQTT(e) {
+    e.preventDefault();
+    var name = document.getElementById('edit-name').value;
+    var data = {
+        broker: document.getElementById('edit-broker').value,
+        port: parseInt(document.getElementById('edit-port').value) || 1883,
+        client_id: document.getElementById('edit-client-id').value,
+        selector: document.getElementById('edit-selector').value,
+        username: document.getElementById('edit-username').value,
+        password: document.getElementById('edit-password').value,
+        use_tls: document.getElementById('edit-tls').checked,
+        enabled: document.getElementById('edit-enabled').checked
+    };
+
+    WarLink.api.put('/htmx/mqtt/' + encodeURIComponent(name), data).then(function() {
+        WarLink.hideModal('mqtt-edit-modal');
+        // Update row
+        var row = document.querySelector('.mqtt-row[data-name="' + name + '"]');
+        if (row) {
+            row.cells[1].textContent = data.broker;
+            row.cells[2].textContent = data.port;
+            row.cells[3].textContent = data.use_tls ? 'Yes' : 'No';
+        }
+        WarLink.toast('Broker updated', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function deleteMQTT(name) {
+    if (!confirm('Delete MQTT broker "' + name + '"?')) return;
+
+    WarLink.api.del('/htmx/mqtt/' + encodeURIComponent(name)).then(function() {
+        var row = document.querySelector('.mqtt-row[data-name="' + name + '"]');
+        if (row) row.remove();
+        // Check if table empty
+        var rows = document.querySelectorAll('.mqtt-row');
+        if (rows.length === 0) {
+            var tbody = document.getElementById('mqtt-tbody');
+            var tr = document.createElement('tr');
+            tr.id = 'empty-row';
+            tr.innerHTML = '<td colspan="{{if .IsAdmin}}6{{else}}5{{end}}" class="empty-cell">No MQTT brokers configured</td>';
+            tbody.appendChild(tr);
+        }
+        WarLink.toast('Broker deleted', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function toggleMQTT(name, currentStatus) {
+    var action = currentStatus === 'Connected' ? 'stop' : 'start';
+    var row = document.querySelector('.mqtt-row[data-name="' + name + '"]');
+    if (row) {
+        var btn = row.querySelector('.status-indicator');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = action === 'start' ? 'Starting...' : 'Stopping...';
+        }
+    }
+
+    WarLink.api.post('/htmx/mqtt/' + encodeURIComponent(name) + '/' + action).then(function() {
+        // SSE will update the status
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function buildRowHtml(name, broker, port, tls, status, statusClass) {
+    var html = '<td>' + WarLink.escapeHtml(name) + '</td>' +
+        '<td>' + WarLink.escapeHtml(broker) + '</td>' +
+        '<td>' + port + '</td>' +
+        '<td>' + (tls ? 'Yes' : 'No') + '</td>' +
+        '<td>';
+    {{if .IsAdmin}}
+    html += '<button class="status-indicator ' + statusClass + '" onclick="toggleMQTT(\'' + WarLink.escapeHtml(name) + '\', \'' + status + '\')">' + status + '</button>';
+    html += '</td><td class="actions">';
+    html += '<button class="btn-icon" title="Edit" onclick="showEditModal(\'' + WarLink.escapeHtml(name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/></svg></button>';
+    html += '<button class="btn-icon btn-icon-danger" title="Delete" onclick="deleteMQTT(\'' + WarLink.escapeHtml(name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/><path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/></svg></button>';
+    {{else}}
+    html += '<span class="status-badge ' + statusClass + '">' + status + '</span>';
+    {{end}}
+    html += '</td>';
+    return html;
+}
+
+// SSE for real-time status updates
+WarLink.createSSE('/events/republisher', {
+    onMqttStatus: function(data) {
+        var row = document.querySelector('.mqtt-row[data-name="' + data.name + '"]');
+        if (!row) return;
+
+        var status = WarLink.capitalizeFirst(data.status);
+        row.dataset.status = status;
+        row.dataset.statusClass = data.statusClass;
+
+        var btn = row.querySelector('.status-indicator');
+        if (btn) {
+            btn.className = 'status-indicator ' + data.statusClass;
+            btn.textContent = status;
+            btn.disabled = false;
+            btn.onclick = function() { toggleMQTT(data.name, status); };
+            btn.title = status === 'Connected' ? 'Click to stop' : 'Click to start';
+        }
+        var badge = row.querySelector('.status-badge');
+        if (badge) {
+            badge.className = 'status-badge ' + data.statusClass;
+            badge.textContent = status;
+        }
+    },
+    onEntityChange: function(data) {
+        if (data.entityType !== 'mqtt') return;
+        if (data.action === 'remove') {
+            var row = document.querySelector('.mqtt-row[data-name="' + data.name + '"]');
+            if (row) row.remove();
+        }
+        // For add/update from another tab, a simple reload is acceptable
+        if (data.action === 'add' || data.action === 'update') {
+            var existing = document.querySelector('.mqtt-row[data-name="' + data.name + '"]');
+            if (!existing && data.action === 'add') {
+                location.reload();
+            }
+        }
+    }
+});
+</script>
+
+{{template "footer" .}}

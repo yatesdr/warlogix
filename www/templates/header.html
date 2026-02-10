@@ -1,0 +1,40 @@
+{{define "header"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WarLink</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/htmx.min.js"></script>
+    <script src="/static/js/warlink.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="/">WarLink</a>
+        </div>
+        <div class="nav-links">
+            <a href="/plcs" class="{{if eq .Page "plcs"}}active{{end}}">PLCs</a>
+            <a href="/republisher" class="{{if eq .Page "republisher"}}active{{end}}">Republisher</a>
+            <a href="/tagpacks" class="{{if eq .Page "tagpacks"}}active{{end}}">TagPacks</a>
+            <a href="/triggers" class="{{if eq .Page "triggers"}}active{{end}}">Triggers</a>
+            <a href="/rest" class="{{if eq .Page "rest"}}active{{end}}">REST</a>
+            <a href="/mqtt" class="{{if eq .Page "mqtt"}}active{{end}}">MQTT</a>
+            <a href="/valkey" class="{{if eq .Page "valkey"}}active{{end}}">Valkey</a>
+            <a href="/kafka" class="{{if eq .Page "kafka"}}active{{end}}">Kafka</a>
+            <a href="/debug" class="{{if eq .Page "debug"}}active{{end}}">Debug</a>
+            {{if .IsAdmin}}
+            <a href="/users" class="{{if eq .Page "users"}}active{{end}}">Users</a>
+            {{end}}
+        </div>
+        <div class="nav-user">
+            <span class="username">{{.Username}} ({{.Role}})</span>
+            <form action="/logout" method="post" style="display:inline">
+                <button type="submit" class="btn btn-sm">Logout</button>
+            </form>
+        </div>
+    </nav>
+
+    <main class="container">
+{{end}}

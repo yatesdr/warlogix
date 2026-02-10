@@ -1,0 +1,90 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>User Management</h1>
+    <button class="btn btn-primary" onclick="showAddUserModal()">Add User</button>
+</div>
+
+<div id="users-container" hx-get="/users/htmx" hx-trigger="every 5s" hx-swap="innerHTML">
+    {{template "users_table.html" .}}
+</div>
+
+<!-- Add User Modal -->
+<div id="add-user-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Add User</h2>
+            <button class="modal-close" onclick="hideAddUserModal()">&times;</button>
+        </div>
+        <form id="add-user-form" onsubmit="addUser(event)">
+            <div class="form-group">
+                <label for="new-username">Username</label>
+                <input type="text" id="new-username" name="username" required>
+            </div>
+            <div class="form-group">
+                <label for="new-password">Password</label>
+                <input type="password" id="new-password" name="password" required>
+            </div>
+            <div class="form-group">
+                <label for="new-role">Role</label>
+                <select id="new-role" name="role">
+                    <option value="admin">Admin</option>
+                    <option value="viewer">Viewer</option>
+                </select>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="hideAddUserModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add User</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showAddUserModal() {
+    document.getElementById('add-user-modal').style.display = 'flex';
+}
+
+function hideAddUserModal() {
+    document.getElementById('add-user-modal').style.display = 'none';
+    document.getElementById('add-user-form').reset();
+}
+
+function addUser(e) {
+    e.preventDefault();
+    const form = e.target;
+    const data = {
+        username: form.username.value,
+        password: form.password.value,
+        role: form.role.value
+    };
+    fetch('/users/', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    }).then(response => {
+        if (response.ok) {
+            hideAddUserModal();
+            htmx.trigger('#users-container', 'htmx:load');
+            location.reload();
+        } else {
+            response.text().then(msg => alert('Error: ' + msg));
+        }
+    });
+}
+
+function deleteUser(username) {
+    if (!confirm('Delete user "' + username + '"?')) return;
+    fetch('/users/' + encodeURIComponent(username), {
+        method: 'DELETE'
+    }).then(response => {
+        if (response.ok) {
+            location.reload();
+        } else {
+            response.text().then(msg => alert('Error: ' + msg));
+        }
+    });
+}
+</script>
+
+{{template "footer" .}}

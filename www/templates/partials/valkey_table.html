@@ -1,0 +1,45 @@
+{{define "valkey_table.html"}}
+<table class="table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Address</th>
+            <th>Status</th>
+            {{if .IsAdmin}}<th>Actions</th>{{end}}
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Servers}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>{{.Address}}</td>
+            <td><span class="status-badge {{.StatusClass}}">{{.Status}}</span></td>
+            {{if $.IsAdmin}}
+            <td class="actions">
+                {{if eq .Status "Connected"}}
+                <button class="btn btn-sm btn-danger"
+                        hx-post="/htmx/valkey/{{.Name}}/stop"
+                        hx-target="#valkey-container"
+                        hx-swap="innerHTML">Stop</button>
+                {{else if eq .Status "Connecting"}}
+                <button class="btn btn-sm btn-danger"
+                        hx-post="/htmx/valkey/{{.Name}}/stop"
+                        hx-target="#valkey-container"
+                        hx-swap="innerHTML">Stop</button>
+                {{else}}
+                <button class="btn btn-sm btn-primary"
+                        hx-post="/htmx/valkey/{{.Name}}/start"
+                        hx-target="#valkey-container"
+                        hx-swap="innerHTML">Start</button>
+                {{end}}
+            </td>
+            {{end}}
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="{{if .IsAdmin}}4{{else}}3{{end}}" class="empty-cell">No Valkey servers configured</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{end}}

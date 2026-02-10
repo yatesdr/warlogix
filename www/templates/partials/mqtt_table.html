@@ -1,0 +1,47 @@
+{{define "mqtt_table.html"}}
+<table class="table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Broker</th>
+            <th>Port</th>
+            <th>Status</th>
+            {{if .IsAdmin}}<th>Actions</th>{{end}}
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Brokers}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td>{{.Broker}}</td>
+            <td>{{.Port}}</td>
+            <td><span class="status-badge {{.StatusClass}}">{{.Status}}</span></td>
+            {{if $.IsAdmin}}
+            <td class="actions">
+                {{if eq .Status "Connected"}}
+                <button class="btn btn-sm btn-danger"
+                        hx-post="/htmx/mqtt/{{.Name}}/stop"
+                        hx-target="#mqtt-container"
+                        hx-swap="innerHTML">Stop</button>
+                {{else if eq .Status "Connecting"}}
+                <button class="btn btn-sm btn-danger"
+                        hx-post="/htmx/mqtt/{{.Name}}/stop"
+                        hx-target="#mqtt-container"
+                        hx-swap="innerHTML">Stop</button>
+                {{else}}
+                <button class="btn btn-sm btn-primary"
+                        hx-post="/htmx/mqtt/{{.Name}}/start"
+                        hx-target="#mqtt-container"
+                        hx-swap="innerHTML">Start</button>
+                {{end}}
+            </td>
+            {{end}}
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="{{if .IsAdmin}}5{{else}}4{{end}}" class="empty-cell">No MQTT brokers configured</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{end}}

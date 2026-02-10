@@ -1,0 +1,402 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>Valkey Servers</h1>
+</div>
+
+{{if .IsAdmin}}
+<div class="action-bar">
+    <button class="btn btn-primary" onclick="showAddModal()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;vertical-align:-2px">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Add Server
+    </button>
+</div>
+{{end}}
+
+<div id="valkey-container">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Address</th>
+                <th>Database</th>
+                <th>TLS</th>
+                <th>Writeback</th>
+                <th>Status</th>
+                {{if .IsAdmin}}<th>Actions</th>{{end}}
+            </tr>
+        </thead>
+        <tbody id="valkey-tbody">
+            {{range .Servers}}
+            <tr class="valkey-row" data-name="{{.Name}}" data-status="{{.Status}}" data-status-class="{{.StatusClass}}">
+                <td>{{.Name}}</td>
+                <td>{{.Address}}</td>
+                <td>{{.Database}}</td>
+                <td>{{if .UseTLS}}Yes{{else}}No{{end}}</td>
+                <td>{{if .EnableWriteback}}Yes{{else}}No{{end}}</td>
+                <td>
+                    {{if $.IsAdmin}}
+                    <button class="status-indicator {{.StatusClass}}"
+                            onclick="toggleValkey('{{.Name}}', '{{.Status}}')"
+                            title="{{if eq .Status "Connected"}}Click to stop{{else}}Click to start{{end}}">
+                        {{.Status}}
+                    </button>
+                    {{else}}
+                    <span class="status-badge {{.StatusClass}}">{{.Status}}</span>
+                    {{end}}
+                </td>
+                {{if $.IsAdmin}}
+                <td class="actions">
+                    <button class="btn-icon" title="Edit" onclick="showEditModal('{{.Name}}')">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/>
+                            <path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/>
+                        </svg>
+                    </button>
+                    <button class="btn-icon btn-icon-danger" title="Delete" onclick="deleteValkey('{{.Name}}')">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/>
+                            <path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                            <path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                            <path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/>
+                        </svg>
+                    </button>
+                </td>
+                {{end}}
+            </tr>
+            {{else}}
+            <tr id="empty-row">
+                <td colspan="{{if .IsAdmin}}7{{else}}6{{end}}" class="empty-cell">No Valkey servers configured</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+</div>
+
+<!-- Add Modal -->
+<div id="valkey-add-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Add Valkey Server</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('valkey-add-modal')">&times;</button>
+        </div>
+        <form id="valkey-add-form" onsubmit="addValkey(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="add-name" required placeholder="my-valkey">
+                </div>
+                <div class="form-group">
+                    <label>Address</label>
+                    <input type="text" id="add-address" required placeholder="192.168.1.100:6379">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="add-password">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Database</label>
+                        <input type="number" id="add-database" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>Selector (sub-namespace)</label>
+                        <input type="text" id="add-selector" placeholder="optional">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Key TTL</label>
+                    <input type="text" id="add-key-ttl" placeholder="30m">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-tls"> Use TLS
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-publish-changes"> Publish Changes
+                        </label>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-writeback"> Enable Writeback
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="add-enabled" checked> Enabled
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('valkey-add-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Server</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div id="valkey-edit-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Edit Valkey Server</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('valkey-edit-modal')">&times;</button>
+        </div>
+        <form id="valkey-edit-form" onsubmit="saveValkey(event)">
+            <input type="hidden" id="edit-name">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Address</label>
+                    <input type="text" id="edit-address" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="edit-password">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Database</label>
+                        <input type="number" id="edit-database" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>Selector</label>
+                        <input type="text" id="edit-selector">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Key TTL</label>
+                    <input type="text" id="edit-key-ttl">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-tls"> Use TLS
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-publish-changes"> Publish Changes
+                        </label>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-writeback"> Enable Writeback
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="edit-enabled"> Enabled
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('valkey-edit-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function showAddModal() {
+    document.getElementById('valkey-add-form').reset();
+    document.getElementById('add-enabled').checked = true;
+    document.getElementById('add-database').value = '0';
+    WarLink.showModal('valkey-add-modal');
+}
+
+function addValkey(e) {
+    e.preventDefault();
+    var data = {
+        name: document.getElementById('add-name').value,
+        address: document.getElementById('add-address').value,
+        password: document.getElementById('add-password').value,
+        database: parseInt(document.getElementById('add-database').value) || 0,
+        selector: document.getElementById('add-selector').value,
+        key_ttl: document.getElementById('add-key-ttl').value,
+        use_tls: document.getElementById('add-tls').checked,
+        publish_changes: document.getElementById('add-publish-changes').checked,
+        enable_writeback: document.getElementById('add-writeback').checked,
+        enabled: document.getElementById('add-enabled').checked
+    };
+
+    WarLink.api.post('/htmx/valkey', data).then(function() {
+        WarLink.hideModal('valkey-add-modal');
+        // Add row to table
+        var tbody = document.getElementById('valkey-tbody');
+        var empty = document.getElementById('empty-row');
+        if (empty) empty.remove();
+
+        var tr = document.createElement('tr');
+        tr.className = 'valkey-row';
+        tr.dataset.name = data.name;
+        tr.dataset.status = 'Stopped';
+        tr.dataset.statusClass = 'status-disconnected';
+        tr.innerHTML = buildRowHtml(data.name, data.address, data.database, data.use_tls, data.enable_writeback, 'Stopped', 'status-disconnected');
+        tbody.appendChild(tr);
+        WarLink.toast('Server added', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function showEditModal(name) {
+    WarLink.api.get('/htmx/valkey/' + encodeURIComponent(name)).then(function(data) {
+        document.getElementById('edit-name').value = data.name;
+        document.getElementById('edit-address').value = data.address;
+        document.getElementById('edit-password').value = data.password || '';
+        document.getElementById('edit-database').value = data.database;
+        document.getElementById('edit-selector').value = data.selector || '';
+        document.getElementById('edit-key-ttl').value = data.key_ttl || '';
+        document.getElementById('edit-tls').checked = data.use_tls;
+        document.getElementById('edit-publish-changes').checked = data.publish_changes;
+        document.getElementById('edit-writeback').checked = data.enable_writeback;
+        document.getElementById('edit-enabled').checked = data.enabled;
+        WarLink.showModal('valkey-edit-modal');
+    }).catch(function(err) {
+        WarLink.toast('Error loading server: ' + err.message, 'error');
+    });
+}
+
+function saveValkey(e) {
+    e.preventDefault();
+    var name = document.getElementById('edit-name').value;
+    var data = {
+        address: document.getElementById('edit-address').value,
+        password: document.getElementById('edit-password').value,
+        database: parseInt(document.getElementById('edit-database').value) || 0,
+        selector: document.getElementById('edit-selector').value,
+        key_ttl: document.getElementById('edit-key-ttl').value,
+        use_tls: document.getElementById('edit-tls').checked,
+        publish_changes: document.getElementById('edit-publish-changes').checked,
+        enable_writeback: document.getElementById('edit-writeback').checked,
+        enabled: document.getElementById('edit-enabled').checked
+    };
+
+    WarLink.api.put('/htmx/valkey/' + encodeURIComponent(name), data).then(function() {
+        WarLink.hideModal('valkey-edit-modal');
+        // Update row
+        var row = document.querySelector('.valkey-row[data-name="' + name + '"]');
+        if (row) {
+            row.cells[1].textContent = data.address;
+            row.cells[2].textContent = data.database;
+            row.cells[3].textContent = data.use_tls ? 'Yes' : 'No';
+            row.cells[4].textContent = data.enable_writeback ? 'Yes' : 'No';
+        }
+        WarLink.toast('Server updated', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function deleteValkey(name) {
+    if (!confirm('Delete Valkey server "' + name + '"?')) return;
+
+    WarLink.api.del('/htmx/valkey/' + encodeURIComponent(name)).then(function() {
+        var row = document.querySelector('.valkey-row[data-name="' + name + '"]');
+        if (row) row.remove();
+        // Check if table empty
+        var rows = document.querySelectorAll('.valkey-row');
+        if (rows.length === 0) {
+            var tbody = document.getElementById('valkey-tbody');
+            var tr = document.createElement('tr');
+            tr.id = 'empty-row';
+            tr.innerHTML = '<td colspan="{{if .IsAdmin}}7{{else}}6{{end}}" class="empty-cell">No Valkey servers configured</td>';
+            tbody.appendChild(tr);
+        }
+        WarLink.toast('Server deleted', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function toggleValkey(name, currentStatus) {
+    var action = currentStatus === 'Connected' ? 'stop' : 'start';
+    var row = document.querySelector('.valkey-row[data-name="' + name + '"]');
+    if (row) {
+        var btn = row.querySelector('.status-indicator');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = action === 'start' ? 'Starting...' : 'Stopping...';
+        }
+    }
+
+    WarLink.api.post('/htmx/valkey/' + encodeURIComponent(name) + '/' + action).then(function() {
+        // SSE will update the status
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function buildRowHtml(name, address, database, tls, writeback, status, statusClass) {
+    var html = '<td>' + WarLink.escapeHtml(name) + '</td>' +
+        '<td>' + WarLink.escapeHtml(address) + '</td>' +
+        '<td>' + database + '</td>' +
+        '<td>' + (tls ? 'Yes' : 'No') + '</td>' +
+        '<td>' + (writeback ? 'Yes' : 'No') + '</td>' +
+        '<td>';
+    {{if .IsAdmin}}
+    html += '<button class="status-indicator ' + statusClass + '" onclick="toggleValkey(\'' + WarLink.escapeHtml(name) + '\', \'' + status + '\')">' + status + '</button>';
+    html += '</td><td class="actions">';
+    html += '<button class="btn-icon" title="Edit" onclick="showEditModal(\'' + WarLink.escapeHtml(name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/></svg></button>';
+    html += '<button class="btn-icon btn-icon-danger" title="Delete" onclick="deleteValkey(\'' + WarLink.escapeHtml(name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/><path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/></svg></button>';
+    {{else}}
+    html += '<span class="status-badge ' + statusClass + '">' + status + '</span>';
+    {{end}}
+    html += '</td>';
+    return html;
+}
+
+// SSE for real-time status updates
+WarLink.createSSE('/events/republisher', {
+    onValkeyStatus: function(data) {
+        var row = document.querySelector('.valkey-row[data-name="' + data.name + '"]');
+        if (!row) return;
+
+        var status = WarLink.capitalizeFirst(data.status);
+        row.dataset.status = status;
+        row.dataset.statusClass = data.statusClass;
+
+        var btn = row.querySelector('.status-indicator');
+        if (btn) {
+            btn.className = 'status-indicator ' + data.statusClass;
+            btn.textContent = status;
+            btn.disabled = false;
+            btn.onclick = function() { toggleValkey(data.name, status); };
+            btn.title = status === 'Connected' ? 'Click to stop' : 'Click to start';
+        }
+        var badge = row.querySelector('.status-badge');
+        if (badge) {
+            badge.className = 'status-badge ' + data.statusClass;
+            badge.textContent = status;
+        }
+    },
+    onEntityChange: function(data) {
+        if (data.entityType !== 'valkey') return;
+        if (data.action === 'remove') {
+            var row = document.querySelector('.valkey-row[data-name="' + data.name + '"]');
+            if (row) row.remove();
+        }
+        // For add/update from another tab, a simple reload is acceptable
+        if (data.action === 'add' || data.action === 'update') {
+            var existing = document.querySelector('.valkey-row[data-name="' + data.name + '"]');
+            if (!existing && data.action === 'add') {
+                location.reload();
+            }
+        }
+    }
+});
+</script>
+
+{{template "footer" .}}
