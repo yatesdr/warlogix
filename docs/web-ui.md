@@ -6,12 +6,38 @@ WarLink includes a browser-based management interface as an alternative to the T
 
 ## Starting the Web Server
 
-The web server can be enabled in two ways:
+### Quick Start from the Command Line
 
-1. **From the TUI** — Navigate to the REST API tab and toggle the web server on
-2. **Via configuration** — Set `web.enabled: true` in `config.yaml`
+The fastest way to enable the web UI is with the `--web-admin-user` and `--web-admin-pass` flags. This creates an admin account, enables the web server, and saves the configuration:
+
+```bash
+./warlink --web-admin-user admin --web-admin-pass yourpassword
+```
+
+The web UI will be available at `http://localhost:8080` and you can log in with the credentials you provided.
+
+You can also override the port and bind address:
+
+```bash
+./warlink --web-admin-user admin --web-admin-pass yourpassword --web-port 9090 --web-host 127.0.0.1
+```
+
+### Other Ways to Enable
+
+- **From the TUI** — Navigate to the REST API tab and toggle the web server on
+- **Via configuration** — Set `web.enabled: true` and `web.ui.enabled: true` in `config.yaml`
 
 Once started, the web UI is available at `http://<host>:8080` by default (port and bind address are configurable).
+
+### Daemon Mode
+
+The web UI works in daemon mode as well. Once enabled in the configuration (or via the `--web-admin-user` flag), it starts automatically alongside the SSH server:
+
+```bash
+./warlink -d -p 2222 --ssh-password secret --web-admin-user admin --web-admin-pass yourpassword
+```
+
+This gives you both SSH access to the TUI and browser access to the web UI simultaneously.
 
 See [Configuration Reference](configuration.md) for full details on the `web:` configuration key.
 

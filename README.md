@@ -147,11 +147,15 @@ Run `warlink --stress-test-republishing` to benchmark your system.
 | Global | `Q` | Quit |
 | PLCs | `d/a/e/x` | Discover/Add/Edit/Remove |
 | PLCs | `c/C/i` | Connect/Disconnect/Info |
-| Browser | `Space/w/i` | Toggle publish/writable/ignore |
 | Browser | `/` then `c` | Filter / Clear filter |
+| Browser | `p` | Switch PLC |
+| Browser | `Space/w/i` | Toggle publish/writable/ignore |
+| Browser | `s/d` | Per-service config / Details |
+| Browser | `a/e/x` | Add/Edit/Delete (manual PLCs) |
 | TagPacks | `a/x` | Add/Remove (context-sensitive) |
-| Triggers | `a/x/e` | Add/Remove/Edit (context-sensitive) |
-| Triggers | `s/S/T` | Start/Stop/Test fire |
+| TagPacks | `Space/e/i` | Toggle enable/Edit/Ignore changes |
+| Triggers | `a/x/e` | Add/Remove/Edit |
+| Triggers | `Space/F` | Toggle arm / Test fire |
 | Services | `a/e/x/c/C` | Add/Edit/Remove/Connect/Disconnect |
 
 ## Command Line Options
@@ -165,6 +169,10 @@ Run `warlink --stress-test-republishing` to benchmark your system.
 -p <port>                    SSH port for daemon mode (default: 2222)
 --ssh-password <pw>          SSH password authentication
 --ssh-keys <path>            Path to authorized_keys file
+--web-admin-user <user>      Create/update admin user for web UI
+--web-admin-pass <pass>      Password for admin user (enables web server)
+--web-port <port>            Override web server port (default: 8080)
+--web-host <host>            Override web server bind address
 --stress-test-republishing   Stress test Kafka, MQTT, and Valkey throughput
 --test-duration <dur>        Stress test duration (default: 10s)
 --test-tags <n>              Simulated tags per PLC (default: 100)
@@ -180,6 +188,12 @@ Run as a background service with SSH access:
 ```bash
 ./warlink -d -p 2222 --ssh-password "secret"
 ssh -p 2222 localhost
+```
+
+Add the web UI to daemon mode for browser-based management alongside SSH:
+
+```bash
+./warlink -d -p 2222 --ssh-password "secret" --web-admin-user admin --web-admin-pass "password"
 ```
 
 See [Daemon Mode](docs/daemon-mode.md) for systemd setup, Docker deployment, and security options.

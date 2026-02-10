@@ -123,7 +123,6 @@ kafka:
   - name: LocalKafka
     enabled: true
     brokers: [localhost:9092]
-    topic: plc-tags                   # Topic for tag changes
     publish_changes: true             # Publish tag changes
     # use_tls: true
     # sasl_mechanism: PLAIN          # PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
