@@ -63,10 +63,10 @@ var RepublisherSSE = (function() {
 
     function onValueChange(data) {
         // Find the tag item in the DOM
-        var plcGroup = document.querySelector('.plc-group[data-plc="' + escapeSelector(data.plc) + '"]');
+        var plcGroup = document.querySelector('.plc-group[data-plc="' + WarLink.escapeSelector(data.plc) + '"]');
         if (!plcGroup) return;
 
-        var tagItem = plcGroup.querySelector('.tag-item[data-name="' + escapeSelector(data.tag) + '"]');
+        var tagItem = plcGroup.querySelector('.tag-item[data-name="' + WarLink.escapeSelector(data.tag) + '"]');
         if (!tagItem) return;
 
         // Update the stored JSON value
@@ -162,7 +162,7 @@ var RepublisherSSE = (function() {
     }
 
     function onConfigChange(data) {
-        var plcGroup = document.querySelector('.plc-group[data-plc="' + escapeSelector(data.plc) + '"]');
+        var plcGroup = document.querySelector('.plc-group[data-plc="' + WarLink.escapeSelector(data.plc) + '"]');
         if (!plcGroup) return;
 
         // Check if this is a child tag (contains a dot)
@@ -172,7 +172,7 @@ var RepublisherSSE = (function() {
             var parentName = data.tag.substring(0, dotIdx);
             var childPath = data.tag.substring(dotIdx + 1);
 
-            var tagItem = plcGroup.querySelector('.tag-item[data-name="' + escapeSelector(parentName) + '"]');
+            var tagItem = plcGroup.querySelector('.tag-item[data-name="' + WarLink.escapeSelector(parentName) + '"]');
             if (!tagItem) return;
 
             // Update publishedChildren data attribute
@@ -189,7 +189,7 @@ var RepublisherSSE = (function() {
             tagItem.dataset.publishedChildren = JSON.stringify(publishedChildren);
 
             // Update the child row's indicators if it exists
-            var childRow = tagItem.querySelector('.tag-child-row[data-path="' + escapeSelector(childPath) + '"]');
+            var childRow = tagItem.querySelector('.tag-child-row[data-path="' + WarLink.escapeSelector(childPath) + '"]');
             if (childRow) {
                 updateChildRowIndicators(childRow, data.enabled, data.writable, false);
                 if (data.enabled) {
@@ -212,7 +212,7 @@ var RepublisherSSE = (function() {
         }
 
         // This is a root tag
-        var tagItem = plcGroup.querySelector('.tag-item[data-name="' + escapeSelector(data.tag) + '"]');
+        var tagItem = plcGroup.querySelector('.tag-item[data-name="' + WarLink.escapeSelector(data.tag) + '"]');
         if (!tagItem) return;
 
         // Update data attributes
@@ -267,7 +267,7 @@ var RepublisherSSE = (function() {
 
     function onStatusChange(data) {
         // Find the PLC group in the DOM
-        var plcGroup = document.querySelector('.plc-group[data-plc="' + escapeSelector(data.plc) + '"]');
+        var plcGroup = document.querySelector('.plc-group[data-plc="' + WarLink.escapeSelector(data.plc) + '"]');
         if (!plcGroup) return;
 
         // Update the status dot
@@ -448,21 +448,9 @@ var RepublisherSSE = (function() {
         }
         if (typeof value === 'string') {
             var display = value.length > 20 ? value.substring(0, 20) + '...' : value;
-            return '"' + escapeHtml(display) + '"';
+            return '"' + WarLink.escapeHtml(display) + '"';
         }
         return String(value);
-    }
-
-    function escapeHtml(text) {
-        if (text === null || text === undefined) return '';
-        var div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    function escapeSelector(str) {
-        // Escape special characters for CSS selectors
-        return str.replace(/([!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~])/g, '\\$1');
     }
 
     // Auto-connect when the script loads

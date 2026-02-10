@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"warlink/kafka"
 	"warlink/plcman"
+	"warlink/trigger"
 	"warlink/tui"
 )
 
@@ -696,13 +698,13 @@ func (h *Handlers) getKafkaData() []KafkaData {
 		if producer != nil {
 			pStatus := producer.GetStatus()
 			switch pStatus {
-			case 2: // Connected
+			case kafka.StatusConnected:
 				statusClass = "status-connected"
 				status = "Connected"
-			case 1: // Connecting
+			case kafka.StatusConnecting:
 				statusClass = "status-connecting"
 				status = "Connecting"
-			case 3: // Error
+			case kafka.StatusError:
 				statusClass = "status-error"
 				status = "Error"
 			}
@@ -815,12 +817,18 @@ func (h *Handlers) getTriggersData() []TriggerData {
 		// Get runtime status
 		tStatus, _, _, _ := triggerMgr.GetTriggerStatus(triggerCfg.Name)
 		switch tStatus {
-		case 1: // StatusArmed
+		case trigger.StatusArmed:
 			statusClass = "status-connected"
 			status = "Armed"
-		case 2: // StatusFiring
+		case trigger.StatusFiring:
 			statusClass = "status-connecting"
 			status = "Firing"
+		case trigger.StatusCooldown:
+			statusClass = "status-connecting"
+			status = "Cooldown"
+		case trigger.StatusError:
+			statusClass = "status-error"
+			status = "Error"
 		}
 
 		result = append(result, TriggerData{

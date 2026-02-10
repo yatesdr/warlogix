@@ -91,6 +91,13 @@ func (h *Handlers) handlePLCConnect(w http.ResponseWriter, r *http.Request) {
 		plc.Config.Enabled = true
 	}
 
+	// Persist enabled state
+	cfg := h.managers.GetConfig()
+	if plcCfg := cfg.FindPLC(name); plcCfg != nil {
+		plcCfg.Enabled = true
+		cfg.Save(h.managers.GetConfigPath())
+	}
+
 	if err := plcMan.Connect(name); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -110,6 +117,13 @@ func (h *Handlers) handlePLCDisconnect(w http.ResponseWriter, r *http.Request) {
 	// Clear auto-connect so plcman won't auto-reconnect
 	if plc := plcMan.GetPLC(name); plc != nil {
 		plc.Config.Enabled = false
+	}
+
+	// Persist disabled state
+	cfg := h.managers.GetConfig()
+	if plcCfg := cfg.FindPLC(name); plcCfg != nil {
+		plcCfg.Enabled = false
+		cfg.Save(h.managers.GetConfigPath())
 	}
 
 	plcMan.Disconnect(name)
@@ -238,18 +252,19 @@ func (h *Handlers) handleTriggerStop(w http.ResponseWriter, r *http.Request) {
 
 // PLCUpdateRequest holds the fields for updating a PLC.
 type PLCUpdateRequest struct {
-	Address     string `json:"address"`
-	Slot        int    `json:"slot"`
-	Family      string `json:"family"`
-	Enabled     bool   `json:"enabled"`
-	PollRate    string `json:"poll_rate"`
-	AmsNetId    string `json:"ams_net_id"`
-	AmsPort     int    `json:"ams_port"`
-	Protocol    string `json:"protocol"`
-	FinsPort    int    `json:"fins_port"`
-	FinsNetwork int    `json:"fins_network"`
-	FinsNode    int    `json:"fins_node"`
-	FinsUnit    int    `json:"fins_unit"`
+	Address            string `json:"address"`
+	Slot               int    `json:"slot"`
+	Family             string `json:"family"`
+	Enabled            bool   `json:"enabled"`
+	HealthCheckEnabled *bool  `json:"health_check_enabled"`
+	PollRate           string `json:"poll_rate"`
+	AmsNetId           string `json:"ams_net_id"`
+	AmsPort            int    `json:"ams_port"`
+	Protocol           string `json:"protocol"`
+	FinsPort           int    `json:"fins_port"`
+	FinsNetwork        int    `json:"fins_network"`
+	FinsNode           int    `json:"fins_node"`
+	FinsUnit           int    `json:"fins_unit"`
 }
 
 // handlePLCUpdate updates a PLC configuration.
@@ -274,6 +289,7 @@ func (h *Handlers) handlePLCUpdate(w http.ResponseWriter, r *http.Request) {
 	plcCfg.Address = req.Address
 	plcCfg.Slot = byte(req.Slot)
 	plcCfg.Enabled = req.Enabled
+	plcCfg.HealthCheckEnabled = req.HealthCheckEnabled
 
 	if req.Family != "" {
 		plcCfg.Family = config.PLCFamily(req.Family)
@@ -321,19 +337,20 @@ func (h *Handlers) handlePLCGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"name":         plcCfg.Name,
-		"address":      plcCfg.Address,
-		"slot":         plcCfg.Slot,
-		"family":       plcCfg.GetFamily().String(),
-		"enabled":      plcCfg.Enabled,
-		"poll_rate":    plcCfg.PollRate.String(),
-		"ams_net_id":   plcCfg.AmsNetId,
-		"ams_port":     plcCfg.AmsPort,
-		"protocol":     plcCfg.Protocol,
-		"fins_port":    plcCfg.FinsPort,
-		"fins_network": plcCfg.FinsNetwork,
-		"fins_node":    plcCfg.FinsNode,
-		"fins_unit":    plcCfg.FinsUnit,
+		"name":                 plcCfg.Name,
+		"address":              plcCfg.Address,
+		"slot":                 plcCfg.Slot,
+		"family":               plcCfg.GetFamily().String(),
+		"enabled":              plcCfg.Enabled,
+		"health_check_enabled": plcCfg.HealthCheckEnabled == nil || *plcCfg.HealthCheckEnabled,
+		"poll_rate":            plcCfg.PollRate.String(),
+		"ams_net_id":           plcCfg.AmsNetId,
+		"ams_port":             plcCfg.AmsPort,
+		"protocol":             plcCfg.Protocol,
+		"fins_port":            plcCfg.FinsPort,
+		"fins_network":         plcCfg.FinsNetwork,
+		"fins_node":            plcCfg.FinsNode,
+		"fins_unit":            plcCfg.FinsUnit,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -342,16 +359,20 @@ func (h *Handlers) handlePLCGet(w http.ResponseWriter, r *http.Request) {
 
 // PLCCreateRequest holds the fields for creating a new PLC.
 type PLCCreateRequest struct {
-	Name        string `json:"name"`
-	Address     string `json:"address"`
-	Slot        int    `json:"slot"`
-	Family      string `json:"family"`
-	Enabled     bool   `json:"enabled"`
-	PollRate    string `json:"poll_rate"`
-	AmsNetId    string `json:"ams_net_id"`
-	AmsPort     int    `json:"ams_port"`
-	Protocol    string `json:"protocol"`
-	FinsPort    int    `json:"fins_port"`
+	Name               string `json:"name"`
+	Address            string `json:"address"`
+	Slot               int    `json:"slot"`
+	Family             string `json:"family"`
+	Enabled            bool   `json:"enabled"`
+	HealthCheckEnabled *bool  `json:"health_check_enabled"`
+	PollRate           string `json:"poll_rate"`
+	AmsNetId           string `json:"ams_net_id"`
+	AmsPort            int    `json:"ams_port"`
+	Protocol           string `json:"protocol"`
+	FinsPort           int    `json:"fins_port"`
+	FinsNetwork        int    `json:"fins_network"`
+	FinsNode           int    `json:"fins_node"`
+	FinsUnit           int    `json:"fins_unit"`
 }
 
 // handlePLCCreate creates a new PLC.
@@ -381,10 +402,11 @@ func (h *Handlers) handlePLCCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Create new PLC config
 	plcCfg := config.PLCConfig{
-		Name:    req.Name,
-		Address: req.Address,
-		Slot:    byte(req.Slot),
-		Enabled: req.Enabled,
+		Name:               req.Name,
+		Address:            req.Address,
+		Slot:               byte(req.Slot),
+		Enabled:            req.Enabled,
+		HealthCheckEnabled: req.HealthCheckEnabled,
 	}
 
 	if req.Family != "" {
@@ -409,6 +431,9 @@ func (h *Handlers) handlePLCCreate(w http.ResponseWriter, r *http.Request) {
 	if req.FinsPort > 0 {
 		plcCfg.FinsPort = req.FinsPort
 	}
+	plcCfg.FinsNetwork = byte(req.FinsNetwork)
+	plcCfg.FinsNode = byte(req.FinsNode)
+	plcCfg.FinsUnit = byte(req.FinsUnit)
 
 	// Add to config
 	cfg.PLCs = append(cfg.PLCs, plcCfg)
@@ -810,15 +835,15 @@ func (h *Handlers) handleMQTTGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"name":      mqttCfg.Name,
-		"broker":    mqttCfg.Broker,
-		"port":      mqttCfg.Port,
-		"client_id": mqttCfg.ClientID,
-		"username":  mqttCfg.Username,
-		"password":  mqttCfg.Password,
-		"selector":  mqttCfg.Selector,
-		"use_tls":   mqttCfg.UseTLS,
-		"enabled":   mqttCfg.Enabled,
+		"name":         mqttCfg.Name,
+		"broker":       mqttCfg.Broker,
+		"port":         mqttCfg.Port,
+		"client_id":    mqttCfg.ClientID,
+		"username":     mqttCfg.Username,
+		"selector":     mqttCfg.Selector,
+		"use_tls":      mqttCfg.UseTLS,
+		"enabled":      mqttCfg.Enabled,
+		"has_password": mqttCfg.Password != "",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -836,7 +861,8 @@ func (h *Handlers) handleMQTTUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.managers.GetConfig()
-	if cfg.FindMQTT(name) == nil {
+	existing := cfg.FindMQTT(name)
+	if existing == nil {
 		http.Error(w, "MQTT broker not found", http.StatusNotFound)
 		return
 	}
@@ -845,13 +871,19 @@ func (h *Handlers) handleMQTTUpdate(w http.ResponseWriter, r *http.Request) {
 		req.Port = 1883
 	}
 
+	// Preserve password if not provided in update (since GET omits it)
+	password := req.Password
+	if password == "" {
+		password = existing.Password
+	}
+
 	updated := config.MQTTConfig{
 		Name:     name,
 		Broker:   req.Broker,
 		Port:     req.Port,
 		ClientID: req.ClientID,
 		Username: req.Username,
-		Password: req.Password,
+		Password: password,
 		Selector: req.Selector,
 		UseTLS:   req.UseTLS,
 		Enabled:  req.Enabled,
@@ -981,16 +1013,17 @@ func (h *Handlers) handleValkeyGet(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"name":             vc.Name,
 		"address":          vc.Address,
-		"password":         vc.Password,
 		"database":         vc.Database,
 		"selector":         vc.Selector,
-		"key_ttl":          vc.KeyTTL.String(),
 		"use_tls":          vc.UseTLS,
 		"publish_changes":  vc.PublishChanges,
 		"enable_writeback": vc.EnableWriteback,
 		"enabled":          vc.Enabled,
+		"has_password":     vc.Password != "",
 	}
-	if vc.KeyTTL == 0 {
+	if vc.KeyTTL > 0 {
+		resp["key_ttl"] = vc.KeyTTL.String()
+	} else {
 		resp["key_ttl"] = ""
 	}
 
@@ -1009,7 +1042,8 @@ func (h *Handlers) handleValkeyUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.managers.GetConfig()
-	if cfg.FindValkey(name) == nil {
+	existing := cfg.FindValkey(name)
+	if existing == nil {
 		http.Error(w, "Valkey server not found", http.StatusNotFound)
 		return
 	}
@@ -1021,10 +1055,16 @@ func (h *Handlers) handleValkeyUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Preserve password if not provided in update (since GET omits it)
+	password := req.Password
+	if password == "" {
+		password = existing.Password
+	}
+
 	updated := config.ValkeyConfig{
 		Name:            name,
 		Address:         req.Address,
-		Password:        req.Password,
+		Password:        password,
 		Database:        req.Database,
 		Selector:        req.Selector,
 		KeyTTL:          keyTTL,
@@ -1089,6 +1129,11 @@ type kafkaRequest struct {
 	AutoCreateTopics bool     `json:"auto_create_topics"`
 	Enabled          bool     `json:"enabled"`
 	BrokerList       []string `json:"broker_list,omitempty"` // alternative to comma-separated
+	RequiredAcks     int      `json:"required_acks"`
+	MaxRetries       int      `json:"max_retries"`
+	RetryBackoff     string   `json:"retry_backoff"`
+	ConsumerGroup    string   `json:"consumer_group"`
+	WriteMaxAge      string   `json:"write_max_age"`
 }
 
 func (h *Handlers) parseBrokerList(req kafkaRequest) []string {
@@ -1131,11 +1176,21 @@ func (h *Handlers) handleKafkaCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	autoCreate := true
-	if !req.AutoCreateTopics {
-		autoCreate = false
-	}
+	autoCreate := req.AutoCreateTopics
 	autoCreatePtr := &autoCreate
+
+	var retryBackoff time.Duration
+	if req.RetryBackoff != "" {
+		if d, err := time.ParseDuration(req.RetryBackoff); err == nil {
+			retryBackoff = d
+		}
+	}
+	var writeMaxAge time.Duration
+	if req.WriteMaxAge != "" {
+		if d, err := time.ParseDuration(req.WriteMaxAge); err == nil {
+			writeMaxAge = d
+		}
+	}
 
 	kafkaCfg := config.KafkaConfig{
 		Name:             req.Name,
@@ -1150,6 +1205,11 @@ func (h *Handlers) handleKafkaCreate(w http.ResponseWriter, r *http.Request) {
 		EnableWriteback:  req.EnableWriteback,
 		AutoCreateTopics: autoCreatePtr,
 		Enabled:          req.Enabled,
+		RequiredAcks:     req.RequiredAcks,
+		MaxRetries:       req.MaxRetries,
+		RetryBackoff:     retryBackoff,
+		ConsumerGroup:    req.ConsumerGroup,
+		WriteMaxAge:      writeMaxAge,
 	}
 
 	cfg.AddKafka(kafkaCfg)
@@ -1161,20 +1221,7 @@ func (h *Handlers) handleKafkaCreate(w http.ResponseWriter, r *http.Request) {
 	// Add to running manager
 	kc := cfg.FindKafka(req.Name)
 	kafkaMgr := h.managers.GetKafkaMgr()
-	kafkaMgr.AddCluster(&kafkapkg.Config{
-		Name:             kc.Name,
-		Enabled:          kc.Enabled,
-		Brokers:          kc.Brokers,
-		UseTLS:           kc.UseTLS,
-		TLSSkipVerify:    kc.TLSSkipVerify,
-		SASLMechanism:    kafkapkg.SASLMechanism(kc.SASLMechanism),
-		Username:         kc.Username,
-		Password:         kc.Password,
-		PublishChanges:   kc.PublishChanges,
-		Selector:         kc.Selector,
-		AutoCreateTopics: kc.AutoCreateTopics == nil || *kc.AutoCreateTopics,
-		EnableWriteback:  kc.EnableWriteback,
-	}, cfg.Namespace)
+	kafkaMgr.AddCluster(h.buildKafkaRuntimeConfig(kc), cfg.Namespace)
 
 	if req.Enabled {
 		kafkaMgr.Connect(req.Name)
@@ -1202,12 +1249,25 @@ func (h *Handlers) handleKafkaGet(w http.ResponseWriter, r *http.Request) {
 		"tls_skip_verify":    kc.TLSSkipVerify,
 		"sasl_mechanism":     kc.SASLMechanism,
 		"username":           kc.Username,
-		"password":           kc.Password,
 		"selector":           kc.Selector,
 		"publish_changes":    kc.PublishChanges,
 		"enable_writeback":   kc.EnableWriteback,
 		"auto_create_topics": kc.AutoCreateTopics == nil || *kc.AutoCreateTopics,
 		"enabled":            kc.Enabled,
+		"required_acks":      kc.RequiredAcks,
+		"max_retries":        kc.MaxRetries,
+		"consumer_group":     kc.ConsumerGroup,
+		"has_password":       kc.Password != "",
+	}
+	if kc.RetryBackoff > 0 {
+		resp["retry_backoff"] = kc.RetryBackoff.String()
+	} else {
+		resp["retry_backoff"] = ""
+	}
+	if kc.WriteMaxAge > 0 {
+		resp["write_max_age"] = kc.WriteMaxAge.String()
+	} else {
+		resp["write_max_age"] = ""
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1239,6 +1299,27 @@ func (h *Handlers) handleKafkaUpdate(w http.ResponseWriter, r *http.Request) {
 	autoCreate := req.AutoCreateTopics
 	autoCreatePtr := &autoCreate
 
+	var retryBackoff time.Duration
+	if req.RetryBackoff != "" {
+		if d, err := time.ParseDuration(req.RetryBackoff); err == nil {
+			retryBackoff = d
+		}
+	}
+	var writeMaxAge time.Duration
+	if req.WriteMaxAge != "" {
+		if d, err := time.ParseDuration(req.WriteMaxAge); err == nil {
+			writeMaxAge = d
+		}
+	}
+
+	// Preserve password if not provided in update (since GET omits it)
+	password := req.Password
+	if password == "" {
+		if existing := cfg.FindKafka(name); existing != nil {
+			password = existing.Password
+		}
+	}
+
 	updated := config.KafkaConfig{
 		Name:             name,
 		Brokers:          brokers,
@@ -1246,12 +1327,17 @@ func (h *Handlers) handleKafkaUpdate(w http.ResponseWriter, r *http.Request) {
 		TLSSkipVerify:    req.TLSSkipVerify,
 		SASLMechanism:    req.SASLMechanism,
 		Username:         req.Username,
-		Password:         req.Password,
+		Password:         password,
 		Selector:         req.Selector,
 		PublishChanges:   req.PublishChanges,
 		EnableWriteback:  req.EnableWriteback,
 		AutoCreateTopics: autoCreatePtr,
 		Enabled:          req.Enabled,
+		RequiredAcks:     req.RequiredAcks,
+		MaxRetries:       req.MaxRetries,
+		RetryBackoff:     retryBackoff,
+		ConsumerGroup:    req.ConsumerGroup,
+		WriteMaxAge:      writeMaxAge,
 	}
 
 	cfg.UpdateKafka(name, updated)
@@ -1264,20 +1350,7 @@ func (h *Handlers) handleKafkaUpdate(w http.ResponseWriter, r *http.Request) {
 	kafkaMgr.RemoveCluster(name)
 
 	kc := cfg.FindKafka(name)
-	kafkaMgr.AddCluster(&kafkapkg.Config{
-		Name:             kc.Name,
-		Enabled:          kc.Enabled,
-		Brokers:          kc.Brokers,
-		UseTLS:           kc.UseTLS,
-		TLSSkipVerify:    kc.TLSSkipVerify,
-		SASLMechanism:    kafkapkg.SASLMechanism(kc.SASLMechanism),
-		Username:         kc.Username,
-		Password:         kc.Password,
-		PublishChanges:   kc.PublishChanges,
-		Selector:         kc.Selector,
-		AutoCreateTopics: kc.AutoCreateTopics == nil || *kc.AutoCreateTopics,
-		EnableWriteback:  kc.EnableWriteback,
-	}, cfg.Namespace)
+	kafkaMgr.AddCluster(h.buildKafkaRuntimeConfig(kc), cfg.Namespace)
 
 	if req.Enabled {
 		kafkaMgr.Connect(name)
@@ -1307,6 +1380,29 @@ func (h *Handlers) handleKafkaDelete(w http.ResponseWriter, r *http.Request) {
 
 	h.eventHub.BroadcastEntityChange("kafka", "remove", name)
 	w.WriteHeader(http.StatusOK)
+}
+
+// buildKafkaRuntimeConfig converts a config.KafkaConfig to a kafka.Config for the runtime manager.
+func (h *Handlers) buildKafkaRuntimeConfig(kc *config.KafkaConfig) *kafkapkg.Config {
+	return &kafkapkg.Config{
+		Name:             kc.Name,
+		Enabled:          kc.Enabled,
+		Brokers:          kc.Brokers,
+		UseTLS:           kc.UseTLS,
+		TLSSkipVerify:    kc.TLSSkipVerify,
+		SASLMechanism:    kafkapkg.SASLMechanism(kc.SASLMechanism),
+		Username:         kc.Username,
+		Password:         kc.Password,
+		RequiredAcks:     kc.RequiredAcks,
+		MaxRetries:       kc.MaxRetries,
+		RetryBackoff:     kc.RetryBackoff,
+		PublishChanges:   kc.PublishChanges,
+		Selector:         kc.Selector,
+		AutoCreateTopics: kc.AutoCreateTopics == nil || *kc.AutoCreateTopics,
+		EnableWriteback:  kc.EnableWriteback,
+		ConsumerGroup:    kc.ConsumerGroup,
+		WriteMaxAge:      kc.WriteMaxAge,
+	}
 }
 
 // --- TagPack CRUD ---
@@ -1369,8 +1465,27 @@ func (h *Handlers) handleTagPackGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build members list with snake_case keys
+	members := make([]map[string]interface{}, len(pc.Members))
+	for i, m := range pc.Members {
+		members[i] = map[string]interface{}{
+			"plc":            m.PLC,
+			"tag":            m.Tag,
+			"ignore_changes": m.IgnoreChanges,
+		}
+	}
+
+	resp := map[string]interface{}{
+		"name":           pc.Name,
+		"enabled":        pc.Enabled,
+		"mqtt_enabled":   pc.MQTTEnabled,
+		"kafka_enabled":  pc.KafkaEnabled,
+		"valkey_enabled": pc.ValkeyEnabled,
+		"members":        members,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(pc)
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (h *Handlers) handleTagPackUpdate(w http.ResponseWriter, r *http.Request) {

@@ -170,7 +170,8 @@
                     </div>
                     <div class="form-group">
                         <label>Password</label>
-                        <input type="password" id="edit-password">
+                        <input type="password" id="edit-password" placeholder="(unchanged)">
+                        <small id="edit-password-hint" class="form-hint" style="display:none">Leave blank to keep existing password</small>
                     </div>
                 </div>
                 <div class="form-row">
@@ -244,7 +245,15 @@ function showEditModal(name) {
         document.getElementById('edit-client-id').value = data.client_id || '';
         document.getElementById('edit-selector').value = data.selector || '';
         document.getElementById('edit-username').value = data.username || '';
-        document.getElementById('edit-password').value = data.password || '';
+        document.getElementById('edit-password').value = '';
+        var hint = document.getElementById('edit-password-hint');
+        if (data.has_password) {
+            document.getElementById('edit-password').placeholder = '(unchanged)';
+            hint.style.display = '';
+        } else {
+            document.getElementById('edit-password').placeholder = '';
+            hint.style.display = 'none';
+        }
         document.getElementById('edit-tls').checked = data.use_tls;
         document.getElementById('edit-enabled').checked = data.enabled;
         WarLink.showModal('mqtt-edit-modal');

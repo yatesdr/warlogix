@@ -75,11 +75,19 @@
                         <input type="text" id="edit-poll-rate" name="poll_rate" placeholder="e.g., 250ms, 1s">
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="edit-enabled" name="enabled">
-                        Auto-connect
-                    </label>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="edit-enabled" name="enabled">
+                            Auto-connect
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="edit-health-check" name="health_check_enabled" checked>
+                            Health Check
+                        </label>
+                    </div>
                 </div>
 
                 <!-- Beckhoff-specific fields -->
@@ -172,15 +180,21 @@
                         <input type="number" id="add-slot" name="slot" min="0" max="255" value="0">
                     </div>
                 </div>
+                <div class="form-group">
+                    <label for="add-poll-rate">Poll Rate</label>
+                    <input type="text" id="add-poll-rate" name="poll_rate" placeholder="e.g., 250ms, 1s">
+                </div>
                 <div class="form-row">
-                    <div class="form-group">
-                        <label for="add-poll-rate">Poll Rate</label>
-                        <input type="text" id="add-poll-rate" name="poll_rate" placeholder="e.g., 250ms, 1s">
-                    </div>
                     <div class="form-group">
                         <label>
                             <input type="checkbox" id="add-enabled" name="enabled" checked>
                             Auto-connect
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="add-health-check" name="health_check_enabled" checked>
+                            Health Check
                         </label>
                     </div>
                 </div>
@@ -214,6 +228,20 @@
                         <div class="form-group">
                             <label for="add-fins-port">FINS Port</label>
                             <input type="number" id="add-fins-port" name="fins_port" value="9600">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="add-fins-network">FINS Network</label>
+                            <input type="number" id="add-fins-network" name="fins_network" min="0" max="255" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="add-fins-node">FINS Node</label>
+                            <input type="number" id="add-fins-node" name="fins_node" min="0" max="255" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label for="add-fins-unit">FINS Unit</label>
+                            <input type="number" id="add-fins-unit" name="fins_unit" min="0" max="255" value="0">
                         </div>
                     </div>
                 </div>
@@ -339,6 +367,7 @@ function showEditModal(name) {
             document.getElementById('edit-slot').value = data.slot;
             document.getElementById('edit-family').value = data.family.toLowerCase();
             document.getElementById('edit-enabled').checked = data.enabled;
+            document.getElementById('edit-health-check').checked = data.health_check_enabled !== false;
             document.getElementById('edit-poll-rate').value = data.poll_rate !== '0s' ? data.poll_rate : '';
 
             // Beckhoff fields
@@ -387,7 +416,8 @@ function savePLC(e) {
         fins_port: parseInt(document.getElementById('edit-fins-port').value) || 9600,
         fins_network: parseInt(document.getElementById('edit-fins-network').value) || 0,
         fins_node: parseInt(document.getElementById('edit-fins-node').value) || 0,
-        fins_unit: parseInt(document.getElementById('edit-fins-unit').value) || 0
+        fins_unit: parseInt(document.getElementById('edit-fins-unit').value) || 0,
+        health_check_enabled: document.getElementById('edit-health-check').checked
     };
 
     fetch('/htmx/plcs/' + encodeURIComponent(name), {
@@ -427,6 +457,7 @@ function savePLC(e) {
 function showAddPLCModal() {
     document.getElementById('plc-add-form').reset();
     document.getElementById('add-enabled').checked = true;
+    document.getElementById('add-health-check').checked = true;
     updateAddFamilyFields();
     document.getElementById('plc-add-modal').style.display = 'flex';
 }
@@ -453,7 +484,11 @@ function addPLC(e) {
         ams_net_id: document.getElementById('add-ams-net-id').value,
         ams_port: parseInt(document.getElementById('add-ams-port').value) || 851,
         protocol: document.getElementById('add-protocol').value,
-        fins_port: parseInt(document.getElementById('add-fins-port').value) || 9600
+        fins_port: parseInt(document.getElementById('add-fins-port').value) || 9600,
+        fins_network: parseInt(document.getElementById('add-fins-network').value) || 0,
+        fins_node: parseInt(document.getElementById('add-fins-node').value) || 0,
+        fins_unit: parseInt(document.getElementById('add-fins-unit').value) || 0,
+        health_check_enabled: document.getElementById('add-health-check').checked
     };
 
     fetch('/htmx/plcs', {

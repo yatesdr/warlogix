@@ -149,6 +149,37 @@
                         </label>
                     </div>
                 </div>
+                <details class="form-advanced">
+                    <summary>Advanced Settings</summary>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Required Acks</label>
+                            <select id="add-required-acks">
+                                <option value="-1" selected>All (default)</option>
+                                <option value="0">None</option>
+                                <option value="1">Leader only</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Max Retries</label>
+                            <input type="number" id="add-max-retries" value="3" min="0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Retry Backoff</label>
+                            <input type="text" id="add-retry-backoff" placeholder="100ms">
+                        </div>
+                        <div class="form-group">
+                            <label>Write Max Age</label>
+                            <input type="text" id="add-write-max-age" placeholder="2s">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Consumer Group</label>
+                        <input type="text" id="add-consumer-group" placeholder="optional">
+                    </div>
+                </details>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn" onclick="WarLink.hideModal('kafka-add-modal')">Cancel</button>
@@ -204,7 +235,8 @@
                     </div>
                     <div class="form-group">
                         <label>Password</label>
-                        <input type="password" id="edit-password">
+                        <input type="password" id="edit-password" placeholder="(unchanged)">
+                        <small id="edit-password-hint" class="form-hint" style="display:none">Leave blank to keep existing password</small>
                     </div>
                 </div>
                 <div class="form-row">
@@ -231,6 +263,37 @@
                         </label>
                     </div>
                 </div>
+                <details class="form-advanced">
+                    <summary>Advanced Settings</summary>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Required Acks</label>
+                            <select id="edit-required-acks">
+                                <option value="-1">All (default)</option>
+                                <option value="0">None</option>
+                                <option value="1">Leader only</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Max Retries</label>
+                            <input type="number" id="edit-max-retries" value="3" min="0">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Retry Backoff</label>
+                            <input type="text" id="edit-retry-backoff" placeholder="100ms">
+                        </div>
+                        <div class="form-group">
+                            <label>Write Max Age</label>
+                            <input type="text" id="edit-write-max-age" placeholder="2s">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Consumer Group</label>
+                        <input type="text" id="edit-consumer-group" placeholder="optional">
+                    </div>
+                </details>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn" onclick="WarLink.hideModal('kafka-edit-modal')">Cancel</button>
@@ -262,7 +325,12 @@ function addKafka(e) {
         publish_changes: document.getElementById('add-publish-changes').checked,
         enable_writeback: document.getElementById('add-writeback').checked,
         auto_create_topics: document.getElementById('add-auto-create').checked,
-        enabled: document.getElementById('add-enabled').checked
+        enabled: document.getElementById('add-enabled').checked,
+        required_acks: parseInt(document.getElementById('add-required-acks').value),
+        max_retries: parseInt(document.getElementById('add-max-retries').value) || 3,
+        retry_backoff: document.getElementById('add-retry-backoff').value,
+        write_max_age: document.getElementById('add-write-max-age').value,
+        consumer_group: document.getElementById('add-consumer-group').value
     };
 
     WarLink.api.post('/htmx/kafka', data).then(function() {
@@ -293,11 +361,24 @@ function showEditModal(name) {
         document.getElementById('edit-tls-skip-verify').checked = data.tls_skip_verify;
         document.getElementById('edit-sasl-mechanism').value = data.sasl_mechanism || '';
         document.getElementById('edit-username').value = data.username || '';
-        document.getElementById('edit-password').value = data.password || '';
+        document.getElementById('edit-password').value = '';
+        var hint = document.getElementById('edit-password-hint');
+        if (data.has_password) {
+            document.getElementById('edit-password').placeholder = '(unchanged)';
+            hint.style.display = '';
+        } else {
+            document.getElementById('edit-password').placeholder = '';
+            hint.style.display = 'none';
+        }
         document.getElementById('edit-publish-changes').checked = data.publish_changes;
         document.getElementById('edit-writeback').checked = data.enable_writeback;
         document.getElementById('edit-auto-create').checked = data.auto_create_topics;
         document.getElementById('edit-enabled').checked = data.enabled;
+        document.getElementById('edit-required-acks').value = String(data.required_acks != null ? data.required_acks : -1);
+        document.getElementById('edit-max-retries').value = data.max_retries != null ? data.max_retries : 3;
+        document.getElementById('edit-retry-backoff').value = data.retry_backoff || '';
+        document.getElementById('edit-write-max-age').value = data.write_max_age || '';
+        document.getElementById('edit-consumer-group').value = data.consumer_group || '';
         WarLink.showModal('kafka-edit-modal');
     }).catch(function(err) {
         WarLink.toast('Error loading cluster: ' + err.message, 'error');
@@ -318,7 +399,12 @@ function saveKafka(e) {
         publish_changes: document.getElementById('edit-publish-changes').checked,
         enable_writeback: document.getElementById('edit-writeback').checked,
         auto_create_topics: document.getElementById('edit-auto-create').checked,
-        enabled: document.getElementById('edit-enabled').checked
+        enabled: document.getElementById('edit-enabled').checked,
+        required_acks: parseInt(document.getElementById('edit-required-acks').value),
+        max_retries: parseInt(document.getElementById('edit-max-retries').value) || 3,
+        retry_backoff: document.getElementById('edit-retry-backoff').value,
+        write_max_age: document.getElementById('edit-write-max-age').value,
+        consumer_group: document.getElementById('edit-consumer-group').value
     };
 
     WarLink.api.put('/htmx/kafka/' + encodeURIComponent(name), data).then(function() {

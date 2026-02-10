@@ -157,6 +157,13 @@ func (h *EventHub) run() {
 			h.mu.RUnlock()
 
 		case <-h.done:
+			// Clean up all connected clients
+			h.mu.Lock()
+			for id, client := range h.clients {
+				close(client.events)
+				delete(h.clients, id)
+			}
+			h.mu.Unlock()
 			return
 		}
 	}
