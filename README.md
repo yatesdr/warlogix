@@ -52,6 +52,7 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 
 ### Getting Started
 - [User Interface Guide](docs/ui-tabs.md) - TUI tabs and keyboard shortcuts
+- [Web UI Guide](docs/web-ui.md) - Browser-based management interface
 - [Writing Values](docs/writing.md) - Writing to PLC tags (status codes, acknowledgments)
 - [Configuration Reference](docs/configuration.md) - Config file format and options
 - [PLC Setup Guide](docs/plc-setup.md) - PLC-specific setup and troubleshooting
@@ -95,6 +96,7 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 - **TagPacks** - Group tags within a single PLC or across multiple PLCs for atomic publishing, useful for aggregating related data for upstream IT processes
 - **Triggers** - Event-driven data capture with MQTT (QoS 2) and Kafka publishing
 - **Daemon Mode** - Background service with SSH access
+- **Web UI** - Browser-based management interface for PLCs, services, and tags
 - **High Performance** - Batched reads, optimized publishing, 100K+ messages/sec
 
 ## Supported PLCs

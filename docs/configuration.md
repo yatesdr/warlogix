@@ -83,10 +83,18 @@ plcs:
         enabled: true
         writable: true
 
-rest:
+web:
   enabled: true
-  port: 8080
   host: 0.0.0.0
+  port: 8080
+  api:
+    enabled: true
+  ui:
+    enabled: true
+    users:
+      - username: admin
+        password_hash: "$2a$10$..."    # bcrypt hash (managed via UI or CLI)
+        role: admin
 
 mqtt:
   - name: LocalBroker
@@ -291,13 +299,33 @@ tags:
       - SequenceNumber
 ```
 
-## REST Configuration
+## Web Server Configuration
+
+The `web:` key configures the built-in web server that hosts both the REST API and the browser-based management UI.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `enabled` | bool | No | Enable REST API (default: false) |
-| `port` | int | No | HTTP port (default: 8080) |
+| `enabled` | bool | No | Enable the web server (default: false) |
 | `host` | string | No | Bind address (default: 0.0.0.0) |
+| `port` | int | No | HTTP port (default: 8080) |
+| `api.enabled` | bool | No | Enable the REST API (default: true) |
+| `ui.enabled` | bool | No | Enable the browser UI (default: false) |
+| `ui.session_secret` | string | No | Base64-encoded session secret (auto-generated) |
+| `ui.users` | list | No | Web UI user accounts |
+
+### Web UI User Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `username` | string | Yes | Login username |
+| `password_hash` | string | Yes | Bcrypt-hashed password |
+| `role` | string | Yes | `admin` or `viewer` |
+
+Users are typically managed through the web UI itself or via the `-web-admin-user` and `-web-admin-pass` command-line flags. You do not need to generate bcrypt hashes manually.
+
+See the [Web UI Guide](web-ui.md) for details on using the browser interface.
+
+> **Backward compatibility:** The old `rest:` configuration key is still recognized. If `rest:` is present and `web:` is not enabled, WarLink will start a legacy REST-only server using the `rest:` settings. Migrate to `web:` when convenient — it provides the same REST API plus the browser UI.
 
 ## MQTT Configuration
 
