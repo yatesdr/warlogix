@@ -620,6 +620,7 @@ func (h *Handlers) handleTagUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.managers.GetPLCMan().RefreshManualTags(plcName)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -670,6 +671,7 @@ func (h *Handlers) handleTagPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.managers.GetPLCMan().RefreshManualTags(plcName)
 	w.WriteHeader(http.StatusOK)
 }
 

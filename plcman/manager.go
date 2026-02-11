@@ -794,6 +794,12 @@ func (m *Manager) AddPLC(cfg *config.PLCConfig) error {
 	}
 	m.plcs[cfg.Name] = plc
 
+	// For non-discovery PLCs, build manual tags from config immediately
+	// so they're available before the PLC connects.
+	if !cfg.GetFamily().SupportsDiscovery() {
+		plc.BuildManualTags()
+	}
+
 	// If manager is running, start a worker for this PLC
 	if m.ctx != nil {
 		pollRate := m.getEffectivePollRate(cfg)
