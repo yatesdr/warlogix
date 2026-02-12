@@ -222,8 +222,11 @@ func (a *OmronAdapter) Write(tag string, value interface{}) error {
 	return a.client.WriteWithType(tag, value, typeHint)
 }
 
-// Keepalive is a no-op for Omron (connection is maintained by transport).
+// Keepalive sends a keepalive to maintain the CIP connection.
 func (a *OmronAdapter) Keepalive() error {
+	if a.client != nil {
+		return a.client.Keepalive()
+	}
 	return nil
 }
 

@@ -266,6 +266,14 @@ func (c *Client) connectEIP() (*Client, error) {
 
 	c.connected = true
 	logging.DebugLog("Omron", "EIP/CIP connection established to %s:%d", c.address, port)
+
+	// Attempt Forward Open for connected messaging
+	err := c.OpenConnection()
+	if err != nil {
+		logging.DebugLog("Omron", "Forward Open failed, using unconnected messaging: %v", err)
+		// Continue with unconnected messaging - this is fine
+	}
+
 	return c, nil
 }
 
@@ -310,7 +318,11 @@ func (c *Client) Close() error {
 func (c *Client) OpenConnection() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.openConnection()
+}
 
+// openConnection internal method (must hold lock).
+func (c *Client) openConnection() error {
 	if c.eipClient == nil {
 		return fmt.Errorf("OpenConnection: EIP transport not active")
 	}
@@ -695,6 +707,8 @@ func (c *Client) Reconnect() error {
 		if port == defaultFINSPort {
 			port = 44818
 		}
+		c.cipConn = nil
+		c.connSize = 0
 		c.eipClient = eip.NewEipClientWithPort(c.address, uint16(port))
 		c.eipClient.SetTimeout(c.timeout)
 		if err := c.eipClient.Connect(); err != nil {
@@ -702,6 +716,13 @@ func (c *Client) Reconnect() error {
 			return err
 		}
 		c.connected = true
+		logging.DebugLog("Omron", "Reconnect EIP session established")
+
+		// Re-establish Forward Open for connected messaging
+		if err := c.openConnection(); err != nil {
+			logging.DebugLog("Omron", "Reconnect Forward Open failed, using unconnected: %v", err)
+			// Continue with unconnected messaging
+		}
 		logging.DebugLog("Omron", "Reconnect EIP successful")
 	}
 
@@ -720,11 +741,14 @@ func (c *Client) ConnectionMode() string {
 			return c.fins.connectionMode(c.address, c.port)
 		}
 	case TransportEIP:
-		mode := "Unconnected"
-		if c.cipConn != nil {
-			mode = "Connected"
+		port := c.port
+		if port == defaultFINSPort {
+			port = 44818
 		}
-		return fmt.Sprintf("EIP/CIP %s %s:%d", mode, c.address, c.port)
+		if c.cipConn != nil {
+			return fmt.Sprintf("EIP/CIP Connected (size=%d) %s:%d", c.connSize, c.address, port)
+		}
+		return fmt.Sprintf("EIP/CIP Unconnected %s:%d", c.address, port)
 	}
 
 	return fmt.Sprintf("%s %s:%d", c.transport, c.address, c.port)
@@ -971,33 +995,61 @@ func (c *Client) readEIP(tagNames []string) ([]*TagValue, error) {
 }
 
 // sendCIPRequest sends a CIP request via EIP.
-// Uses unconnected messaging (SendRRData) for individual requests.
+// Uses connected messaging (SendUnitData) when a Forward Open connection exists,
+// otherwise falls back to unconnected messaging (SendRRData).
 func (c *Client) sendCIPRequest(req cip.Request) ([]byte, error) {
 	reqData := req.Marshal()
 
-	logging.DebugLog("Omron", "sendCIPRequest: service=0x%02X path=%X dataLen=%d",
-		req.Service, req.Path, len(req.Data))
+	logging.DebugLog("Omron", "sendCIPRequest: service=0x%02X path=%X dataLen=%d connected=%v",
+		req.Service, req.Path, len(req.Data), c.cipConn != nil)
 	logging.DebugTX("eip", reqData)
 
-	cpf := eip.EipCommonPacket{
-		Items: []eip.EipCommonPacketItem{
-			{TypeId: eip.CpfAddressNullId, Length: 0, Data: nil},
-			{TypeId: eip.CpfUnconnectedMessageId, Length: uint16(len(reqData)), Data: reqData},
-		},
+	var respData []byte
+
+	if c.cipConn != nil {
+		// Connected messaging via SendUnitData
+		connData := c.cipConn.WrapConnected(reqData)
+		cpf := c.buildConnectedCpf(connData)
+
+		resp, err := c.eipClient.SendUnitDataTransaction(*cpf)
+		if err != nil {
+			logging.DebugLog("Omron", "sendCIPRequest SendUnitData error: %v", err)
+			return nil, err
+		}
+
+		if len(resp.Items) < 2 {
+			logging.DebugLog("Omron", "sendCIPRequest: invalid response, expected 2 CPF items, got %d", len(resp.Items))
+			return nil, fmt.Errorf("invalid CIP response: expected 2 CPF items, got %d", len(resp.Items))
+		}
+
+		_, cipResp, err := c.cipConn.UnwrapConnected(resp.Items[1].Data)
+		if err != nil {
+			return nil, err
+		}
+		respData = cipResp
+	} else {
+		// Unconnected messaging via SendRRData
+		cpf := eip.EipCommonPacket{
+			Items: []eip.EipCommonPacketItem{
+				{TypeId: eip.CpfAddressNullId, Length: 0, Data: nil},
+				{TypeId: eip.CpfUnconnectedMessageId, Length: uint16(len(reqData)), Data: reqData},
+			},
+		}
+
+		resp, err := c.eipClient.SendRRData(cpf)
+		if err != nil {
+			logging.DebugLog("Omron", "sendCIPRequest SendRRData error: %v", err)
+			return nil, err
+		}
+
+		if len(resp.Items) < 2 {
+			logging.DebugLog("Omron", "sendCIPRequest: invalid response, expected 2 CPF items, got %d", len(resp.Items))
+			return nil, fmt.Errorf("invalid CIP response: expected 2 CPF items, got %d", len(resp.Items))
+		}
+
+		respData = resp.Items[1].Data
 	}
 
-	resp, err := c.eipClient.SendRRData(cpf)
-	if err != nil {
-		logging.DebugLog("Omron", "sendCIPRequest SendRRData error: %v", err)
-		return nil, err
-	}
-
-	if len(resp.Items) < 2 {
-		logging.DebugLog("Omron", "sendCIPRequest: invalid response, expected 2 CPF items, got %d", len(resp.Items))
-		return nil, fmt.Errorf("invalid CIP response: expected 2 CPF items, got %d", len(resp.Items))
-	}
-
-	respData := resp.Items[1].Data
 	logging.DebugRX("eip", respData)
 
 	// Parse and strip the CIP reply header:
@@ -1298,4 +1350,19 @@ func isConnectionError(err error) bool {
 		strings.Contains(errStr, "unreachable") ||
 		strings.Contains(errStr, "closed") ||
 		strings.Contains(errStr, "reset")
+}
+
+// isEIPConnectionError checks if an error indicates a dead EIP/CIP connection.
+func isEIPConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "broken pipe") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "not connected") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "use of closed") ||
+		strings.Contains(s, "EOF") ||
+		strings.Contains(s, "i/o timeout")
 }

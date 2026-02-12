@@ -69,11 +69,29 @@ func (c *Client) readEIPBatched(tagNames []string) ([]*TagValue, error) {
 
 		batchResults, err := c.readEIPBatch(batch)
 		if err != nil {
-			// If batch fails, fall back to individual reads for this batch
+			// Check if this is a connection error — if so, stop immediately
+			if isEIPConnectionError(err) {
+				logging.DebugLog("Omron", "EIP batch connection error, aborting remaining reads: %v", err)
+				// Fill remaining results with the error
+				for i := start; i < len(tagNames); i++ {
+					results[i] = &TagValue{Name: tagNames[i], Error: err, bigEndian: false}
+				}
+				return results, err
+			}
+
+			// Non-connection error: fall back to individual reads for this batch
 			logging.DebugLog("Omron", "EIP batch failed, falling back to individual: %v", err)
 			for i, name := range batch {
 				tv := c.readEIPSingle(name)
 				results[start+i] = tv
+				// If individual read hits a connection error, abort
+				if tv.Error != nil && isEIPConnectionError(tv.Error) {
+					logging.DebugLog("Omron", "EIP single read connection error, aborting: %v", tv.Error)
+					for j := start + i + 1; j < len(tagNames); j++ {
+						results[j] = &TagValue{Name: tagNames[j], Error: tv.Error, bigEndian: false}
+					}
+					return results, tv.Error
+				}
 			}
 			continue
 		}
@@ -82,6 +100,21 @@ func (c *Client) readEIPBatched(tagNames []string) ([]*TagValue, error) {
 		for i, tv := range batchResults {
 			results[start+i] = tv
 		}
+	}
+
+	// Check if all results have connection errors — escalate as batch error
+	var firstConnErr error
+	connErrCount := 0
+	for _, tv := range results {
+		if tv != nil && tv.Error != nil && isEIPConnectionError(tv.Error) {
+			connErrCount++
+			if firstConnErr == nil {
+				firstConnErr = tv.Error
+			}
+		}
+	}
+	if firstConnErr != nil && connErrCount == len(results) {
+		return results, firstConnErr
 	}
 
 	return results, nil

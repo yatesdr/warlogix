@@ -26,15 +26,16 @@ import (
 
 // CIP service codes for symbol discovery.
 const (
-	svcGetAttributesAll byte = 0x01 // Get Attributes All - the only discovery method Omron supports
+	svcGetAttributesAll    byte = 0x01 // Get Attributes All
+	svcGetAttributeSingle  byte = 0x0E // Get Attribute Single - reliable across firmware versions
 
 	// Symbol Object class IDs (Omron-specific)
 	classSymbolTable byte = 0x6A // Symbol table metadata (contains instance count)
 	classSymbol      byte = 0x6B // Symbol Object (tag instances)
 
-	// Note: Omron does NOT support service 0x55 (Get Instance Attribute List)
-	// which is commonly used for efficient pagination in Allen-Bradley Logix PLCs.
-	// Attempting to use 0x55 returns CIP status 0x08 ("service not supported").
+	// Symbol Object attribute IDs
+	attrSymbolName byte = 0x01 // Attribute 1: Name (CIP STRING)
+	attrSymbolType byte = 0x02 // Attribute 2: Type (UINT16)
 )
 
 
@@ -153,12 +154,100 @@ func (c *Client) getSymbolTableCount() uint32 {
 	return 0
 }
 
-// getSymbolInstance reads a single symbol instance using Get Attributes All (0x01).
-// This is the Omron-compatible method for tag discovery.
+// getSymbolInstance reads a single symbol instance using Get Attribute Single (0x0E).
+// Uses individual attribute requests for Name (attr 1) and Type (attr 2),
+// which return a known format regardless of firmware version.
 func (c *Client) getSymbolInstance(instance uint32) (TagInfo, error) {
 	tag := TagInfo{Instance: instance}
 
-	// Build path to Symbol Object (class 0x6B) with specific instance
+	// Try Get Attributes All first — if it produces a valid name, use it
+	tag, err := c.getSymbolInstanceGAA(instance)
+	if err == nil && tag.Name != "" && isValidTagName(tag.Name) {
+		return tag, nil
+	}
+
+	// Fall back to Get Attribute Single for each attribute
+	return c.getSymbolInstanceGAS(instance)
+}
+
+// getSymbolInstanceGAA tries Get Attributes All (0x01) for a symbol instance.
+func (c *Client) getSymbolInstanceGAA(instance uint32) (TagInfo, error) {
+	tag := TagInfo{Instance: instance}
+
+	path := c.symbolInstancePath(instance)
+	req := cip.Request{
+		Service: svcGetAttributesAll,
+		Path:    path,
+	}
+
+	respData, err := c.sendCIPRequest(req)
+	if err != nil {
+		return tag, fmt.Errorf("instance %d GAA: %w", instance, err)
+	}
+	if len(respData) == 0 {
+		return tag, fmt.Errorf("instance %d GAA: no data", instance)
+	}
+
+	tag = c.parseOmronSymbolAttributes(respData, instance)
+	return tag, nil
+}
+
+// getSymbolInstanceGAS reads a symbol instance using Get Attribute Single (0x0E).
+func (c *Client) getSymbolInstanceGAS(instance uint32) (TagInfo, error) {
+	tag := TagInfo{Instance: instance}
+
+	// Read Name (attribute 1)
+	namePath := c.symbolInstanceAttrPath(instance, attrSymbolName)
+	nameReq := cip.Request{
+		Service: svcGetAttributeSingle,
+		Path:    namePath,
+	}
+
+	nameData, err := c.sendCIPRequest(nameReq)
+	if err != nil {
+		return tag, fmt.Errorf("instance %d name: %w", instance, err)
+	}
+
+	// Parse Name as CIP STRING: UINT16 LE length + chars
+	if len(nameData) < 2 {
+		return tag, fmt.Errorf("instance %d: name data too short (%d bytes)", instance, len(nameData))
+	}
+	nameLen := int(binary.LittleEndian.Uint16(nameData[0:2]))
+	if nameLen <= 0 || 2+nameLen > len(nameData) {
+		return tag, fmt.Errorf("instance %d: invalid name length %d", instance, nameLen)
+	}
+	tag.Name = string(nameData[2 : 2+nameLen])
+
+	if !isValidTagName(tag.Name) {
+		return tag, fmt.Errorf("instance %d: invalid name %q", instance, tag.Name)
+	}
+
+	// Read Type (attribute 2)
+	typePath := c.symbolInstanceAttrPath(instance, attrSymbolType)
+	typeReq := cip.Request{
+		Service: svcGetAttributeSingle,
+		Path:    typePath,
+	}
+
+	typeData, err := c.sendCIPRequest(typeReq)
+	if err != nil {
+		// Name succeeded but type failed — return with name only
+		logging.DebugLog("EIP/Discovery", "Instance %d (%s): type query failed: %v", instance, tag.Name, err)
+		return tag, nil
+	}
+
+	if len(typeData) >= 2 {
+		tag.TypeCode = binary.LittleEndian.Uint16(typeData[0:2])
+	}
+
+	logging.DebugLog("EIP/Discovery", "Instance %d (GAS): name=%q type=0x%04X (%s)",
+		instance, tag.Name, tag.TypeCode, TypeName(tag.TypeCode))
+
+	return tag, nil
+}
+
+// symbolInstancePath builds an EPath to Symbol Object class 0x6B with the given instance.
+func (c *Client) symbolInstancePath(instance uint32) cip.EPath_t {
 	var path cip.EPath_t
 	if instance <= 0xFF {
 		path, _ = cip.EPath().Class(classSymbol).Instance(byte(instance)).Build()
@@ -167,25 +256,33 @@ func (c *Client) getSymbolInstance(instance uint32) (TagInfo, error) {
 	} else {
 		path, _ = cip.EPath().Class(classSymbol).Instance32(instance).Build()
 	}
+	return path
+}
 
-	req := cip.Request{
-		Service: svcGetAttributesAll,
-		Path:    path,
+// symbolInstanceAttrPath builds an EPath to a specific attribute of a Symbol Object instance.
+func (c *Client) symbolInstanceAttrPath(instance uint32, attrID byte) cip.EPath_t {
+	var path cip.EPath_t
+	if instance <= 0xFF {
+		path, _ = cip.EPath().Class(classSymbol).Instance(byte(instance)).Attribute(attrID).Build()
+	} else if instance <= 0xFFFF {
+		path, _ = cip.EPath().Class(classSymbol).Instance16(uint16(instance)).Attribute(attrID).Build()
+	} else {
+		path, _ = cip.EPath().Class(classSymbol).Instance32(instance).Attribute(attrID).Build()
 	}
+	return path
+}
 
-	respData, err := c.sendCIPRequest(req)
-	if err != nil {
-		return tag, fmt.Errorf("instance %d: %w", instance, err)
+// isValidTagName checks if a tag name contains only printable ASCII characters.
+func isValidTagName(name string) bool {
+	if name == "" {
+		return false
 	}
-
-	if len(respData) == 0 {
-		return tag, fmt.Errorf("instance %d: no attribute data", instance)
+	for _, c := range name {
+		if c < 0x20 || c > 0x7E {
+			return false
+		}
 	}
-
-	// Parse Omron-specific symbol attributes
-	tag = c.parseOmronSymbolAttributes(respData, instance)
-
-	return tag, nil
+	return true
 }
 
 // parseOmronSymbolAttributes parses the attribute data from Get Attributes All

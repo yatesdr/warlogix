@@ -305,6 +305,9 @@ func (e *EipClient) sendEncap(msg EipEncap) error {
 	_, err := e.conn.Write(data)
 	if err != nil {
 		logging.DebugError("EIP", "sendEncap write", err)
+		// Mark connection as dead so IsConnected() returns false
+		e.conn.Close()
+		e.conn = nil
 	}
 	return err
 }
@@ -319,6 +322,9 @@ func (e *EipClient) recvEncap() (*EipEncap, error) {
 	_, err := io.ReadFull(e.conn, header)
 	if err != nil {
 		logging.DebugError("EIP", "recvEncap read header", err)
+		// Mark connection as dead so IsConnected() returns false
+		e.conn.Close()
+		e.conn = nil
 		return nil, fmt.Errorf("SendRecv: Error reading Encap header. %w", err)
 	}
 
@@ -344,6 +350,9 @@ func (e *EipClient) recvEncap() (*EipEncap, error) {
 	_, err = io.ReadFull(e.conn, payload)
 	if err != nil {
 		logging.DebugError("EIP", "recvEncap read payload", err)
+		// Mark connection as dead so IsConnected() returns false
+		e.conn.Close()
+		e.conn = nil
 		return nil, fmt.Errorf("SendRecv: Failed to read payload. %w", err)
 	}
 
