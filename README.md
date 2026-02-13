@@ -94,9 +94,10 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 - **Valkey/Redis** - Key storage with Pub/Sub and write-back queue
 - **Kafka** - High-throughput tag changes and event triggers
 - **TagPacks** - Group tags within a single PLC or across multiple PLCs for atomic publishing, useful for aggregating related data for upstream IT processes
+- **Push** - Push tag values to external HTTP endpoints on schedule or on change
 - **Triggers** - Event-driven data capture with MQTT (QoS 2) and Kafka publishing
 - **Daemon Mode** - Background service with SSH access
-- **Web UI** - Browser-based management interface for PLCs, services, and tags
+- **Web UI** - Browser-based management interface with dark mode, setup wizard, and real-time SSE updates
 - **High Performance** - Batched reads, optimized publishing, 100K+ messages/sec
 
 ## Supported PLCs
@@ -139,7 +140,7 @@ Run `warlink --stress-test-republishing` to benchmark your system.
 
 | Tab | Key | Action |
 |-----|-----|--------|
-| Global | `P/B/T/G/E/M/V/K/D` | Jump to tab |
+| Global | `P/B/T/G/U/E/M/V/K/D` | Jump to tab |
 | Global | `Shift+Tab` | Cycle tabs |
 | Global | `N` | Configure namespace |
 | Global | `F6` | Cycle themes |

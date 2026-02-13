@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.6] - 2026-02-13
+
+### Added
+- **Push Manager**: New `push` package for tag push functionality with configurable push targets, scheduling, and tests
+- **Push Tab**: New TUI tab for managing push configurations
+- **Setup Wizard**: First-run setup page and namespace configuration in the web UI
+- **Change Password Page**: Web UI page for user password changes
+- **Omron Reference Code**: C++ reference implementations for future Omron NJ/NX driver work
+- **Web Server Tests**: Added test coverage for the web server and login flow
+- **Dark Mode**: Web UI dark mode support with theme toggle
+- **Republisher PLC Picker**: Select PLCs directly from the republisher tree in the web UI
+
+### Changed
+- **Web Server Consolidation**: Replaced standalone API server with consolidated web server, removing `api/server.go` in favor of unified `web/server.go` + `www/` handlers
+- **Expanded Web API**: Significantly expanded REST API handlers for PLC management, tag operations, and service control
+- **SSE Enhancements**: Additional server-sent event types for real-time web UI updates
+- **TUI Refactor**: TUI now uses a `WebServer` interface to avoid import cycles with the web package
+- **Config Expansion**: Extended configuration structs for push targets and web server settings
+- **Omron Discovery Improvements**: Major expansion of Omron EIP discovery and connected messaging
+- **PLC Manager**: Extended manager with push integration and expanded PLC lifecycle management
+
+### Fixed
+- **Omron NX1P2 EIP/CIP**: Fixed discovery, connected messaging, and reconnection for NX1P2 controllers
+- **Web UI Styling**: CSS refinements and layout fixes across republisher, PLC, and REST pages
+
 ## [0.2.4] - 2026-02-09
 
 ### Added
