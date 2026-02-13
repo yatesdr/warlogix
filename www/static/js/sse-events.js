@@ -230,6 +230,9 @@ var RepublisherSSE = (function() {
             } else {
                 tagRow.classList.remove('monitored');
             }
+            // Sync inline publish toggle
+            var toggle = tagRow.querySelector('.publish-toggle input');
+            if (toggle) toggle.checked = data.enabled;
         }
 
         // Update indicator badges
@@ -271,15 +274,32 @@ var RepublisherSSE = (function() {
         if (!plcGroup) return;
 
         // Update the status dot
-        var statusDot = plcGroup.querySelector('.plc-header .status-dot');
+        var statusDot = plcGroup.querySelector('.plc-header-bar .status-dot');
         if (statusDot) {
             statusDot.className = 'status-dot status-' + data.status;
         }
 
         // Update tag count display
-        var tagCountEl = plcGroup.querySelector('.plc-header .tag-count');
+        var tagCountEl = plcGroup.querySelector('.plc-header-bar .tag-count');
         if (tagCountEl && data.tagCount !== undefined) {
             tagCountEl.textContent = data.tagCount + ' tags';
+        }
+
+        // Update PLC picker dropdown display and item list
+        if (typeof updatePLCPickerDisplay === 'function' &&
+            typeof selectedPLC !== 'undefined' && data.plc === selectedPLC) {
+            updatePLCPickerDisplay();
+        }
+        var pickerItem = document.querySelector('.plc-picker-item[data-plc="' + WarLink.escapeSelector(data.plc) + '"]');
+        if (pickerItem) {
+            var pickerDot = pickerItem.querySelector('.status-dot');
+            if (pickerDot) {
+                pickerDot.className = 'status-dot status-' + data.status;
+            }
+            if (data.tagCount !== undefined) {
+                var countEl = pickerItem.querySelector('.plc-picker-item-count');
+                if (countEl) countEl.textContent = data.tagCount + ' tags';
+            }
         }
 
         // If tags were discovered (tagCount > 0) but tree has no tag items, refresh the tree
@@ -314,7 +334,7 @@ var RepublisherSSE = (function() {
         }).then(function(html) {
             if (!html) return;
             tree.innerHTML = html;
-            // Restore collapsed/expanded state from localStorage
+            // Restore collapsed/expanded state and re-init PLC selector
             if (typeof restoreState === 'function') {
                 restoreState();
             }

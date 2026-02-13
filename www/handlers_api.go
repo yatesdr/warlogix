@@ -12,10 +12,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"warlink/ads"
 	"warlink/config"
 	"warlink/driver"
 	kafkapkg "warlink/kafka"
+	"warlink/logix"
 	"warlink/mqtt"
+	"warlink/omron"
+	"warlink/s7"
 	"warlink/tui"
 )
 
@@ -257,7 +261,9 @@ type PLCUpdateRequest struct {
 	Family             string `json:"family"`
 	Enabled            bool   `json:"enabled"`
 	HealthCheckEnabled *bool  `json:"health_check_enabled"`
+	DiscoverTags       *bool  `json:"discover_tags"`
 	PollRate           string `json:"poll_rate"`
+	Timeout            string `json:"timeout"`
 	AmsNetId           string `json:"ams_net_id"`
 	AmsPort            int    `json:"ams_port"`
 	Protocol           string `json:"protocol"`
@@ -303,6 +309,14 @@ func (h *Handlers) handlePLCUpdate(w http.ResponseWriter, r *http.Request) {
 		plcCfg.PollRate = 0
 	}
 
+	if req.Timeout != "" {
+		if d, err := time.ParseDuration(req.Timeout); err == nil {
+			plcCfg.Timeout = d
+		}
+	} else {
+		plcCfg.Timeout = 0
+	}
+
 	// Beckhoff fields
 	plcCfg.AmsNetId = req.AmsNetId
 	plcCfg.AmsPort = uint16(req.AmsPort)
@@ -313,6 +327,9 @@ func (h *Handlers) handlePLCUpdate(w http.ResponseWriter, r *http.Request) {
 	plcCfg.FinsNetwork = byte(req.FinsNetwork)
 	plcCfg.FinsNode = byte(req.FinsNode)
 	plcCfg.FinsUnit = byte(req.FinsUnit)
+
+	// Discover tags
+	plcCfg.DiscoverTags = req.DiscoverTags
 
 	// Save config
 	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
@@ -343,7 +360,9 @@ func (h *Handlers) handlePLCGet(w http.ResponseWriter, r *http.Request) {
 		"family":               plcCfg.GetFamily().String(),
 		"enabled":              plcCfg.Enabled,
 		"health_check_enabled": plcCfg.HealthCheckEnabled == nil || *plcCfg.HealthCheckEnabled,
+		"discover_tags":        plcCfg.SupportsDiscovery(),
 		"poll_rate":            plcCfg.PollRate.String(),
+		"timeout":             plcCfg.Timeout.String(),
 		"ams_net_id":           plcCfg.AmsNetId,
 		"ams_port":             plcCfg.AmsPort,
 		"protocol":             plcCfg.Protocol,
@@ -365,7 +384,9 @@ type PLCCreateRequest struct {
 	Family             string `json:"family"`
 	Enabled            bool   `json:"enabled"`
 	HealthCheckEnabled *bool  `json:"health_check_enabled"`
+	DiscoverTags       *bool  `json:"discover_tags"`
 	PollRate           string `json:"poll_rate"`
+	Timeout            string `json:"timeout"`
 	AmsNetId           string `json:"ams_net_id"`
 	AmsPort            int    `json:"ams_port"`
 	Protocol           string `json:"protocol"`
@@ -407,6 +428,7 @@ func (h *Handlers) handlePLCCreate(w http.ResponseWriter, r *http.Request) {
 		Slot:               byte(req.Slot),
 		Enabled:            req.Enabled,
 		HealthCheckEnabled: req.HealthCheckEnabled,
+		DiscoverTags:       req.DiscoverTags,
 	}
 
 	if req.Family != "" {
@@ -417,6 +439,13 @@ func (h *Handlers) handlePLCCreate(w http.ResponseWriter, r *http.Request) {
 	if req.PollRate != "" {
 		if d, err := time.ParseDuration(req.PollRate); err == nil {
 			plcCfg.PollRate = d
+		}
+	}
+
+	// Parse timeout
+	if req.Timeout != "" {
+		if d, err := time.ParseDuration(req.Timeout); err == nil {
+			plcCfg.Timeout = d
 		}
 	}
 
@@ -505,8 +534,10 @@ type TagUpdateRequest struct {
 
 // TagCreateRequest holds the fields for creating/updating a tag via PUT.
 type TagCreateRequest struct {
-	Enabled  bool `json:"enabled"`
-	Writable bool `json:"writable"`
+	Enabled  bool   `json:"enabled"`
+	Writable bool   `json:"writable"`
+	DataType string `json:"data_type"`
+	Alias    string `json:"alias"`
 }
 
 // handleTagRead reads a tag's current value on demand.
@@ -526,6 +557,20 @@ func (h *Handlers) handleTagRead(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"value": tv.GoValue(),
 		"type":  tv.TypeName(),
+	}
+
+	// Include member types for struct values so the UI shows correct PLC types
+	if _, ok := tv.GoValue().(map[string]interface{}); ok && logix.IsStructure(tv.DataType) {
+		plc := plcMan.GetPLC(plcName)
+		if plc != nil {
+			if drv := plc.GetDriver(); drv != nil {
+				if adapter, ok := drv.(*driver.LogixAdapter); ok {
+					if types := adapter.GetMemberTypes(tv.DataType); types != nil {
+						resp["member_types"] = types
+					}
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -651,6 +696,8 @@ func (h *Handlers) handleTagPut(w http.ResponseWriter, r *http.Request) {
 			// Update existing tag
 			plcCfg.Tags[i].Enabled = req.Enabled
 			plcCfg.Tags[i].Writable = req.Writable
+			plcCfg.Tags[i].DataType = req.DataType
+			plcCfg.Tags[i].Alias = req.Alias
 			tagFound = true
 			break
 		}
@@ -660,6 +707,8 @@ func (h *Handlers) handleTagPut(w http.ResponseWriter, r *http.Request) {
 		// Add new tag
 		plcCfg.Tags = append(plcCfg.Tags, config.TagSelection{
 			Name:     tagName,
+			DataType: req.DataType,
+			Alias:    req.Alias,
 			Enabled:  req.Enabled,
 			Writable: req.Writable,
 		})
@@ -672,7 +721,96 @@ func (h *Handlers) handleTagPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.managers.GetPLCMan().RefreshManualTags(plcName)
+	h.eventHub.BroadcastEntityChange("plc", "update", plcName)
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleTagDelete deletes a manually configured tag from a PLC.
+func (h *Handlers) handleTagDelete(w http.ResponseWriter, r *http.Request) {
+	plcName := chi.URLParam(r, "plc")
+	plcName, _ = url.PathUnescape(plcName)
+	tagName := chi.URLParam(r, "tag")
+	tagName, _ = url.PathUnescape(tagName)
+
+	cfg := h.managers.GetConfig()
+	plcCfg := cfg.FindPLC(plcName)
+	if plcCfg == nil {
+		http.Error(w, "PLC not found", http.StatusNotFound)
+		return
+	}
+
+	// Find and remove the tag
+	found := false
+	for i, tag := range plcCfg.Tags {
+		if tag.Name == tagName {
+			plcCfg.Tags = append(plcCfg.Tags[:i], plcCfg.Tags[i+1:]...)
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		http.Error(w, "Tag not found", http.StatusNotFound)
+		return
+	}
+
+	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	h.managers.GetPLCMan().RefreshManualTags(plcName)
+	h.eventHub.BroadcastEntityChange("plc", "update", plcName)
+	w.WriteHeader(http.StatusOK)
+}
+
+// handlePLCTypeNames returns the supported type names and family metadata for a PLC.
+func (h *Handlers) handlePLCTypeNames(w http.ResponseWriter, r *http.Request) {
+	plcName := chi.URLParam(r, "plc")
+	plcName, _ = url.PathUnescape(plcName)
+
+	cfg := h.managers.GetConfig()
+	plcCfg := cfg.FindPLC(plcName)
+	if plcCfg == nil {
+		http.Error(w, "PLC not found", http.StatusNotFound)
+		return
+	}
+
+	family := plcCfg.GetFamily()
+	var typeNames []string
+	var addressBased bool
+	var addressLabel string
+
+	switch family {
+	case config.FamilyS7:
+		typeNames = s7.SupportedTypeNames()
+		addressBased = true
+		addressLabel = "DB.Offset"
+	case config.FamilyOmron:
+		typeNames = omron.SupportedTypeNames()
+		if plcCfg.IsOmronFINS() {
+			addressBased = true
+			addressLabel = "Address"
+		} else {
+			addressLabel = "Tag Name"
+		}
+	case config.FamilyBeckhoff:
+		typeNames = ads.SupportedTypeNames()
+		addressLabel = "Tag Name"
+	default:
+		typeNames = logix.SupportedTypeNames()
+		addressLabel = "Tag Name"
+	}
+
+	resp := map[string]interface{}{
+		"family":        family.String(),
+		"address_based": addressBased,
+		"address_label": addressLabel,
+		"types":         typeNames,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // TagWriteRequest holds a value to write to a tag.

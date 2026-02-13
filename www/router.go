@@ -187,7 +187,11 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers) chi.Router {
 			r.Get("/htmx/tags/{plc}/{tag}", h.handleTagRead)
 			r.Patch("/htmx/tags/{plc}/{tag}", h.handleTagUpdate)
 			r.Put("/htmx/tags/{plc}/{tag}", h.handleTagPut)
+			r.Delete("/htmx/tags/{plc}/{tag}", h.handleTagDelete)
 			r.Post("/htmx/tags/{plc}/{tag}/write", h.handleTagWrite)
+
+			// PLC type info
+			r.Get("/htmx/plcs/{plc}/types", h.handlePLCTypeNames)
 		})
 
 		// User management (admin only)

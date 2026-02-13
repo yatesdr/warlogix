@@ -332,8 +332,9 @@ func (c *Client) openConnection() error {
 
 	logging.DebugLog("Omron", "Opening CIP connection to %s", c.address)
 
-	// Try large connection size first, then fall back to small
-	sizes := []uint16{4002, 504}
+	// Try large connection sizes first, then fall back to small.
+	// Omron NX1P2 supports up to ~1994; NJ supports up to ~4002.
+	sizes := []uint16{4002, 1994, 504}
 
 	var lastErr error
 	for _, size := range sizes {
@@ -585,8 +586,9 @@ func (c *Client) closeConnection() error {
 	return nil
 }
 
-// Keepalive sends a NOP to keep the CIP connection alive.
-// Call periodically when using connected messaging.
+// Keepalive sends a lightweight CIP request to keep the connection alive.
+// Uses Get Attributes All on the Identity Object (class 1, instance 1),
+// which is universally supported across Omron NJ/NX PLCs.
 func (c *Client) Keepalive() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -595,9 +597,9 @@ func (c *Client) Keepalive() error {
 		return nil // Not using connected messaging
 	}
 
-	// Send Identity object NOP
+	// GAA on Identity Object — works on all Omron EIP devices
 	reqData := []byte{
-		0x17,       // Service code (NOP)
+		0x01,       // Service code: Get Attributes All
 		0x02,       // Path size (2 words)
 		0x20, 0x01, // Class segment: class 1 (Identity)
 		0x24, 0x01, // Instance segment: instance 1
@@ -1079,6 +1081,78 @@ func (c *Client) sendCIPRequest(req cip.Request) ([]byte, error) {
 	}
 
 	return respData[dataStart:], nil
+}
+
+// sendCIPRequestWithStatus sends a CIP request and returns data + CIP general status.
+// Unlike sendCIPRequest, this allows callers to distinguish between success (0x00)
+// and partial transfer (0x06) for paginated requests like service 0x55.
+func (c *Client) sendCIPRequestWithStatus(req cip.Request) ([]byte, byte, error) {
+	reqData := req.Marshal()
+
+	logging.DebugLog("Omron", "sendCIPRequestWithStatus: service=0x%02X path=%X dataLen=%d connected=%v",
+		req.Service, req.Path, len(req.Data), c.cipConn != nil)
+	logging.DebugTX("eip", reqData)
+
+	var respData []byte
+
+	if c.cipConn != nil {
+		connData := c.cipConn.WrapConnected(reqData)
+		cpf := c.buildConnectedCpf(connData)
+
+		resp, err := c.eipClient.SendUnitDataTransaction(*cpf)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		if len(resp.Items) < 2 {
+			return nil, 0, fmt.Errorf("invalid CIP response: expected 2 CPF items, got %d", len(resp.Items))
+		}
+
+		_, cipResp, err := c.cipConn.UnwrapConnected(resp.Items[1].Data)
+		if err != nil {
+			return nil, 0, err
+		}
+		respData = cipResp
+	} else {
+		cpf := eip.EipCommonPacket{
+			Items: []eip.EipCommonPacketItem{
+				{TypeId: eip.CpfAddressNullId, Length: 0, Data: nil},
+				{TypeId: eip.CpfUnconnectedMessageId, Length: uint16(len(reqData)), Data: reqData},
+			},
+		}
+
+		resp, err := c.eipClient.SendRRData(cpf)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		if len(resp.Items) < 2 {
+			return nil, 0, fmt.Errorf("invalid CIP response: expected 2 CPF items, got %d", len(resp.Items))
+		}
+
+		respData = resp.Items[1].Data
+	}
+
+	logging.DebugRX("eip", respData)
+
+	if len(respData) < 4 {
+		return nil, 0, fmt.Errorf("CIP response too short: %d bytes", len(respData))
+	}
+
+	status := respData[2]
+	extStatusSize := int(respData[3]) * 2
+	dataStart := 4 + extStatusSize
+
+	// Accept success and partial transfer; reject everything else
+	if status != 0x00 && status != 0x06 {
+		return nil, status, fmt.Errorf("CIP error 0x%02X", status)
+	}
+
+	if dataStart > len(respData) {
+		return nil, status, fmt.Errorf("CIP response truncated: expected %d bytes, got %d", dataStart, len(respData))
+	}
+
+	return respData[dataStart:], status, nil
 }
 
 // Write writes a value to an address.

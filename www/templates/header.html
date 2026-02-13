@@ -4,7 +4,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
     <title>WarLink</title>
+    <script>
+    (function(){var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'}document.documentElement.dataset.theme=t})();
+    </script>
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="/static/js/htmx.min.js"></script>
     <script src="/static/js/warlink.js"></script>
@@ -29,6 +33,7 @@
             {{end}}
         </div>
         <div class="nav-user">
+            <button class="theme-toggle" onclick="WarLink.toggleTheme()" title="Toggle theme"></button>
             <span class="username">{{.Username}} ({{.Role}})</span>
             <form action="/logout" method="post" style="display:inline">
                 <button type="submit" class="btn btn-sm">Logout</button>

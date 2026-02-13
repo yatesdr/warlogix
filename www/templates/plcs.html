@@ -74,6 +74,10 @@
                         <label for="edit-poll-rate">Poll Rate</label>
                         <input type="text" id="edit-poll-rate" name="poll_rate" placeholder="e.g., 250ms, 1s">
                     </div>
+                    <div class="form-group">
+                        <label for="edit-timeout">Timeout</label>
+                        <input type="text" id="edit-timeout" name="timeout" placeholder="e.g., 5s, 10s">
+                    </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -86,6 +90,12 @@
                         <label>
                             <input type="checkbox" id="edit-health-check" name="health_check_enabled" checked>
                             Health Check
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="edit-discover-tags" name="discover_tags" checked>
+                            Auto-discover Tags
                         </label>
                     </div>
                 </div>
@@ -180,9 +190,15 @@
                         <input type="number" id="add-slot" name="slot" min="0" max="255" value="0">
                     </div>
                 </div>
-                <div class="form-group">
-                    <label for="add-poll-rate">Poll Rate</label>
-                    <input type="text" id="add-poll-rate" name="poll_rate" placeholder="e.g., 250ms, 1s">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="add-poll-rate">Poll Rate</label>
+                        <input type="text" id="add-poll-rate" name="poll_rate" placeholder="e.g., 250ms, 1s">
+                    </div>
+                    <div class="form-group">
+                        <label for="add-timeout">Timeout</label>
+                        <input type="text" id="add-timeout" name="timeout" value="5s">
+                    </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -195,6 +211,12 @@
                         <label>
                             <input type="checkbox" id="add-health-check" name="health_check_enabled" checked>
                             Health Check
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="add-discover-tags" name="discover_tags" checked>
+                            Auto-discover Tags
                         </label>
                     </div>
                 </div>
@@ -343,6 +365,9 @@ function showInfoFromRow(btn) {
             html += '<tr><th>FINS Port</th><td>' + d.finsPort + '</td></tr>';
         }
     }
+    if (d.connectionMode && d.connectionMode !== 'Not connected') {
+        html += '<tr><th>Connection</th><td>' + escapeHtml(d.connectionMode) + '</td></tr>';
+    }
 
     html += '</table>';
     content.innerHTML = html;
@@ -368,7 +393,9 @@ function showEditModal(name) {
             document.getElementById('edit-family').value = data.family.toLowerCase();
             document.getElementById('edit-enabled').checked = data.enabled;
             document.getElementById('edit-health-check').checked = data.health_check_enabled !== false;
+            document.getElementById('edit-discover-tags').checked = data.discover_tags !== false;
             document.getElementById('edit-poll-rate').value = data.poll_rate !== '0s' ? data.poll_rate : '';
+            document.getElementById('edit-timeout').value = data.timeout !== '0s' ? data.timeout : '5s';
 
             // Beckhoff fields
             document.getElementById('edit-ams-net-id').value = data.ams_net_id || '';
@@ -410,6 +437,7 @@ function savePLC(e) {
         family: document.getElementById('edit-family').value,
         enabled: document.getElementById('edit-enabled').checked,
         poll_rate: document.getElementById('edit-poll-rate').value,
+        timeout: document.getElementById('edit-timeout').value,
         ams_net_id: document.getElementById('edit-ams-net-id').value,
         ams_port: parseInt(document.getElementById('edit-ams-port').value) || 851,
         protocol: document.getElementById('edit-protocol').value,
@@ -417,7 +445,8 @@ function savePLC(e) {
         fins_network: parseInt(document.getElementById('edit-fins-network').value) || 0,
         fins_node: parseInt(document.getElementById('edit-fins-node').value) || 0,
         fins_unit: parseInt(document.getElementById('edit-fins-unit').value) || 0,
-        health_check_enabled: document.getElementById('edit-health-check').checked
+        health_check_enabled: document.getElementById('edit-health-check').checked,
+        discover_tags: document.getElementById('edit-discover-tags').checked
     };
 
     fetch('/htmx/plcs/' + encodeURIComponent(name), {
@@ -481,6 +510,7 @@ function addPLC(e) {
         family: document.getElementById('add-family').value,
         enabled: document.getElementById('add-enabled').checked,
         poll_rate: document.getElementById('add-poll-rate').value,
+        timeout: document.getElementById('add-timeout').value,
         ams_net_id: document.getElementById('add-ams-net-id').value,
         ams_port: parseInt(document.getElementById('add-ams-port').value) || 851,
         protocol: document.getElementById('add-protocol').value,
@@ -488,7 +518,8 @@ function addPLC(e) {
         fins_network: parseInt(document.getElementById('add-fins-network').value) || 0,
         fins_node: parseInt(document.getElementById('add-fins-node').value) || 0,
         fins_unit: parseInt(document.getElementById('add-fins-unit').value) || 0,
-        health_check_enabled: document.getElementById('add-health-check').checked
+        health_check_enabled: document.getElementById('add-health-check').checked,
+        discover_tags: document.getElementById('add-discover-tags').checked
     };
 
     fetch('/htmx/plcs', {
@@ -528,6 +559,7 @@ function addPLC(e) {
         tr.dataset.amsPort = data.ams_port || '';
         tr.dataset.protocol = data.protocol || '';
         tr.dataset.finsPort = data.fins_port || '';
+        tr.dataset.connectionMode = '';
         var statusCell = '{{if .IsAdmin}}<button class="status-indicator status-disconnected" onclick="toggleConnection(\'' + escapeHtml(data.name) + '\')" title="Click to connect">Disconnected</button>{{else}}<span class="status-badge status-disconnected">Disconnected</span>{{end}}';
         var actionsHtml = '<button class="btn-icon" title="Info" onclick="showInfoFromRow(this)"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><text x="8" y="11.5" text-anchor="middle" font-size="9" font-weight="bold" fill="currentColor">i</text></svg></button>';
         {{if .IsAdmin}}
@@ -749,6 +781,7 @@ var PLCsSSE = (function() {
         if (data.productName) row.dataset.product = data.productName;
         if (data.serialNumber) row.dataset.serial = data.serialNumber;
         if (data.vendor) row.dataset.vendor = data.vendor;
+        if (data.connectionMode) row.dataset.connectionMode = data.connectionMode;
 
         // If user just clicked connect/disconnect, suppress SSE button updates
         // briefly so stale events don't revert the button

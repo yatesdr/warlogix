@@ -3,6 +3,7 @@ package logix
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 
 	"warlink/cip"
 	"warlink/eip"
@@ -36,15 +37,26 @@ type Tag struct {
 }
 
 // NewPLC creates the PLC wrapper (does not connect).
-func NewPLC(ipaddr string) (PLC, error) {
+// If timeout > 0, it overrides the EIP client's default timeout.
+func NewPLC(ipaddr string, timeout time.Duration) (PLC, error) {
 	if ipaddr == "" {
 		return PLC{}, fmt.Errorf("NewPLC: empty ipaddr")
 	}
+	if timeout > 0 {
+		debugLog("NewPLC %s: timeout=%v", ipaddr, timeout)
+	} else {
+		debugLog("NewPLC %s: timeout=default (5s)", ipaddr)
+	}
 	c := eip.NewEipClient(ipaddr)
+	if timeout > 0 {
+		c.SetTimeout(timeout)
+	}
 	err := c.Connect()
 	if err != nil {
+		debugLog("NewPLC %s: connect failed: %v", ipaddr, err)
 		return PLC{}, fmt.Errorf("NewPLC: failed to connect. %w", err)
 	}
+	debugLog("NewPLC %s: connected, session=0x%08X", ipaddr, c.GetSession())
 	return PLC{IpAddress: ipaddr, Slot: 0, Connection: c}, nil
 }
 
@@ -111,23 +123,24 @@ func (p *PLC) ReadTagCountWithInstance(tagName string, count uint16, instanceID 
 		return nil, fmt.Errorf("ReadTag: empty tag name")
 	}
 
-	// Note: Symbol Instance Addressing (Class 0x6B) was previously attempted here but
-	// it doesn't work reliably for reading tag data. The Symbol Object class is designed
-	// for tag browsing/metadata, not data retrieval. We now use symbolic addressing only.
+	debugLogVerbose("ReadTag %q: count=%d", tagName, count)
 
 	// Use symbolic addressing
 	tag, partialTransfer, err := p.readTagCountInternal(tagName, count)
 	if err != nil {
+		debugLog("ReadTag %q: error: %v", tagName, err)
 		return nil, err
 	}
 
 	// If we got all data, return it
 	if !partialTransfer {
+		debugLogVerbose("ReadTag %q: got %d bytes, type=0x%04X", tagName, len(tag.Bytes), tag.DataType)
 		return tag, nil
 	}
 
 	// Partial transfer - need to read in chunks using array indexing
 	// This works better for structures than byte-offset fragmented reads
+	debugLogVerbose("ReadTag %q: partial transfer (%d bytes), chunking", tagName, len(tag.Bytes))
 	return p.readTagChunked(tagName, count, tag)
 }
 
@@ -431,6 +444,8 @@ func buildDirectCpf(cipRequest []byte) *eip.EipCommonPacket {
 // - Routed unconnected messaging if RoutePath is set (for ControlLogix via Ethernet module)
 // - Direct unconnected messaging otherwise (for CompactLogix or direct CPU connection)
 func (p *PLC) sendCipRequest(reqData []byte) ([]byte, error) {
+	debugLogVerbose("sendCipRequest: svc=0x%02X, %d bytes", reqData[0], len(reqData))
+
 	if p.cipConn != nil {
 		// Use connected messaging
 		connData := p.cipConn.WrapConnected(reqData)
@@ -438,6 +453,7 @@ func (p *PLC) sendCipRequest(reqData []byte) ([]byte, error) {
 
 		resp, err := p.Connection.SendUnitDataTransaction(*cpf)
 		if err != nil {
+			debugLog("sendCipRequest: SendUnitDataTransaction error: %v", err)
 			return nil, fmt.Errorf("SendUnitDataTransaction: %w", err)
 		}
 
@@ -450,6 +466,7 @@ func (p *PLC) sendCipRequest(reqData []byte) ([]byte, error) {
 			return nil, fmt.Errorf("UnwrapConnected: %w", err)
 		}
 
+		debugLogVerbose("sendCipRequest: response %d bytes", len(cipResp))
 		return cipResp, nil
 	}
 
@@ -463,6 +480,7 @@ func (p *PLC) sendCipRequest(reqData []byte) ([]byte, error) {
 
 	resp, err := p.Connection.SendRRData(*cpf)
 	if err != nil {
+		debugLog("sendCipRequest: SendRRData error: %v", err)
 		return nil, fmt.Errorf("SendRRData: %w", err)
 	}
 
@@ -479,6 +497,8 @@ func (p *PLC) sendCipRequest(reqData []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+
+	debugLogVerbose("sendCipRequest: response %d bytes", len(cipResp))
 
 	return cipResp, nil
 }

@@ -62,7 +62,8 @@ type ManagedPLC struct {
 	DeviceInfo *driver.DeviceInfo   // Unified device info
 	Programs   []string             // Program names (for Logix)
 	Tags       []driver.TagInfo     // Discovered tags (for discovery-capable PLCs)
-	ManualTags []driver.TagInfo     // Tags from config (for non-discovery PLCs)
+	ManualTags    []driver.TagInfo   // Tags from config (for non-discovery PLCs)
+	ManualTagGen  uint64             // Incremented when ManualTags are rebuilt
 	Values     map[string]*TagValue // Tag values from last poll
 	Status     ConnectionStatus
 	LastError  error
@@ -92,6 +93,20 @@ func (m *ManagedPLC) IsTagWritable(tagName string) bool {
 		}
 	}
 	return false
+}
+
+// AllowManualTags returns whether manual tag addition should be offered.
+// True when discovery is disabled for this PLC (either by family default or explicit config).
+func (m *ManagedPLC) AllowManualTags() bool {
+	return !m.Config.SupportsDiscovery()
+}
+
+// GetManualTagGen returns the manual tag generation counter.
+// This increments whenever ManualTags are rebuilt (connect, config change, type resolution).
+func (m *ManagedPLC) GetManualTagGen() uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.ManualTagGen
 }
 
 // GetTagInfo returns whether a tag exists and if it's writable, thread-safely.
@@ -184,10 +199,84 @@ func (m *ManagedPLC) GetValues() map[string]*TagValue {
 func (m *ManagedPLC) GetTags() []driver.TagInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if m.Config.GetFamily().SupportsDiscovery() {
-		return m.Tags
+	if m.Config.SupportsDiscovery() && len(m.Tags) > 0 {
+		// Merge: start with discovered tags, append any manual tags not already discovered
+		if len(m.ManualTags) == 0 {
+			return m.Tags
+		}
+		// Build set of discovered tag names (excluding program entries like "Program:MainProgram")
+		discovered := make(map[string]bool, len(m.Tags))
+		for _, t := range m.Tags {
+			discovered[t.Name] = true
+		}
+		merged := make([]driver.TagInfo, len(m.Tags))
+		copy(merged, m.Tags)
+		for _, mt := range m.ManualTags {
+			if discovered[mt.Name] {
+				continue // Already in discovered list
+			}
+			if isChildOfAnyParent(mt.Name, discovered) {
+				continue // Child of a discovered tag (e.g., UDT member)
+			}
+			merged = append(merged, mt)
+		}
+		return merged
 	}
-	return m.ManualTags
+	// Manual mode: filter out children of known structure tags.
+	// They'll be shown as sub-nodes via lazyExpandUDT when the parent is expanded.
+	return m.filterStructChildren(m.ManualTags)
+}
+
+// isChildOfAnyParent returns true if tagName is a dot-delimited child of any name in parents.
+// E.g., "HMI_Edit.Access_Level" is a child of "HMI_Edit" if it exists in parents.
+// Program entries like "Program:MainProgram" are skipped (they're section headers, not data tags).
+func isChildOfAnyParent(tagName string, parents map[string]bool) bool {
+	for i := len(tagName) - 1; i >= 0; i-- {
+		if tagName[i] == '.' {
+			prefix := tagName[:i]
+			// Skip program entries (e.g., "Program:MainProgram")
+			if strings.HasPrefix(prefix, "Program:") && !strings.Contains(prefix[8:], ".") {
+				continue
+			}
+			if parents[prefix] {
+				return true
+			}
+			// Strip array index: "Employee_Data[0]" -> "Employee_Data"
+			if bracketIdx := strings.IndexByte(prefix, '['); bracketIdx >= 0 {
+				if parents[prefix[:bracketIdx]] {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// filterStructChildren removes ManualTags that are children of resolved structure tags.
+// Before type resolution, all tags have default types so no filtering occurs.
+// After resolution, structure tags have IsStructure(TypeCode) == true, and their
+// children are filtered since lazyExpandUDT will show them as sub-nodes.
+func (m *ManagedPLC) filterStructChildren(tags []driver.TagInfo) []driver.TagInfo {
+	if len(tags) == 0 {
+		return tags
+	}
+	// Build set of structure tag names (confirmed via type resolution)
+	structNames := make(map[string]bool)
+	for _, t := range tags {
+		if logix.IsStructure(t.TypeCode) {
+			structNames[t.Name] = true
+		}
+	}
+	if len(structNames) == 0 {
+		return tags
+	}
+	filtered := make([]driver.TagInfo, 0, len(tags))
+	for _, t := range tags {
+		if !isChildOfAnyParent(t.Name, structNames) {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
 }
 
 // BuildManualTags creates TagInfo entries from config.Tags for non-discovery PLCs.
@@ -196,6 +285,7 @@ func (m *ManagedPLC) BuildManualTags() {
 	defer m.mu.Unlock()
 
 	m.ManualTags = nil
+	m.ManualTagGen++
 	if m.Config == nil {
 		return
 	}
@@ -341,6 +431,9 @@ type PLCWorker struct {
 	changesFound int
 	lastError    error
 	statsMu      sync.RWMutex
+
+	// Manual tag type resolution (runs once per ManualTags rebuild)
+	lastResolvedGen uint64
 }
 
 // newPLCWorker creates a new worker for a PLC.
@@ -591,6 +684,55 @@ func (w *PLCWorker) poll() {
 			}
 		}
 		plc.Values[v.Name] = v
+
+		// Update ManualTags type codes from actual poll results.
+		// On first successful read, the real DataType replaces the default DINT.
+		// Skip CIP structure responses (0x02A0) for logix — these lack the template ID
+		// needed by IsStructure() and lazyExpandUDT. The resolveManualTagTypes method
+		// handles structures via symbol table lookup.
+		if v.Error == nil && len(plc.ManualTags) > 0 {
+			for i := range plc.ManualTags {
+				if plc.ManualTags[i].Name == v.Name && plc.ManualTags[i].TypeCode != v.DataType {
+					if (family == config.FamilyLogix || family == config.FamilyMicro800) && logix.IsCIPStructResponse(v.DataType) {
+						break
+					}
+					plc.ManualTags[i].TypeCode = v.DataType
+					var resolvedName string
+					switch family {
+					case config.FamilyS7:
+						resolvedName = s7.TypeName(v.DataType)
+					case config.FamilyBeckhoff:
+						resolvedName = ads.TypeName(v.DataType)
+					case config.FamilyOmron:
+						resolvedName = omron.TypeName(v.DataType)
+					default:
+						resolvedName = logix.TypeName(v.DataType)
+					}
+					plc.ManualTags[i].TypeName = resolvedName
+					// Persist to config if the type can round-trip (atomic types only, not "STRUCT(n)")
+					for j := range cfg.Tags {
+						if cfg.Tags[j].Name == v.Name {
+							var canPersist bool
+							switch family {
+							case config.FamilyS7:
+								_, canPersist = s7.TypeCodeFromName(resolvedName)
+							case config.FamilyBeckhoff:
+								_, canPersist = ads.TypeCodeFromName(resolvedName)
+							case config.FamilyOmron:
+								_, canPersist = omron.TypeCodeFromName(resolvedName)
+							default:
+								_, canPersist = logix.TypeCodeFromName(resolvedName)
+							}
+							if canPersist {
+								cfg.Tags[j].DataType = resolvedName
+							}
+							break
+						}
+					}
+					break
+				}
+			}
+		}
 	}
 	plc.LastPoll = time.Now()
 	plc.mu.Unlock()
@@ -606,8 +748,212 @@ func (w *PLCWorker) poll() {
 		w.manager.sendChanges(changes)
 	}
 	w.manager.markStatusDirty()
+
+	// One-time type resolution for manual tags with unknown types.
+	// Reads non-enabled tags and resolves structure TypeCodes via symbol lookup.
+	// Re-runs after each ManualTags rebuild (reconnect, config change).
+	if !cfg.SupportsDiscovery() {
+		plc.mu.RLock()
+		needsResolve := plc.ManualTagGen != w.lastResolvedGen
+		plc.mu.RUnlock()
+		if needsResolve {
+			w.resolveManualTagTypes()
+		}
+	}
 }
 
+// resolveManualTagTypes discovers the correct type codes for manual tags that still
+// have their default type (e.g. DINT). For atomic types, a simple read reveals the
+// correct DataType. For structures (CIP DataType 0x02A0), a targeted symbol table
+// lookup retrieves the real TypeCode with template ID for UDT expansion.
+// Runs once per ManualTags rebuild (tracked via ManualTagGen).
+func (w *PLCWorker) resolveManualTagTypes() {
+	plc := w.plc
+
+	plc.mu.RLock()
+	drv := plc.Driver
+	family := plc.Config.GetFamily()
+	cfg := plc.Config
+	gen := plc.ManualTagGen
+
+	if drv == nil || !drv.IsConnected() {
+		plc.mu.RUnlock()
+		return
+	}
+
+	// Determine the default type code for this family
+	var defaultTypeCode uint16
+	switch family {
+	case config.FamilyS7:
+		defaultTypeCode = s7.TypeDInt
+	case config.FamilyBeckhoff:
+		defaultTypeCode = ads.TypeInt32
+	case config.FamilyOmron:
+		defaultTypeCode = omron.TypeWord
+	default:
+		defaultTypeCode = logix.TypeDINT
+	}
+
+	// Collect tags that still have the default type, checking polled values first
+	type unresolvedTag struct {
+		Name     string
+		DataType uint16 // >0 if already available from poll values
+	}
+	var unresolved []unresolvedTag
+
+	for _, mt := range plc.ManualTags {
+		if mt.TypeCode == defaultTypeCode {
+			var dt uint16
+			if val, ok := plc.Values[mt.Name]; ok && val != nil && val.Error == nil && val.DataType != 0 {
+				dt = val.DataType
+			}
+			unresolved = append(unresolved, unresolvedTag{Name: mt.Name, DataType: dt})
+		}
+	}
+	plc.mu.RUnlock()
+
+	if len(unresolved) == 0 {
+		w.lastResolvedGen = gen
+		return
+	}
+
+	logging.DebugLog("plcman", "RESOLVE %s: resolving types for %d manual tags", cfg.Name, len(unresolved))
+
+	// Read tags that don't already have a value (outside lock — network I/O)
+	var needsRead []string
+	for _, u := range unresolved {
+		if u.DataType == 0 {
+			needsRead = append(needsRead, u.Name)
+		}
+	}
+
+	if len(needsRead) > 0 {
+		requests := make([]driver.TagRequest, len(needsRead))
+		for i, name := range needsRead {
+			requests[i] = driver.TagRequest{Name: name}
+		}
+		values, err := drv.Read(requests)
+		if err == nil {
+			readResults := make(map[string]uint16)
+			for i, val := range values {
+				if val != nil && val.Error == nil && val.DataType != 0 {
+					readResults[needsRead[i]] = val.DataType
+				}
+			}
+			for i := range unresolved {
+				if unresolved[i].DataType == 0 {
+					if dt, ok := readResults[unresolved[i].Name]; ok {
+						unresolved[i].DataType = dt
+					}
+				}
+			}
+		}
+	}
+
+	// Resolve CIP structure types via symbol table lookup (outside lock — network I/O)
+	type resolvedInfo struct {
+		Name     string
+		TypeCode uint16
+		TypeName string
+	}
+	var resolved []resolvedInfo
+
+	for _, u := range unresolved {
+		if u.DataType == 0 {
+			continue
+		}
+
+		dataType := u.DataType
+
+		// For logix structures, resolve via symbol lookup to get template ID
+		if (family == config.FamilyLogix || family == config.FamilyMicro800) && logix.IsCIPStructResponse(dataType) {
+			if adapter, ok := drv.(*driver.LogixAdapter); ok {
+				if tc, found := adapter.ResolveTagType(u.Name); found {
+					logging.DebugLog("plcman", "RESOLVE %s: symbol lookup found TypeCode 0x%04X", u.Name, tc)
+					dataType = tc
+				} else {
+					logging.DebugLog("plcman", "RESOLVE %s: symbol lookup failed (CIP type 0x%04X)", u.Name, u.DataType)
+				}
+			}
+		}
+
+		var typeName string
+		switch family {
+		case config.FamilyS7:
+			typeName = s7.TypeName(dataType)
+		case config.FamilyBeckhoff:
+			typeName = ads.TypeName(dataType)
+		case config.FamilyOmron:
+			typeName = omron.TypeName(dataType)
+		default:
+			typeName = logix.TypeName(dataType)
+		}
+
+		resolved = append(resolved, resolvedInfo{
+			Name:     u.Name,
+			TypeCode: dataType,
+			TypeName: typeName,
+		})
+	}
+
+	if len(resolved) == 0 {
+		return
+	}
+
+	// Apply results under lock
+	plc.mu.Lock()
+	for _, r := range resolved {
+		for i := range plc.ManualTags {
+			if plc.ManualTags[i].Name == r.Name {
+				plc.ManualTags[i].TypeCode = r.TypeCode
+				plc.ManualTags[i].TypeName = r.TypeName
+
+				// Persist atomic types to config
+				for j := range cfg.Tags {
+					if cfg.Tags[j].Name == r.Name {
+						var canPersist bool
+						switch family {
+						case config.FamilyS7:
+							_, canPersist = s7.TypeCodeFromName(r.TypeName)
+						case config.FamilyBeckhoff:
+							_, canPersist = ads.TypeCodeFromName(r.TypeName)
+						case config.FamilyOmron:
+							_, canPersist = omron.TypeCodeFromName(r.TypeName)
+						default:
+							_, canPersist = logix.TypeCodeFromName(r.TypeName)
+						}
+						if canPersist {
+							cfg.Tags[j].DataType = r.TypeName
+						}
+						break
+					}
+				}
+				break
+			}
+		}
+	}
+	// Bump generation to signal UI that types changed
+	plc.ManualTagGen++
+	updatedGen := plc.ManualTagGen
+	plc.mu.Unlock()
+
+	// Update the logix client's tagInfo map so reads use correct TypeCodes
+	// (otherwise CIP struct response 0x02A0 gets overridden to old default type)
+	if family == config.FamilyLogix || family == config.FamilyMicro800 {
+		if adapter, ok := drv.(*driver.LogixAdapter); ok {
+			plc.mu.RLock()
+			tagsCopy := make([]driver.TagInfo, len(plc.ManualTags))
+			copy(tagsCopy, plc.ManualTags)
+			plc.mu.RUnlock()
+			adapter.SetTags(tagsCopy)
+		}
+	}
+
+	// Mark both the UI generation and the worker's resolved generation
+	w.lastResolvedGen = updatedGen
+
+	w.manager.markStatusDirty()
+}
 
 // isLikelyConnectionError checks if an error message suggests a connection problem.
 // This is used to trigger reconnection attempts when the client's internal detection
@@ -794,11 +1140,9 @@ func (m *Manager) AddPLC(cfg *config.PLCConfig) error {
 	}
 	m.plcs[cfg.Name] = plc
 
-	// For non-discovery PLCs, build manual tags from config immediately
-	// so they're available before the PLC connects.
-	if !cfg.GetFamily().SupportsDiscovery() {
-		plc.BuildManualTags()
-	}
+	// Build manual tags from config immediately so they're available
+	// before the PLC connects. No-op when config.Tags is empty.
+	plc.BuildManualTags()
 
 	// If manager is running, start a worker for this PLC
 	if m.ctx != nil {
@@ -929,8 +1273,8 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	var programs []string
 	var tags []driver.TagInfo
 
-	// Only discover programs and tags for discovery-capable PLCs
-	if drv.SupportsDiscovery() {
+	// Only discover programs and tags when discovery is enabled in config
+	if cfg.SupportsDiscovery() {
 		if len(cachedTags) > 0 {
 			// Fast reconnect: reuse cached tags
 			programs = cachedPrograms
@@ -942,7 +1286,10 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 			// Full discovery via driver
 			logging.DebugLog("plcman", "CONNECT %s: starting tag discovery", plcName)
 			programs, _ = drv.Programs()
-			tags, _ = drv.AllTags()
+			tags, err = drv.AllTags()
+			if err != nil {
+				m.log("[yellow]PLC %s tag discovery failed: %v[-]", plcName, err)
+			}
 			logging.DebugLog("plcman", "CONNECT %s: discovered %d programs, %d tags",
 				plcName, len(programs), len(tags))
 		}
@@ -968,10 +1315,8 @@ func (m *Manager) connectPLC(plc *ManagedPLC) error {
 	name := plc.Config.Name
 	plc.mu.Unlock()
 
-	// For non-discovery PLCs, build manual tags from config
-	if !drv.SupportsDiscovery() {
-		plc.BuildManualTags()
-	}
+	// Build manual tags from config (no-op when config.Tags is empty)
+	plc.BuildManualTags()
 
 	m.markStatusDirty()
 	m.log("[green]PLC %s connected:[-] %s, %d tags", name, drv.ConnectionMode(), len(tags))
@@ -1732,8 +2077,7 @@ func (m *Manager) RefreshManualTags(name string) {
 		return
 	}
 
-	// Only rebuild for non-discovery PLCs
-	if !plc.Config.GetFamily().SupportsDiscovery() {
+	if plc.AllowManualTags() {
 		plc.BuildManualTags()
 		m.markStatusDirty()
 	}

@@ -45,6 +45,8 @@ func (p *PLC) OpenConnection() error {
 		return fmt.Errorf("OpenConnection: connection already open")
 	}
 
+	debugLog("OpenConnection %s: attempting Forward Open", p.IpAddress)
+
 	// Try large connection size first, then fall back to small
 	sizes := []uint16{ConnectionSizeLarge, ConnectionSizeSmall}
 
@@ -52,8 +54,10 @@ func (p *PLC) OpenConnection() error {
 	for _, size := range sizes {
 		err := p.tryForwardOpen(size)
 		if err == nil {
+			debugLog("OpenConnection %s: connected (size=%d bytes)", p.IpAddress, size)
 			return nil // Success
 		}
+		debugLog("OpenConnection %s: Forward Open (size=%d) failed: %v", p.IpAddress, size, err)
 		lastErr = err
 	}
 

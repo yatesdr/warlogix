@@ -36,6 +36,10 @@ func (a *OmronAdapter) Connect() error {
 		protocol = "fins" // Default to FINS
 	}
 
+	if a.config.Timeout > 0 {
+		opts = append(opts, omron.WithTimeout(a.config.Timeout))
+	}
+
 	if protocol == "eip" {
 		opts = append(opts, omron.WithTransport(omron.TransportEIP))
 	} else {

@@ -47,6 +47,12 @@ const (
 
 	// System structure flag
 	TypeSystemMask uint16 = 0x1000
+
+	// CIPStructType is the data type returned in CIP Read Tag responses for structures.
+	// This is NOT the same as TypeStructureMask (0x8000) used in the symbol table.
+	// The symbol table TypeCode has bit 15 set + template ID in lower bits.
+	// The CIP read response returns 0x02A0 meaning "structured data follows".
+	CIPStructType uint16 = 0x02A0
 )
 
 // TypeSize returns the byte size of atomic types.
@@ -81,6 +87,13 @@ func TemplateID(dataType uint16) uint16 {
 // IsStructure returns true if the data type represents a structure/UDT.
 func IsStructure(dataType uint16) bool {
 	return (dataType & TypeStructureMask) != 0
+}
+
+// IsCIPStructResponse returns true if the data type from a CIP Read Tag response
+// indicates structured data. This is different from IsStructure() which checks
+// the symbol table TypeCode format (bit 15 set with template ID in lower bits).
+func IsCIPStructResponse(dataType uint16) bool {
+	return dataType == CIPStructType
 }
 
 // IsArray returns true if the data type represents an array.

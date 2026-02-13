@@ -40,6 +40,8 @@ type BrowserTab struct {
 	writableTags      map[string]bool            // Tag name -> writable for current PLC
 	ignoredMembers    map[string]map[string]bool // Parent tag -> member name -> ignored for change detection
 	filterText        string                     // Current filter text (lowercase)
+	isManual          bool                       // True when PLC is in manual mode (no discovery)
+	lastManualTagGen  uint64                     // Track ManualTagGen to reload on type resolution
 }
 
 // NewBrowserTab creates a new browser tab.
@@ -275,6 +277,31 @@ func (t *BrowserTab) getTypeName(typeCode uint16) string {
 		}
 	}
 	return logix.TypeName(typeCode)
+}
+
+// computeShortName returns the display name for a tag in the tree.
+// Discovery mode: strips to last dot segment (tree hierarchy provides context).
+// Manual mode: full name for top-level tags, last dot segment for UDT children.
+func (t *BrowserTab) computeShortName(tagName string) string {
+	if !t.isManual {
+		if idx := strings.LastIndex(tagName, "."); idx >= 0 {
+			return tagName[idx+1:]
+		}
+		return tagName
+	}
+	// Manual mode: strip program prefix first
+	if strings.HasPrefix(tagName, "Program:") {
+		rest := tagName[8:] // len("Program:") == 8
+		if idx := strings.Index(rest, "."); idx >= 0 {
+			tagName = rest[idx+1:]
+		}
+	}
+	// Strip to last dot segment for UDT children (e.g., "HMI_Edit_Employee.Card_Number" → "Card_Number").
+	// Top-level manual tags have no dots, so they keep their full name.
+	if idx := strings.LastIndex(tagName, "."); idx >= 0 {
+		return tagName[idx+1:]
+	}
+	return tagName
 }
 
 func (t *BrowserTab) onNodeSelected(node *tview.TreeNode) {
@@ -698,10 +725,7 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *driver.TagInfo, e
 	}
 
 	typeName := t.getTypeName(tag.TypeCode)
-	shortName := tag.Name
-	if idx := strings.LastIndex(tag.Name, "."); idx >= 0 {
-		shortName = tag.Name[idx+1:]
-	}
+	shortName := t.computeShortName(tag.Name)
 
 	// For address-based PLCs (S7, Omron FINS), show alias or memloc as name, with (memloc) type
 	cfg := t.app.config.FindPLC(t.selectedPLC)
@@ -1465,6 +1489,18 @@ func (t *BrowserTab) Refresh() {
 			return
 		}
 		t.lastConnectionStatus = selectedPLCStatus
+
+		// In manual mode, reload tags when types are resolved (ManualTagGen changes)
+		if t.isManual {
+			if plc := t.app.manager.GetPLC(t.selectedPLC); plc != nil {
+				gen := plc.GetManualTagGen()
+				if gen != t.lastManualTagGen {
+					t.lastManualTagGen = gen
+					t.loadTags()
+					return
+				}
+			}
+		}
 	}
 
 	// Check if options have changed before updating
@@ -1551,9 +1587,10 @@ func (t *BrowserTab) loadTags() {
 		return
 	}
 
-	isManual := !cfg.GetFamily().SupportsDiscovery()
-
 	plc := t.app.manager.GetPLC(t.selectedPLC)
+
+	isManual := !cfg.SupportsDiscovery()
+	t.isManual = isManual
 
 	var tags []driver.TagInfo
 	var programs []string
@@ -1648,26 +1685,44 @@ func (t *BrowserTab) loadTags() {
 
 	// For manual PLCs, show a different tree structure
 	if isManual {
+		// Separate tags into controller-scoped and program-scoped
+		manualControllerTags := []driver.TagInfo{}
+		manualProgramTags := make(map[string][]driver.TagInfo)
+
+		for _, tag := range tags {
+			if strings.HasPrefix(tag.Name, "Program:") {
+				rest := strings.TrimPrefix(tag.Name, "Program:")
+				if idx := strings.Index(rest, "."); idx > 0 {
+					progName := rest[:idx]
+					manualProgramTags[progName] = append(manualProgramTags[progName], tag)
+					continue
+				}
+			}
+			manualControllerTags = append(manualControllerTags, tag)
+		}
+
+		// Add controller/manual tags section
 		sectionName := "Manual Tags"
+		if len(manualProgramTags) > 0 {
+			sectionName = "Controller"
+		}
+
+		sort.Slice(manualControllerTags, func(i, j int) bool {
+			return manualControllerTags[i].Name < manualControllerTags[j].Name
+		})
+
 		sectionNode := tview.NewTreeNode(sectionName).
 			SetColor(th.Accent).
 			SetExpanded(true).
 			SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
 
-		// Sort tags by name
-		sort.Slice(tags, func(i, j int) bool {
-			return tags[i].Name < tags[j].Name
-		})
-
-		for i := range tags {
-			tag := &tags[i]
-			// Skip tags that don't match filter
+		for i := range manualControllerTags {
+			tag := &manualControllerTags[i]
 			if !t.matchesFilter(tag.Name) {
 				continue
 			}
 			enabled := t.enabledTags[tag.Name]
 			writable := t.writableTags[tag.Name]
-			// Check for error
 			var hasError bool
 			if val, ok := values[tag.Name]; ok && val != nil && val.Error != nil {
 				hasError = true
@@ -1677,9 +1732,47 @@ func (t *BrowserTab) loadTags() {
 			t.tagNodes[tag.Name] = node
 		}
 
-		// Only add section node if it has matching tags
 		if len(sectionNode.GetChildren()) > 0 {
 			t.treeRoot.AddChild(sectionNode)
+		}
+
+		// Add program sections for program-scoped manual tags
+		sortedProgs := make([]string, 0, len(manualProgramTags))
+		for prog := range manualProgramTags {
+			sortedProgs = append(sortedProgs, prog)
+		}
+		sort.Strings(sortedProgs)
+
+		for _, prog := range sortedProgs {
+			progTags := manualProgramTags[prog]
+			sort.Slice(progTags, func(i, j int) bool {
+				return progTags[i].Name < progTags[j].Name
+			})
+
+			progNode := tview.NewTreeNode(prog).
+				SetColor(th.Accent).
+				SetExpanded(true).
+				SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
+
+			for i := range progTags {
+				tag := &progTags[i]
+				if !t.matchesFilter(tag.Name) {
+					continue
+				}
+				enabled := t.enabledTags[tag.Name]
+				writable := t.writableTags[tag.Name]
+				var hasError bool
+				if val, ok := values[tag.Name]; ok && val != nil && val.Error != nil {
+					hasError = true
+				}
+				node := t.createTagNodeWithError(tag, enabled, writable, hasError)
+				progNode.AddChild(node)
+				t.tagNodes[tag.Name] = node
+			}
+
+			if len(progNode.GetChildren()) > 0 {
+				t.treeRoot.AddChild(progNode)
+			}
 		}
 
 		t.updateStatus()
@@ -1752,11 +1845,22 @@ func (t *BrowserTab) loadTags() {
 		}
 	}
 
-	// Sort programs
-	sort.Strings(programs)
+	// Collect all program names (from discovery + extracted from tag names)
+	allPrograms := make(map[string]bool)
+	for _, prog := range programs {
+		allPrograms[prog] = true
+	}
+	for prog := range programTags {
+		allPrograms[prog] = true
+	}
+	sortedPrograms := make([]string, 0, len(allPrograms))
+	for prog := range allPrograms {
+		sortedPrograms = append(sortedPrograms, prog)
+	}
+	sort.Strings(sortedPrograms)
 
 	// Add program tags
-	for _, prog := range programs {
+	for _, prog := range sortedPrograms {
 		tags := programTags[prog]
 		if len(tags) == 0 {
 			continue
@@ -1829,10 +1933,7 @@ func (t *BrowserTab) createTagNodeWithError(tag *driver.TagInfo, enabled, writab
 	}
 
 	typeName := t.getTypeName(tag.TypeCode)
-	shortName := tag.Name
-	if idx := strings.LastIndex(tag.Name, "."); idx >= 0 {
-		shortName = tag.Name[idx+1:]
-	}
+	shortName := t.computeShortName(tag.Name)
 
 	// For address-based PLCs (S7, Omron FINS), show alias or memloc as name, with (memloc) type
 	cfg := t.app.config.FindPLC(t.selectedPLC)
@@ -1914,7 +2015,7 @@ func (t *BrowserTab) matchesFilter(tagName string) bool {
 	return false
 }
 
-// isManualPLC returns true if the currently selected PLC is a non-discovery type.
+// isManualPLC returns true if the currently selected PLC uses manual tags (discovery disabled).
 func (t *BrowserTab) isManualPLC() bool {
 	if t.selectedPLC == "" {
 		return false
@@ -1923,7 +2024,7 @@ func (t *BrowserTab) isManualPLC() bool {
 	if cfg == nil {
 		return false
 	}
-	return !cfg.GetFamily().SupportsDiscovery()
+	return !cfg.SupportsDiscovery()
 }
 
 // showServicesDialog shows a dialog to configure which services a tag publishes to.

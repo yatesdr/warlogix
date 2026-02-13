@@ -145,6 +145,17 @@ func TypeCodeFromName(name string) (uint16, bool) {
 	}
 }
 
+// SupportedTypeNames returns the list of supported data type names for Beckhoff/TwinCAT PLCs.
+func SupportedTypeNames() []string {
+	return []string{
+		"BOOL", "BYTE", "SINT",
+		"WORD", "INT", "UINT",
+		"DWORD", "DINT", "UDINT", "REAL", "TIME",
+		"LWORD", "LINT", "ULINT", "LREAL", "LTIME",
+		"STRING", "WSTRING",
+	}
+}
+
 // TypeSize returns the byte size for a primitive type code.
 // Returns 0 for variable-length or unknown types.
 func TypeSize(typeCode uint16) int {

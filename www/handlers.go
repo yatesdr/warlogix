@@ -169,6 +169,7 @@ type PLCData struct {
 	Enabled     bool
 	TagCount    int
 	PollRate    string
+	ConnectionMode string
 	// Family-specific fields
 	AmsNetId    string
 	AmsPort     int
@@ -216,6 +217,8 @@ func (h *Handlers) getPLCsData() []PLCData {
 			FinsUnit:    int(plc.Config.FinsUnit),
 		}
 
+		pd.ConnectionMode = plc.GetConnectionMode()
+
 		if plc.Config.PollRate > 0 {
 			pd.PollRate = plc.Config.PollRate.String()
 		}
@@ -242,11 +245,17 @@ func (h *Handlers) getPLCsData() []PLCData {
 
 // RepublisherPLC holds PLC data with sections for the republisher view.
 type RepublisherPLC struct {
-	Name        string
-	Status      string
-	StatusClass string
-	LastPoll    string // Formatted timestamp of last poll
-	Sections    []RepublisherSection
+	Name              string
+	Address           string
+	Family            string
+	ProductName       string
+	ConnectionMode    string
+	Status            string
+	StatusClass       string
+	LastPoll          string // Formatted timestamp of last poll
+	Sections          []RepublisherSection
+	AllowManualTags bool
+	TagCount          int
 }
 
 // RepublisherSection holds a group of tags (Controller, Program, etc.)
@@ -304,12 +313,23 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 			lastPollStr = plc.LastPoll.Format("2006-01-02 15:04:05")
 		}
 
+		connMode := plc.GetConnectionMode()
+		productName := ""
+		if info := plc.GetDeviceInfo(); info != nil {
+			productName = info.Model
+		}
+
 		rp := RepublisherPLC{
-			Name:        plc.Config.Name,
-			Status:      status.String(),
-			StatusClass: statusClass,
-			LastPoll:    lastPollStr,
-			Sections:    make([]RepublisherSection, 0),
+			Name:              plc.Config.Name,
+			Address:           plc.Config.Address,
+			Family:            plc.Config.GetFamily().String(),
+			ProductName:       productName,
+			ConnectionMode:    connMode,
+			Status:            status.String(),
+			StatusClass:       statusClass,
+			LastPoll:          lastPollStr,
+			Sections:          make([]RepublisherSection, 0),
+			AllowManualTags: plc.AllowManualTags(),
 		}
 
 		// Build config lookup map for enabled/writable/ignored settings
@@ -366,8 +386,10 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 		controllerTags := make([]RepublisherTag, 0)
 		programTags := make(map[string][]RepublisherTag)
 
+		addressBased := plc.Config.IsAddressBased()
+		isManual := !plc.Config.SupportsDiscovery()
 		for _, tag := range tags {
-			rt := h.buildRepublisherTag(tag.Name, tag.TypeName, configMap, childTagsMap, values, lastChanged, lastPollStr)
+			rt := h.buildRepublisherTag(tag.Name, tag.TypeName, configMap, childTagsMap, values, lastChanged, lastPollStr, addressBased, isManual)
 
 			if strings.HasPrefix(tag.Name, "Program:") {
 				// Logix-style: "Program:MainProgram.tagname"
@@ -406,9 +428,22 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 			})
 		}
 
-		// Add Program sections
-		sort.Strings(programs)
+		// Collect all program names (from discovery + extracted from tag names)
+		allPrograms := make(map[string]bool)
 		for _, prog := range programs {
+			allPrograms[prog] = true
+		}
+		for prog := range programTags {
+			allPrograms[prog] = true
+		}
+		sortedPrograms := make([]string, 0, len(allPrograms))
+		for prog := range allPrograms {
+			sortedPrograms = append(sortedPrograms, prog)
+		}
+		sort.Strings(sortedPrograms)
+
+		// Add Program sections
+		for _, prog := range sortedPrograms {
 			if tags, ok := programTags[prog]; ok && len(tags) > 0 {
 				sort.Slice(tags, func(i, j int) bool {
 					return tags[i].Name < tags[j].Name
@@ -418,6 +453,11 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 					Tags: tags,
 				})
 			}
+		}
+
+		// Compute total tag count
+		for _, sec := range rp.Sections {
+			rp.TagCount += len(sec.Tags)
 		}
 
 		result = append(result, rp)
@@ -444,10 +484,12 @@ func (h *Handlers) buildRepublisherTag(
 	values map[string]*plcman.TagValue,
 	lastChanged map[string]time.Time,
 	lastPollStr string,
+	addressBased bool,
+	isManual bool,
 ) RepublisherTag {
 	rt := RepublisherTag{
 		Name:              tagName,
-		DisplayName:       getDisplayName(tagName),
+		DisplayName:       getDisplayName(tagName, addressBased, isManual),
 		Type:              typeName,
 		LastPoll:          lastPollStr,
 		PublishedChildren: make(map[string]PublishedChild),
@@ -516,13 +558,32 @@ func buildTreeDisplay(rt RepublisherTag) string {
 	return display
 }
 
-// getDisplayName returns the short display name for a tag (last component).
-func getDisplayName(name string) string {
-	// Handle Program:tag format
+// getDisplayName returns the display name for a tag.
+// In discovery mode, strips to the last dot segment (tree hierarchy provides context).
+// In manual mode, full name for top-level tags, last dot segment for UDT children.
+// Address-based PLCs always use the full name.
+func getDisplayName(name string, addressBased, isManual bool) string {
+	if addressBased {
+		return name
+	}
+	if isManual {
+		// Strip program prefix first
+		if strings.HasPrefix(name, "Program:") {
+			rest := name[8:] // len("Program:") == 8
+			if idx := strings.Index(rest, "."); idx >= 0 {
+				name = rest[idx+1:]
+			}
+		}
+		// Strip to last dot for UDT children; top-level tags have no dots
+		if idx := strings.LastIndex(name, "."); idx >= 0 {
+			return name[idx+1:]
+		}
+		return name
+	}
+	// Discovery mode: strip to last dot segment
 	if idx := strings.LastIndex(name, ":"); idx >= 0 {
 		name = name[idx+1:]
 	}
-	// Handle nested.member format
 	if idx := strings.LastIndex(name, "."); idx >= 0 {
 		name = name[idx+1:]
 	}

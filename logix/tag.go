@@ -3,6 +3,7 @@ package logix
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"warlink/cip"
 )
@@ -435,7 +436,14 @@ func (p *PLC) getSymbolDimensions(instance uint32, numDims int) ([]int, error) {
 // ListTags returns all controller-scope tags and program entries.
 // Use ListProgramTags to get tags within a specific program.
 func (p *PLC) ListTags() ([]TagInfo, error) {
-	return p.listSymbols("", 0)
+	debugLog("ListTags: discovering controller-scope tags")
+	tags, err := p.listSymbols("", 0)
+	if err != nil {
+		debugLog("ListTags: error: %v", err)
+		return nil, err
+	}
+	debugLog("ListTags: discovered %d tags", len(tags))
+	return tags, nil
 }
 
 // ListPrograms returns just the program names from the PLC.
@@ -481,6 +489,7 @@ func (p *PLC) ListDataTags() ([]TagInfo, error) {
 			dataTags = append(dataTags, t)
 		}
 	}
+	debugLog("ListDataTags: %d readable tags (of %d total)", len(dataTags), len(allTags))
 	return dataTags, nil
 }
 
@@ -715,4 +724,56 @@ func parseSymbolListResponse(data []byte) (tags []TagInfo, lastInstance uint32) 
 	}
 
 	return tags, lastInstance
+}
+
+// FindSymbolByName searches the symbol table for a tag with the given name
+// and returns its TagInfo with the correct TypeCode (including structure flag
+// + template ID). For program-scoped tags like "Program:MainProgram.TagName",
+// searches within the program's symbol table. For member paths like
+// "ParentUDT.Child.Leaf", searches for the root tag only since members
+// inherit their parent's structure type.
+// Returns (nil, nil) if the tag is not found.
+func (p *PLC) FindSymbolByName(tagName string) (*TagInfo, error) {
+	if p == nil || p.Connection == nil {
+		return nil, fmt.Errorf("FindSymbolByName: nil plc or connection")
+	}
+
+	// Determine scope and base name to search for
+	scope := ""
+	searchName := tagName
+
+	// Handle program-scoped tags: "Program:ProgramName.TagName[.Member...]"
+	if strings.HasPrefix(tagName, "Program:") {
+		rest := tagName[8:]
+		dotIdx := strings.Index(rest, ".")
+		if dotIdx > 0 {
+			scope = "Program:" + rest[:dotIdx] // Full "Program:ProgramName" needed by listSymbolsPage
+			searchName = rest[dotIdx+1:]
+		}
+	}
+
+	// For member access like "ParentTag.Child.Leaf", search for the root tag
+	if dotIdx := strings.Index(searchName, "."); dotIdx > 0 {
+		searchName = searchName[:dotIdx]
+	}
+
+	// Iterate symbol table pages to find the tag
+	var instance uint32 = 0
+	for page := 0; page < 1000; page++ {
+		tags, lastInstance, hasMore, err := p.listSymbolsPage(scope, instance)
+		if err != nil {
+			return nil, err
+		}
+		for i := range tags {
+			if tags[i].Name == searchName {
+				return &tags[i], nil
+			}
+		}
+		if !hasMore || len(tags) == 0 {
+			break
+		}
+		instance = lastInstance + 1
+	}
+
+	return nil, nil
 }

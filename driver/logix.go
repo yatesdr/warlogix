@@ -30,6 +30,10 @@ func NewLogixAdapter(cfg *config.PLCConfig) (*LogixAdapter, error) {
 func (a *LogixAdapter) Connect() error {
 	opts := []logix.Option{}
 
+	if a.config.Timeout > 0 {
+		opts = append(opts, logix.WithTimeout(a.config.Timeout))
+	}
+
 	if a.micro800 {
 		opts = append(opts, logix.WithMicro800())
 	} else if a.config.Slot > 0 {
@@ -209,6 +213,23 @@ func (a *LogixAdapter) IsConnectionError(err error) bool {
 // Client returns the underlying logix.Client for advanced operations.
 func (a *LogixAdapter) Client() *logix.Client {
 	return a.client
+}
+
+// ResolveTagType looks up a tag's symbol table TypeCode by name.
+// Returns (typeCode, true) if found, (0, false) otherwise.
+func (a *LogixAdapter) ResolveTagType(tagName string) (uint16, bool) {
+	if a.client == nil {
+		return 0, false
+	}
+	return a.client.ResolveTagType(tagName)
+}
+
+// GetMemberTypes returns member name → type name for a structure type.
+func (a *LogixAdapter) GetMemberTypes(typeCode uint16) map[string]string {
+	if a.client == nil {
+		return nil
+	}
+	return a.client.GetMemberTypes(typeCode)
 }
 
 // SetTags stores discovered tag information for optimized reads.

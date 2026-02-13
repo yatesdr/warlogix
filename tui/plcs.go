@@ -860,8 +860,10 @@ type plcFormState struct {
 	amsPort     string
 	protocol    int    // 0=fins (default), 1=eip - used for Omron PLCs
 	pollRateMs  string // Poll rate in milliseconds (250-10000, empty = use global)
-	autoConnect bool
-	healthCheck bool // Publish health status
+	timeoutMs   string // Connection timeout in milliseconds (empty = driver default)
+	autoConnect  bool
+	discoverTags bool // Auto-discover tags on connect
+	healthCheck  bool // Publish health status
 
 	// Omron FINS-specific settings
 	finsNode    string // Destination node (typically last octet of PLC IP)
@@ -874,12 +876,14 @@ var omronProtocolOptions = []string{"fins", "eip"}
 
 func (t *PLCsTab) showAddDialogWithDevice(dev *driver.DiscoveredDevice) {
 	state := &plcFormState{
-		family:      0,     // Default to logix
-		slot:        "0",
-		amsPort:     "851",
-		pollRateMs:  "1000", // Default 1000ms
-		autoConnect: true,   // Default to enabled
-		healthCheck: true,   // Default to enabled
+		family:       0,     // Default to logix
+		slot:         "0",
+		amsPort:      "851",
+		pollRateMs:   "1000", // Default 1000ms
+		timeoutMs:    "5000", // Default 5000ms
+		autoConnect:  true,   // Default to enabled
+		discoverTags: true,   // Default to enabled
+		healthCheck:  true,   // Default to enabled
 	}
 
 	if dev != nil {
@@ -1007,7 +1011,23 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 		return err == nil
 	}, nil)
 
+	// Timeout field (common to all families)
+	form.AddInputField("Timeout (ms):", state.timeoutMs, 10, func(text string, lastChar rune) bool {
+		if text == "" {
+			return true // Allow empty for "driver default"
+		}
+		_, err := strconv.Atoi(text)
+		return err == nil
+	}, nil)
+
 	form.AddCheckbox("Auto-connect:", state.autoConnect, nil)
+
+	// Show "Discover tags" checkbox for families that support discovery
+	canDiscover := family.SupportsDiscovery() || (family == config.FamilyOmron && state.protocol == 1)
+	if canDiscover {
+		form.AddCheckbox("Discover tags:", state.discoverTags, nil)
+	}
+
 	form.AddCheckbox("Health check:", state.healthCheck, nil)
 
 	form.AddButton("Add", func() {
@@ -1036,6 +1056,15 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			}
 		}
 
+		// Parse timeout (0 means use driver default)
+		var timeout time.Duration
+		if state.timeoutMs != "" {
+			timeoutMs, _ := strconv.Atoi(state.timeoutMs)
+			if timeoutMs > 0 {
+				timeout = time.Duration(timeoutMs) * time.Millisecond
+			}
+		}
+
 		healthCheck := state.healthCheck
 		protocol := ""
 		if family == config.FamilyOmron {
@@ -1047,6 +1076,13 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 		finsNetwork, _ := strconv.Atoi(state.finsNetwork)
 		finsUnit, _ := strconv.Atoi(state.finsUnit)
 
+		// Only set DiscoverTags explicitly if user disabled it (non-default)
+		var discoverTags *bool
+		if canDiscover && !state.discoverTags {
+			f := false
+			discoverTags = &f
+		}
+
 		cfg := config.PLCConfig{
 			Name:               state.name,
 			Address:            state.address,
@@ -1054,8 +1090,10 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			Family:             family,
 			Protocol:           protocol,
 			Enabled:            state.autoConnect,
+			DiscoverTags:       discoverTags,
 			HealthCheckEnabled: &healthCheck,
 			PollRate:           pollRate,
+			Timeout:            timeout,
 			AmsNetId:           state.amsNetId,
 			AmsPort:            uint16(amsPort),
 			// Omron FINS settings
@@ -1081,15 +1119,16 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 	})
 
 	// Calculate form height based on number of fields
-	formHeight := 19 // Base height for common fields + poll rate + health check + buttons
+	formHeight := 21 // Base height for common fields + poll rate + timeout + health check + buttons
+	if canDiscover {
+		formHeight += 2 // "Discover tags" checkbox
+	}
 	switch family {
 	case config.FamilyBeckhoff:
-		formHeight = 21 // Extra fields for Beckhoff (AMS Net ID, AMS Port)
+		formHeight += 2 // Extra fields for Beckhoff (AMS Net ID, AMS Port)
 	case config.FamilyOmron:
 		if state.protocol == 0 { // FINS protocol
-			formHeight = 23 // Extra fields for FINS (Protocol, Node, Network, Unit)
-		} else {
-			formHeight = 18 // EIP only needs Protocol dropdown
+			formHeight += 4 // Extra fields for FINS (Protocol, Node, Network, Unit)
 		}
 	}
 
@@ -1123,8 +1162,14 @@ func (t *PLCsTab) saveAddFormState(form *tview.Form, state *plcFormState, family
 	if item := form.GetFormItemByLabel("Poll Rate (ms):"); item != nil {
 		state.pollRateMs = item.(*tview.InputField).GetText()
 	}
+	if item := form.GetFormItemByLabel("Timeout (ms):"); item != nil {
+		state.timeoutMs = item.(*tview.InputField).GetText()
+	}
 	if item := form.GetFormItemByLabel("Auto-connect:"); item != nil {
 		state.autoConnect = item.(*tview.Checkbox).IsChecked()
+	}
+	if item := form.GetFormItemByLabel("Discover tags:"); item != nil {
+		state.discoverTags = item.(*tview.Checkbox).IsChecked()
 	}
 	if item := form.GetFormItemByLabel("Health check:"); item != nil {
 		state.healthCheck = item.(*tview.Checkbox).IsChecked()
@@ -1187,18 +1232,26 @@ func (t *PLCsTab) showEditDialog() {
 		pollRateMs = strconv.Itoa(int(cfg.PollRate.Milliseconds()))
 	}
 
+	// Convert timeout to milliseconds string (default 5000 if not configured)
+	timeoutMs := "5000"
+	if cfg.Timeout > 0 {
+		timeoutMs = strconv.Itoa(int(cfg.Timeout.Milliseconds()))
+	}
+
 	state := &editFormState{
 		plcFormState: plcFormState{
-			family:      selectedFamily,
-			name:        cfg.Name,
-			address:     cfg.Address,
-			slot:        strconv.Itoa(int(cfg.Slot)),
-			amsNetId:    cfg.AmsNetId,
-			amsPort:     amsPort,
-			protocol:    protocolIndex,
-			pollRateMs:  pollRateMs,
-			autoConnect: cfg.Enabled,
-			healthCheck: cfg.IsHealthCheckEnabled(),
+			family:       selectedFamily,
+			name:         cfg.Name,
+			address:      cfg.Address,
+			slot:         strconv.Itoa(int(cfg.Slot)),
+			amsNetId:     cfg.AmsNetId,
+			amsPort:      amsPort,
+			protocol:     protocolIndex,
+			pollRateMs:   pollRateMs,
+			timeoutMs:    timeoutMs,
+			autoConnect:  cfg.Enabled,
+			discoverTags: cfg.SupportsDiscovery(),
+			healthCheck:  cfg.IsHealthCheckEnabled(),
 			// Omron FINS settings
 			finsNode:    strconv.Itoa(int(cfg.FinsNode)),
 			finsNetwork: strconv.Itoa(int(cfg.FinsNetwork)),
@@ -1297,7 +1350,23 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		return err == nil
 	}, nil)
 
+	// Timeout field (common to all families)
+	form.AddInputField("Timeout (ms):", state.timeoutMs, 10, func(text string, lastChar rune) bool {
+		if text == "" {
+			return true // Allow empty for "driver default"
+		}
+		_, err := strconv.Atoi(text)
+		return err == nil
+	}, nil)
+
 	form.AddCheckbox("Auto-connect:", state.autoConnect, nil)
+
+	// Show "Discover tags" checkbox for families that support discovery
+	canDiscover := family.SupportsDiscovery() || (family == config.FamilyOmron && state.protocol == 1)
+	if canDiscover {
+		form.AddCheckbox("Discover tags:", state.discoverTags, nil)
+	}
+
 	form.AddCheckbox("Health check:", state.healthCheck, nil)
 
 	form.AddButton("Save", func() {
@@ -1326,6 +1395,15 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 			}
 		}
 
+		// Parse timeout (0 means use driver default)
+		var timeout time.Duration
+		if state.timeoutMs != "" {
+			timeoutMs, _ := strconv.Atoi(state.timeoutMs)
+			if timeoutMs > 0 {
+				timeout = time.Duration(timeoutMs) * time.Millisecond
+			}
+		}
+
 		healthCheck := state.healthCheck
 		protocol := ""
 		if family == config.FamilyOmron {
@@ -1337,6 +1415,13 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		finsNetwork, _ := strconv.Atoi(state.finsNetwork)
 		finsUnit, _ := strconv.Atoi(state.finsUnit)
 
+		// Only set DiscoverTags explicitly if user disabled it (non-default)
+		var discoverTags *bool
+		if canDiscover && !state.discoverTags {
+			f := false
+			discoverTags = &f
+		}
+
 		updated := config.PLCConfig{
 			Name:               state.name,
 			Address:            state.address,
@@ -1344,8 +1429,10 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 			Family:             family,
 			Protocol:           protocol,
 			Enabled:            state.autoConnect,
+			DiscoverTags:       discoverTags,
 			HealthCheckEnabled: &healthCheck,
 			PollRate:           pollRate,
+			Timeout:            timeout,
 			Tags:               state.tags,
 			AmsNetId:           state.amsNetId,
 			AmsPort:            uint16(amsPort),
@@ -1389,15 +1476,16 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 	})
 
 	// Calculate form height based on number of fields
-	formHeight := 19 // Base height for common fields + poll rate + health check + buttons
+	formHeight := 21 // Base height for common fields + poll rate + timeout + health check + buttons
+	if canDiscover {
+		formHeight += 2 // "Discover tags" checkbox
+	}
 	switch family {
 	case config.FamilyBeckhoff:
-		formHeight = 21 // Extra fields for Beckhoff (AMS Net ID, AMS Port)
+		formHeight += 2 // Extra fields for Beckhoff (AMS Net ID, AMS Port)
 	case config.FamilyOmron:
 		if state.protocol == 0 { // FINS protocol
-			formHeight = 23 // Extra fields for FINS (Protocol, Node, Network, Unit)
-		} else {
-			formHeight = 18 // EIP only needs Protocol dropdown
+			formHeight += 4 // Extra fields for FINS (Protocol, Node, Network, Unit)
 		}
 	}
 
@@ -1428,8 +1516,14 @@ func (t *PLCsTab) saveEditFormState(form *tview.Form, state *editFormState, fami
 	if item := form.GetFormItemByLabel("Poll Rate (ms):"); item != nil {
 		state.pollRateMs = item.(*tview.InputField).GetText()
 	}
+	if item := form.GetFormItemByLabel("Timeout (ms):"); item != nil {
+		state.timeoutMs = item.(*tview.InputField).GetText()
+	}
 	if item := form.GetFormItemByLabel("Auto-connect:"); item != nil {
 		state.autoConnect = item.(*tview.Checkbox).IsChecked()
+	}
+	if item := form.GetFormItemByLabel("Discover tags:"); item != nil {
+		state.discoverTags = item.(*tview.Checkbox).IsChecked()
 	}
 	if item := form.GetFormItemByLabel("Health check:"); item != nil {
 		state.healthCheck = item.(*tview.Checkbox).IsChecked()
@@ -1577,6 +1671,10 @@ func (t *PLCsTab) showInfoDialog() {
 	if len(tags) > 0 || len(programs) > 0 {
 		info += fmt.Sprintf("\n%sPrograms:%s %d\n", th.TagAccent, th.TagReset, len(programs))
 		info += fmt.Sprintf("%sTags:%s %d\n", th.TagAccent, th.TagReset, len(tags))
+	}
+
+	if plc.AllowManualTags() && len(tags) == 0 {
+		info += "\n" + th.Dim("No tags -- press 'a' in tag browser to add tags manually")
 	}
 
 	textView := tview.NewTextView().

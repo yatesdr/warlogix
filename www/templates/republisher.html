@@ -5,8 +5,11 @@
 </div>
 
 <div class="republisher-layout">
-    <div class="republisher-tree" id="republisher-tree">
-        {{template "republisher_tree.html" .}}
+    <div class="republisher-tree-wrapper">
+        <div class="plc-picker-wrapper" id="plc-selector"></div>
+        <div class="republisher-tree" id="republisher-tree">
+            {{template "republisher_tree.html" .}}
+        </div>
     </div>
     <div class="republisher-details" id="republisher-details">
         <div class="details-placeholder">
@@ -15,9 +18,31 @@
     </div>
 </div>
 
+<!-- Tag Add/Edit Modal -->
+<div id="tag-modal" class="modal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="tag-modal-title">Add Tag</h3>
+            <button class="modal-close" onclick="WarLink.hideModal('tag-modal')">&times;</button>
+        </div>
+        <form onsubmit="submitTagModal(event)">
+            <div class="modal-body">
+                <input type="hidden" id="tag-modal-plc" />
+                <input type="hidden" id="tag-modal-mode" value="add" />
+                <input type="hidden" id="tag-modal-original-name" />
+                <div id="tag-modal-fields"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('tag-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="tag-modal-submit">Add Tag</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
 // Store state in localStorage
-var collapsedPLCs = JSON.parse(localStorage.getItem('republisher-collapsed') || '{}');
+var selectedPLC = localStorage.getItem('republisher-selected-plc') || '';
 var collapsedSections = JSON.parse(localStorage.getItem('republisher-sections-collapsed') || '{}');
 var expandedTags = JSON.parse(localStorage.getItem('republisher-expanded') || '{}');
 var expandedChildren = JSON.parse(localStorage.getItem('republisher-children-expanded') || '{}');
@@ -40,6 +65,7 @@ function ensureTagValue(plc, tagName, tagItem, callback) {
             var jsonValue = JSON.stringify(data.value);
             tagItem.dataset.json = jsonValue;
             if (data.type) tagItem.dataset.type = data.type;
+            if (data.member_types) tagItem.dataset.memberTypes = JSON.stringify(data.member_types);
 
             // Upgrade to struct if value is an object
             var isStruct = data.value !== null && typeof data.value === 'object' && !Array.isArray(data.value);
@@ -65,7 +91,9 @@ function ensureTagValue(plc, tagName, tagItem, callback) {
                 // Update display text
                 var nameSpan = tagRow ? tagRow.querySelector('.tag-name') : null;
                 if (nameSpan) {
-                    var displayName = tagItem.dataset.alias || getShortName(tagItem.dataset.name);
+                    var plcGroup = tagItem.closest('.plc-group');
+                    var isManual = plcGroup && plcGroup.dataset.manualTags === 'true';
+                    var displayName = tagItem.dataset.alias || getShortName(tagItem.dataset.name, isManual);
                     var display = displayName;
                     if (data.type) display += ' (' + data.type + ')';
                     display += ' [' + Object.keys(data.value).length + ' fields]';
@@ -80,12 +108,34 @@ function ensureTagValue(plc, tagName, tagItem, callback) {
         });
 }
 
-function getShortName(name) {
+function getShortName(name, isManual) {
+    if (isManual) {
+        // Strip program prefix first
+        if (name.indexOf('Program:') === 0) {
+            var rest = name.substring(8);
+            var dotIdx = rest.indexOf('.');
+            if (dotIdx >= 0) name = rest.substring(dotIdx + 1);
+        }
+        // Strip to last dot for UDT children; top-level tags have no dots
+        var idx = name.lastIndexOf('.');
+        if (idx >= 0) return name.substring(idx + 1);
+        return name;
+    }
+    // Discovery mode: strip to last segment
     var idx = name.lastIndexOf(':');
     if (idx >= 0) name = name.substring(idx + 1);
     idx = name.lastIndexOf('.');
     if (idx >= 0) name = name.substring(idx + 1);
     return name;
+}
+
+function quickTogglePublish(checkbox) {
+    var tagItem = checkbox.closest('.tag-item');
+    if (!tagItem) return;
+    var plcGroup = checkbox.closest('.plc-group');
+    var plc = plcGroup ? plcGroup.dataset.plc : '';
+    var tagName = tagItem.dataset.name;
+    toggleTagEnabled(plc, tagName, checkbox.checked);
 }
 
 function handleTagClick(event, el) {
@@ -245,6 +295,7 @@ function buildTagChildrenFromData(tagItem) {
     if (!json) return;
     var ignoreList = [];
     var publishedChildren = {};
+    var memberTypes = null;
     try {
         var parsedIgnore = JSON.parse(tagItem.dataset.ignoreList || '[]');
         ignoreList = Array.isArray(parsedIgnore) ? parsedIgnore : [];
@@ -253,9 +304,12 @@ function buildTagChildrenFromData(tagItem) {
         publishedChildren = JSON.parse(tagItem.dataset.publishedChildren || '{}');
     } catch (e) {}
     try {
+        memberTypes = JSON.parse(tagItem.dataset.memberTypes || 'null');
+    } catch (e) {}
+    try {
         var parsed = JSON.parse(json);
         if (typeof parsed === 'object' && parsed !== null) {
-            childrenContainer.innerHTML = buildTagChildren(parsed, '', ignoreList, publishedChildren);
+            childrenContainer.innerHTML = buildTagChildren(parsed, '', ignoreList, publishedChildren, memberTypes);
         }
     } catch (e) {}
 }
@@ -278,7 +332,7 @@ function isWritable(path, publishedChildren) {
     return publishedChildren[path] && publishedChildren[path].writable === true;
 }
 
-function buildTagChildren(obj, parentPath, ignoreList, publishedChildren) {
+function buildTagChildren(obj, parentPath, ignoreList, publishedChildren, memberTypes) {
     var html = '';
     var isArray = Array.isArray(obj);
     var keys = isArray ? obj.map(function(_, i) { return i; }) : Object.keys(obj).sort();
@@ -288,7 +342,8 @@ function buildTagChildren(obj, parentPath, ignoreList, publishedChildren) {
     for (var i = 0; i < keys.length; i++) {
         var key = keys[i];
         var value = obj[key];
-        var valueType = getValueType(value);
+        // Use PLC member type if available, fall back to JS type inference
+        var valueType = (memberTypes && memberTypes[key]) ? memberTypes[key] : getValueType(value);
         var displayKey = isArray ? '[' + key + ']' : key;
         var childPath = parentPath ? parentPath + '.' + key : String(key);
         var ignored = isIgnored(childPath, ignoreList);
@@ -581,39 +636,33 @@ function updateDetailsPanel(info) {
 
     if (!info.path) {
         // Root tag controls (no Ignore Changes - that's only for child members)
-        actionBar += '<label class="toggle-label">' +
+        actionBar += '<label class="toggle-label" title="Publish this tag to all enabled services (MQTT, Kafka, Valkey, REST)">' +
             '<input type="checkbox" ' + (info.enabled ? 'checked' : '') +
             ' onchange="toggleTagEnabled(\'' + escapeAttr(info.plc) + '\', \'' + escapeAttr(info.tagName) + '\', this.checked)">' +
             '<span>Published</span>' +
             '</label>' +
-            '<label class="toggle-label">' +
+            '<label class="toggle-label" title="Allow writes to this tag from the API and services. This is an application-level filter and does not enable write on the PLC \u2014 it only inhibits write requests when unchecked.">' +
             '<input type="checkbox" ' + (info.writable ? 'checked' : '') +
             ' onchange="toggleTagWritable(\'' + escapeAttr(info.plc) + '\', \'' + escapeAttr(info.tagName) + '\', this.checked)">' +
             '<span>Writable</span>' +
             '</label>';
     } else {
         // Member controls
-        // Published = adds member as a separate published tag
-        // Ignored = in parent's ignore list (changes don't trigger republish, but value is still included)
-        // Writable = makes the member writable
         var memberPublished = info.memberPublished || false;
         var memberWritable = info.memberWritable || false;
-        actionBar += '<label class="toggle-label">' +
+        actionBar += '<label class="toggle-label" title="Publish this member as a separate tag to all enabled services (MQTT, Kafka, Valkey, REST), independent of the parent tag">' +
             '<input type="checkbox" ' + (memberPublished ? 'checked' : '') +
-            ' onchange="toggleMemberEnabled(\'' + escapeAttr(info.plc) + '\', \'' + escapeAttr(info.tagName) + '\', \'' + escapeAttr(info.path) + '\', this.checked)" ' +
-            'title="Publish this member as a separate tag (independent of parent)">' +
+            ' onchange="toggleMemberEnabled(\'' + escapeAttr(info.plc) + '\', \'' + escapeAttr(info.tagName) + '\', \'' + escapeAttr(info.path) + '\', this.checked)">' +
             '<span>Published</span>' +
             '</label>' +
-            '<label class="toggle-label">' +
+            '<label class="toggle-label" title="Ignore this member for change-based republishing (useful for counters, timers, etc.). The value is still included when the parent tag republishes due to other members changing.">' +
             '<input type="checkbox" ' + (memberIgnored ? 'checked' : '') +
-            ' onchange="toggleMemberIgnored(\'' + escapeAttr(info.plc) + '\', \'' + escapeAttr(info.tagName) + '\', \'' + escapeAttr(info.path) + '\', this.checked)" ' +
-            'title="When checked, changes to this member will not trigger a republish of the parent tag (value is still included in published data)">' +
+            ' onchange="toggleMemberIgnored(\'' + escapeAttr(info.plc) + '\', \'' + escapeAttr(info.tagName) + '\', \'' + escapeAttr(info.path) + '\', this.checked)">' +
             '<span>Ignore Changes</span>' +
             '</label>' +
-            '<label class="toggle-label">' +
+            '<label class="toggle-label" title="Allow writes to this member from the API and services. This is an application-level filter and does not enable write on the PLC \u2014 it only inhibits write requests when unchecked.">' +
             '<input type="checkbox" ' + (memberWritable ? 'checked' : '') +
-            ' onchange="toggleMemberWritable(\'' + escapeAttr(info.plc) + '\', \'' + escapeAttr(info.tagName) + '\', \'' + escapeAttr(info.path) + '\', this.checked)" ' +
-            'title="Make this member writable">' +
+            ' onchange="toggleMemberWritable(\'' + escapeAttr(info.plc) + '\', \'' + escapeAttr(info.tagName) + '\', \'' + escapeAttr(info.path) + '\', this.checked)">' +
             '<span>Writable</span>' +
             '</label>';
     }
@@ -648,6 +697,19 @@ function updateDetailsPanel(info) {
             '</div>';
     }
 
+    // Build tag management buttons for non-discovery PLCs
+    var tagManageHtml = '';
+    if (!info.path) {
+        var plcGroup = document.querySelector('.plc-group[data-plc="' + escapeAttr(info.plc) + '"]');
+        var isManual = plcGroup && plcGroup.dataset.manualTags === 'true';
+        if (isManual) {
+            tagManageHtml = '<div class="tag-manage-actions">' +
+                '<button class="btn btn-sm" onclick="showEditTagModal(\'' + escapeAttr(info.plc) + '\',\'' + escapeAttr(info.tagName) + '\')">Edit Tag</button>' +
+                '<button class="btn btn-sm btn-danger" onclick="deleteTag(\'' + escapeAttr(info.plc) + '\',\'' + escapeAttr(info.tagName) + '\')">Delete Tag</button>' +
+                '</div>';
+        }
+    }
+
     details.innerHTML =
         '<div class="details-content">' +
         '<h3>' + (info.path ? 'Member Details' : 'Tag Details') + '</h3>' +
@@ -661,6 +723,7 @@ function updateDetailsPanel(info) {
         (info.lastChanged ? '<tr><th>Last Changed</th><td>' + escapeHtml(info.lastChanged) + '</td></tr>' : '') +
         (info.hasIgnores && !info.path ? '<tr><th>Ignores</th><td>' + info.ignoreCount + ' members</td></tr>' : '') +
         '</table>' +
+        tagManageHtml +
         '<h4 style="margin-top:1rem">Value</h4>' +
         valueHtml +
         writeHtml +
@@ -727,8 +790,11 @@ function toggleTagEnabled(plc, tagName, enabled) {
                     } else {
                         tagRow.classList.remove('monitored');
                     }
+                    // Sync inline publish toggle
+                    var toggle = tagRow.querySelector('.publish-toggle input');
+                    if (toggle) toggle.checked = enabled;
                 }
-                // Update indicators to show/hide P indicator
+                // Update indicators
                 updateTagIndicators(tagItem, tagItem.dataset.hasIgnores === 'true', tagItem.dataset.writable === 'true', enabled);
             }
         }
@@ -1252,20 +1318,6 @@ function getSelectionKey() {
 }
 
 
-function togglePLC(el) {
-    var plcGroup = el.closest('.plc-group');
-    var plcName = plcGroup.dataset.plc;
-    plcGroup.classList.toggle('collapsed');
-
-    // Save collapsed state
-    if (plcGroup.classList.contains('collapsed')) {
-        collapsedPLCs[plcName] = true;
-    } else {
-        delete collapsedPLCs[plcName];
-    }
-    localStorage.setItem('republisher-collapsed', JSON.stringify(collapsedPLCs));
-}
-
 function toggleSection(el) {
     var sectionGroup = el.closest('.section-group');
     var plcGroup = el.closest('.plc-group');
@@ -1284,14 +1336,273 @@ function toggleSection(el) {
     localStorage.setItem('republisher-sections-collapsed', JSON.stringify(collapsedSections));
 }
 
-function restoreState() {
-    // Restore PLC collapsed state
-    document.querySelectorAll('.plc-group').forEach(function(group) {
-        var plcName = group.dataset.plc;
-        if (collapsedPLCs[plcName]) {
-            group.classList.add('collapsed');
+function initPLCSelector() {
+    var selector = document.getElementById('plc-selector');
+    if (!selector) return;
+
+    var groups = document.querySelectorAll('.plc-group');
+    if (groups.length === 0) {
+        selector.style.display = 'none';
+        return;
+    }
+
+    selector.style.display = '';
+    selector.innerHTML = '';
+
+    // If only one PLC, hide selector and show it
+    if (groups.length === 1) {
+        selector.style.display = 'none';
+        groups[0].style.display = '';
+        selectedPLC = groups[0].dataset.plc;
+        return;
+    }
+
+    // Validate saved selection still exists
+    var savedExists = false;
+    groups.forEach(function(g) {
+        if (g.dataset.plc === selectedPLC) savedExists = true;
+    });
+    if (!savedExists) {
+        selectedPLC = groups[0].dataset.plc;
+    }
+
+    // Build plc-picker dropdown
+    var picker = document.createElement('div');
+    picker.className = 'plc-picker';
+    picker.id = 'plc-picker';
+
+    var display = document.createElement('div');
+    display.className = 'plc-picker-display';
+    display.id = 'plc-picker-display';
+    display.setAttribute('tabindex', '0');
+    display.onclick = function(e) { e.stopPropagation(); togglePLCPicker(); };
+    picker.appendChild(display);
+
+    var dropdown = document.createElement('div');
+    dropdown.className = 'plc-picker-dropdown';
+    dropdown.id = 'plc-picker-dropdown';
+    dropdown.style.display = 'none';
+    dropdown.onclick = function(e) { e.stopPropagation(); };
+
+    var filter = document.createElement('input');
+    filter.className = 'plc-picker-filter';
+    filter.id = 'plc-picker-filter';
+    filter.type = 'text';
+    filter.placeholder = 'Search PLCs...';
+    filter.setAttribute('autocomplete', 'off');
+    dropdown.appendChild(filter);
+
+    var list = document.createElement('div');
+    list.className = 'plc-picker-list';
+    list.id = 'plc-picker-list';
+    dropdown.appendChild(list);
+
+    var status = document.createElement('div');
+    status.className = 'plc-picker-status';
+    status.id = 'plc-picker-status';
+    status.textContent = groups.length + ' PLCs';
+    dropdown.appendChild(status);
+
+    picker.appendChild(dropdown);
+    selector.appendChild(picker);
+
+    // Build items
+    buildPLCPickerItems();
+
+    // Update display for current selection
+    updatePLCPickerDisplay();
+
+    // Filter input handler
+    filter.addEventListener('input', function() {
+        filterPLCPicker(this.value);
+    });
+
+    // Keyboard handler
+    filter.addEventListener('keydown', handlePLCPickerKeydown);
+    display.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            togglePLCPicker();
         }
     });
+
+    // Click outside closes
+    document.addEventListener('click', function() {
+        closePLCPicker();
+    });
+
+    // Show/hide PLC groups based on selection
+    groups.forEach(function(group) {
+        group.style.display = (group.dataset.plc === selectedPLC) ? '' : 'none';
+    });
+
+    localStorage.setItem('republisher-selected-plc', selectedPLC);
+}
+
+function buildPLCPickerItems() {
+    var list = document.getElementById('plc-picker-list');
+    if (!list) return;
+    list.innerHTML = '';
+    var groups = document.querySelectorAll('.plc-group');
+    groups.forEach(function(group) {
+        var plcName = group.dataset.plc;
+        var statusDot = group.querySelector('.plc-header-bar .status-dot');
+        var statusClass = statusDot ? statusDot.className.replace('status-dot', '').trim() : '';
+        var tagCountEl = group.querySelector('.plc-header-bar .tag-count');
+        var tagCount = tagCountEl ? tagCountEl.textContent : '0 tags';
+        var addressEl = group.querySelector('.plc-header-bar .plc-detail');
+        var address = addressEl ? addressEl.textContent : '';
+
+        var item = document.createElement('div');
+        item.className = 'plc-picker-item' + (plcName === selectedPLC ? ' current' : '');
+        item.dataset.plc = plcName;
+        item.dataset.address = address;
+        item.onclick = function() { selectPLC(plcName); };
+        item.innerHTML = '<span class="status-dot ' + statusClass + '"></span>' +
+            '<span class="plc-picker-item-name">' + escapeHtml(plcName) + '</span>' +
+            '<span class="plc-picker-item-detail">' + escapeHtml(address) + '</span>' +
+            '<span class="plc-picker-item-count">' + escapeHtml(tagCount) + '</span>';
+        list.appendChild(item);
+    });
+}
+
+function updatePLCPickerDisplay() {
+    var display = document.getElementById('plc-picker-display');
+    if (!display) return;
+    var group = document.querySelector('.plc-group[data-plc="' + CSS.escape(selectedPLC) + '"]');
+    var statusClass = '';
+    if (group) {
+        var dot = group.querySelector('.plc-header-bar .status-dot');
+        statusClass = dot ? dot.className.replace('status-dot', '').trim() : '';
+    }
+    display.innerHTML = '<span class="status-dot ' + statusClass + '"></span>' +
+        '<span class="plc-picker-display-text">' + escapeHtml(selectedPLC) + '</span>' +
+        '<span class="plc-picker-arrow">&#9660;</span>';
+}
+
+function togglePLCPicker() {
+    var picker = document.getElementById('plc-picker');
+    var dropdown = document.getElementById('plc-picker-dropdown');
+    var filter = document.getElementById('plc-picker-filter');
+    if (!picker || !dropdown) return;
+
+    var isOpen = picker.classList.contains('open');
+    if (isOpen) {
+        closePLCPicker();
+    } else {
+        picker.classList.add('open');
+        dropdown.style.display = '';
+        filter.value = '';
+        filterPLCPicker('');
+        filter.focus();
+        // Ensure current item is highlighted
+        var list = document.getElementById('plc-picker-list');
+        if (list) {
+            list.querySelectorAll('.plc-picker-item').forEach(function(item) {
+                item.classList.remove('highlighted');
+            });
+            var current = list.querySelector('.plc-picker-item.current');
+            if (current) {
+                current.classList.add('highlighted');
+                current.scrollIntoView({ block: 'nearest' });
+            }
+        }
+    }
+}
+
+function closePLCPicker() {
+    var picker = document.getElementById('plc-picker');
+    var dropdown = document.getElementById('plc-picker-dropdown');
+    if (!picker || !dropdown) return;
+    picker.classList.remove('open');
+    dropdown.style.display = 'none';
+}
+
+function filterPLCPicker(query) {
+    var list = document.getElementById('plc-picker-list');
+    var status = document.getElementById('plc-picker-status');
+    if (!list) return;
+    var q = query.toLowerCase();
+    var visible = 0;
+    var items = list.querySelectorAll('.plc-picker-item');
+    items.forEach(function(item) {
+        var name = (item.dataset.plc || '').toLowerCase();
+        var addr = (item.dataset.address || '').toLowerCase();
+        var match = !q || name.indexOf(q) >= 0 || addr.indexOf(q) >= 0;
+        item.style.display = match ? '' : 'none';
+        if (match) visible++;
+    });
+    if (status) {
+        status.textContent = visible + ' of ' + items.length + ' PLCs';
+    }
+    // Highlight first visible if nothing highlighted
+    var highlighted = list.querySelector('.plc-picker-item.highlighted:not([style*="display: none"])');
+    if (!highlighted) {
+        var first = list.querySelector('.plc-picker-item:not([style*="display: none"])');
+        if (first) first.classList.add('highlighted');
+    }
+}
+
+function handlePLCPickerKeydown(e) {
+    var list = document.getElementById('plc-picker-list');
+    if (!list) return;
+    var items = Array.from(list.querySelectorAll('.plc-picker-item:not([style*="display: none"])'));
+    if (items.length === 0) return;
+
+    var currentIdx = -1;
+    items.forEach(function(item, i) {
+        if (item.classList.contains('highlighted')) currentIdx = i;
+    });
+
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        var nextIdx = currentIdx < items.length - 1 ? currentIdx + 1 : 0;
+        items.forEach(function(item) { item.classList.remove('highlighted'); });
+        items[nextIdx].classList.add('highlighted');
+        items[nextIdx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        var prevIdx = currentIdx > 0 ? currentIdx - 1 : items.length - 1;
+        items.forEach(function(item) { item.classList.remove('highlighted'); });
+        items[prevIdx].classList.add('highlighted');
+        items[prevIdx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        var highlighted = items[currentIdx >= 0 ? currentIdx : 0];
+        if (highlighted) {
+            selectPLC(highlighted.dataset.plc);
+        }
+    } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closePLCPicker();
+        var display = document.getElementById('plc-picker-display');
+        if (display) display.focus();
+    }
+}
+
+function selectPLC(plcName) {
+    selectedPLC = plcName;
+    localStorage.setItem('republisher-selected-plc', plcName);
+
+    // Update picker display and items
+    updatePLCPickerDisplay();
+    var list = document.getElementById('plc-picker-list');
+    if (list) {
+        list.querySelectorAll('.plc-picker-item').forEach(function(item) {
+            item.classList.toggle('current', item.dataset.plc === plcName);
+        });
+    }
+    closePLCPicker();
+
+    // Show/hide PLC groups
+    document.querySelectorAll('.plc-group').forEach(function(group) {
+        group.style.display = (group.dataset.plc === plcName) ? '' : 'none';
+    });
+}
+
+function restoreState() {
+    // Initialize PLC selector
+    initPLCSelector();
 
     // Restore section collapsed state
     document.querySelectorAll('.section-group').forEach(function(section) {
@@ -1419,6 +1730,178 @@ function escapeHtml(text) {
     var div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// --- Tag Management (Add/Edit/Delete for non-discovery PLCs) ---
+
+function showAddTagModal(plcName) {
+    document.getElementById('tag-modal-plc').value = plcName;
+    document.getElementById('tag-modal-mode').value = 'add';
+    document.getElementById('tag-modal-original-name').value = '';
+    document.getElementById('tag-modal-title').textContent = 'Add Tag';
+    document.getElementById('tag-modal-submit').textContent = 'Add Tag';
+
+    fetch('/htmx/plcs/' + encodeURIComponent(plcName) + '/types')
+        .then(function(resp) {
+            if (!resp.ok) return resp.text().then(function(msg) { throw new Error(msg); });
+            return resp.json();
+        })
+        .then(function(data) {
+            buildTagModalFields(data, null);
+            WarLink.showModal('tag-modal');
+        })
+        .catch(function(err) {
+            alert('Error loading PLC type info: ' + err.message);
+        });
+}
+
+function showEditTagModal(plcName, tagName) {
+    document.getElementById('tag-modal-plc').value = plcName;
+    document.getElementById('tag-modal-mode').value = 'edit';
+    document.getElementById('tag-modal-original-name').value = tagName;
+    document.getElementById('tag-modal-title').textContent = 'Edit Tag';
+    document.getElementById('tag-modal-submit').textContent = 'Save';
+
+    // Get current tag data from the DOM
+    var plcGroup = document.querySelector('.plc-group[data-plc="' + plcName + '"]');
+    var tagItem = plcGroup ? plcGroup.querySelector('.tag-item[data-name="' + CSS.escape(tagName) + '"]') : null;
+    var existing = null;
+    if (tagItem) {
+        existing = {
+            name: tagItem.dataset.name,
+            type: tagItem.dataset.type || '',
+            alias: tagItem.dataset.alias || '',
+            writable: tagItem.dataset.writable === 'true'
+        };
+    }
+
+    fetch('/htmx/plcs/' + encodeURIComponent(plcName) + '/types')
+        .then(function(resp) {
+            if (!resp.ok) return resp.text().then(function(msg) { throw new Error(msg); });
+            return resp.json();
+        })
+        .then(function(data) {
+            buildTagModalFields(data, existing);
+            WarLink.showModal('tag-modal');
+        })
+        .catch(function(err) {
+            alert('Error loading PLC type info: ' + err.message);
+        });
+}
+
+function buildTagModalFields(typeInfo, existing) {
+    var container = document.getElementById('tag-modal-fields');
+    var isAddressBased = typeInfo.address_based;
+    var addressLabel = typeInfo.address_label;
+    var types = typeInfo.types || [];
+
+    // Build type options HTML
+    var defaultIdx = 3; // DINT default
+    var typeOptionsHtml = '';
+    for (var i = 0; i < types.length; i++) {
+        var selected = '';
+        if (existing && existing.type) {
+            if (types[i] === existing.type) selected = ' selected';
+        } else if (i === defaultIdx) {
+            selected = ' selected';
+        }
+        typeOptionsHtml += '<option value="' + escapeAttr(types[i]) + '"' + selected + '>' + escapeHtml(types[i]) + '</option>';
+    }
+
+    var nameValue = existing ? escapeAttr(existing.name) : '';
+    var aliasValue = existing ? escapeAttr(existing.alias) : '';
+    var writableChecked = existing && existing.writable ? ' checked' : '';
+
+    var html = '';
+    if (isAddressBased) {
+        // Address-based: Alias first, then Type, then Address
+        html += '<div class="form-group"><label>Alias</label><input type="text" class="form-control" id="tag-modal-alias" value="' + aliasValue + '" placeholder="Optional display name"></div>';
+        html += '<div class="form-group"><label>Data Type</label><select class="form-control" id="tag-modal-type">' + typeOptionsHtml + '</select></div>';
+        html += '<div class="form-group"><label>' + escapeHtml(addressLabel) + '</label><input type="text" class="form-control" id="tag-modal-name" value="' + nameValue + '" required placeholder="e.g. ' + (addressLabel === 'DB.Offset' ? 'DB1.DBD0' : 'DM100') + '"></div>';
+    } else {
+        // Tag-based: Tag Name, Type, Alias
+        html += '<div class="form-group"><label>' + escapeHtml(addressLabel) + '</label><input type="text" class="form-control" id="tag-modal-name" value="' + nameValue + '" required></div>';
+        html += '<div class="form-group"><label>Data Type</label><select class="form-control" id="tag-modal-type">' + typeOptionsHtml + '</select></div>';
+        html += '<div class="form-group"><label>Alias</label><input type="text" class="form-control" id="tag-modal-alias" value="' + aliasValue + '" placeholder="Optional display name"></div>';
+    }
+    html += '<div class="form-group"><label class="toggle-label"><input type="checkbox" id="tag-modal-writable"' + writableChecked + '> <span>Writable</span></label></div>';
+
+    container.innerHTML = html;
+}
+
+function submitTagModal(event) {
+    event.preventDefault();
+
+    var plcName = document.getElementById('tag-modal-plc').value;
+    var mode = document.getElementById('tag-modal-mode').value;
+    var originalName = document.getElementById('tag-modal-original-name').value;
+    var tagName = document.getElementById('tag-modal-name').value.trim();
+    var dataType = document.getElementById('tag-modal-type').value;
+    var alias = document.getElementById('tag-modal-alias').value.trim();
+    var writable = document.getElementById('tag-modal-writable').checked;
+
+    if (!tagName) {
+        alert('Tag name/address is required');
+        return;
+    }
+
+    // For edit mode, if name changed, delete the old tag first
+    var deleteOld = mode === 'edit' && originalName && originalName !== tagName;
+
+    function doSave() {
+        fetch('/htmx/tags/' + encodeURIComponent(plcName) + '/' + encodeURIComponent(tagName), {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                enabled: true,
+                writable: writable,
+                data_type: dataType,
+                alias: alias
+            })
+        })
+        .then(function(resp) {
+            if (!resp.ok) return resp.text().then(function(msg) { throw new Error(msg); });
+            WarLink.hideModal('tag-modal');
+        })
+        .catch(function(err) {
+            alert('Error saving tag: ' + err.message);
+        });
+    }
+
+    if (deleteOld) {
+        fetch('/htmx/tags/' + encodeURIComponent(plcName) + '/' + encodeURIComponent(originalName), {
+            method: 'DELETE'
+        })
+        .then(function(resp) {
+            if (!resp.ok) return resp.text().then(function(msg) { throw new Error(msg); });
+            doSave();
+        })
+        .catch(function(err) {
+            alert('Error removing old tag: ' + err.message);
+        });
+    } else {
+        doSave();
+    }
+}
+
+function deleteTag(plcName, tagName) {
+    if (!confirm('Delete tag "' + tagName + '"?')) return;
+
+    fetch('/htmx/tags/' + encodeURIComponent(plcName) + '/' + encodeURIComponent(tagName), {
+        method: 'DELETE'
+    })
+    .then(function(resp) {
+        if (!resp.ok) return resp.text().then(function(msg) { throw new Error(msg); });
+        // Clear selection if the deleted tag was selected
+        if (selectedInfo && selectedInfo.plc === plcName && selectedInfo.tagName === tagName) {
+            selectedInfo = null;
+            localStorage.removeItem('republisher-selected-info');
+            document.getElementById('republisher-details').innerHTML = '<div class="details-placeholder">Select a tag to view details</div>';
+        }
+    })
+    .catch(function(err) {
+        alert('Error deleting tag: ' + err.message);
+    });
 }
 
 // Restore state on initial load

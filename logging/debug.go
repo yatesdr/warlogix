@@ -35,6 +35,7 @@ var knownProtocols = []string{
 	"tui",
 	"plcman",
 	"tagpack",
+	"browser",
 	"debug",
 }
 
@@ -97,6 +98,8 @@ func (l *DebugLogger) SetFilter(filter string) {
 			l.filters[p] = true
 			// Also add related protocols
 			switch p {
+			case "logix":
+				l.filters["eip"] = true
 			case "omron":
 				l.filters["fins"] = true
 				l.filters["fins/tcp"] = true

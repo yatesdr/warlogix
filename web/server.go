@@ -4,6 +4,8 @@ package web
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +15,7 @@ import (
 
 	"warlink/api"
 	"warlink/config"
+	"warlink/logging"
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
@@ -61,8 +64,6 @@ func (s *Server) setupRoutes() {
 
 	// Middleware
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
 
 	// CORS for API
@@ -80,6 +81,17 @@ func (s *Server) setupRoutes() {
 
 	s.router = r
 }
+
+// debugLogWriter adapts logging.DebugLog to an io.Writer for use with log.Logger.
+type debugLogWriter string
+
+func (tag debugLogWriter) Write(p []byte) (n int, err error) {
+	logging.DebugLog(string(tag), "%s", string(p))
+	return len(p), nil
+}
+
+// Verify debugLogWriter implements io.Writer.
+var _ io.Writer = debugLogWriter("")
 
 // corsMiddleware adds CORS headers for API access.
 func corsMiddleware(next http.Handler) http.Handler {
@@ -111,6 +123,7 @@ func (s *Server) Start() error {
 		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          log.New(debugLogWriter("browser"), "", 0),
 	}
 
 	go func() {

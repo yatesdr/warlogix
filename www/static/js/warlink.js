@@ -504,6 +504,65 @@ var WarLink = (function() {
         };
     }
 
+    // --- Theme Management ---
+
+    // Stored preference: 'light', 'dark', or null (system)
+    function getStoredTheme() {
+        return localStorage.getItem('theme');
+    }
+
+    // Resolve to actual 'light' or 'dark'
+    function getEffectiveTheme() {
+        var stored = getStoredTheme();
+        if (stored === 'light' || stored === 'dark') return stored;
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+
+    function applyTheme() {
+        var effective = getEffectiveTheme();
+        document.documentElement.dataset.theme = effective;
+        var btn = document.querySelector('.theme-toggle');
+        if (!btn) return;
+        var stored = getStoredTheme();
+        if (stored === 'dark') {
+            btn.textContent = '\u263D'; // moon
+            btn.title = 'Theme: dark (click for system)';
+        } else if (!stored) {
+            btn.textContent = '\u25D0'; // half circle
+            btn.title = 'Theme: system (click for light)';
+        } else {
+            btn.textContent = '\u2600'; // sun
+            btn.title = 'Theme: light (click for dark)';
+        }
+    }
+
+    // Cycle: light -> dark -> system -> light
+    function toggleTheme() {
+        var stored = getStoredTheme();
+        if (stored === 'light') {
+            localStorage.setItem('theme', 'dark');
+        } else if (stored === 'dark') {
+            localStorage.removeItem('theme');
+        } else {
+            localStorage.setItem('theme', 'light');
+        }
+        applyTheme();
+    }
+
+    function initTheme() {
+        applyTheme();
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+            if (!getStoredTheme()) applyTheme();
+        });
+    }
+
+    // Auto-init
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initTheme);
+    } else {
+        initTheme();
+    }
+
     // --- Public API ---
 
     return {
@@ -515,6 +574,7 @@ var WarLink = (function() {
         hideModal: hideModal,
         api: api,
         toast: toast,
-        TagPicker: TagPicker
+        TagPicker: TagPicker,
+        toggleTheme: toggleTheme
     };
 })();

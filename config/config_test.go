@@ -50,6 +50,36 @@ func TestPLCFamily(t *testing.T) {
 	})
 }
 
+func boolPtr(b bool) *bool { return &b }
+
+func TestPLCConfig_SupportsDiscovery(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      PLCConfig
+		expected bool
+	}{
+		{"logix default", PLCConfig{Family: FamilyLogix}, true},
+		{"logix discover=false", PLCConfig{Family: FamilyLogix, DiscoverTags: boolPtr(false)}, false},
+		{"logix discover=true", PLCConfig{Family: FamilyLogix, DiscoverTags: boolPtr(true)}, true},
+		{"s7 default", PLCConfig{Family: FamilyS7}, false},
+		{"s7 discover=true", PLCConfig{Family: FamilyS7, DiscoverTags: boolPtr(true)}, true},
+		{"beckhoff default", PLCConfig{Family: FamilyBeckhoff}, true},
+		{"beckhoff discover=false", PLCConfig{Family: FamilyBeckhoff, DiscoverTags: boolPtr(false)}, false},
+		{"omron fins default", PLCConfig{Family: FamilyOmron, Protocol: "fins"}, false},
+		{"omron eip default", PLCConfig{Family: FamilyOmron, Protocol: "eip"}, true},
+		{"omron eip discover=false", PLCConfig{Family: FamilyOmron, Protocol: "eip", DiscoverTags: boolPtr(false)}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.cfg.SupportsDiscovery()
+			if result != tc.expected {
+				t.Errorf("SupportsDiscovery() = %v, want %v", result, tc.expected)
+			}
+		})
+	}
+}
+
 func TestPLCConfig_GetFamily(t *testing.T) {
 	t.Run("returns set family", func(t *testing.T) {
 		plc := PLCConfig{Family: FamilyS7}

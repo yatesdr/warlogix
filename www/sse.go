@@ -3,13 +3,13 @@ package www
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"warlink/kafka"
+	"warlink/logging"
 	"warlink/plcman"
 	"warlink/trigger"
 	"warlink/tui"
@@ -41,14 +41,15 @@ type ConfigUpdate struct {
 
 // StatusUpdate represents a PLC connection status change event.
 type StatusUpdate struct {
-	PLC          string `json:"plc"`
-	Status       string `json:"status"` // "connected", "disconnected", "connecting", "error"
-	StatusClass  string `json:"statusClass"`
-	TagCount     int    `json:"tagCount"`
-	Error        string `json:"error,omitempty"`
-	ProductName  string `json:"productName,omitempty"`
-	SerialNumber string `json:"serialNumber,omitempty"`
-	Vendor       string `json:"vendor,omitempty"`
+	PLC            string `json:"plc"`
+	Status         string `json:"status"` // "connected", "disconnected", "connecting", "error"
+	StatusClass    string `json:"statusClass"`
+	TagCount       int    `json:"tagCount"`
+	Error          string `json:"error,omitempty"`
+	ProductName    string `json:"productName,omitempty"`
+	SerialNumber   string `json:"serialNumber,omitempty"`
+	Vendor         string `json:"vendor,omitempty"`
+	ConnectionMode string `json:"connectionMode,omitempty"`
 }
 
 // MQTTStatusUpdate represents an MQTT broker status change.
@@ -151,7 +152,7 @@ func (h *EventHub) run() {
 				select {
 				case client.events <- event:
 				default:
-					log.Printf("[SSE] client %s buffer full, dropping %s event", client.id, event.Type)
+					logging.DebugLog("browser", "SSE client %s buffer full, dropping %s event", client.id, event.Type)
 				}
 			}
 			h.mu.RUnlock()
@@ -179,7 +180,7 @@ func (h *EventHub) Broadcast(event SSEEvent) {
 	select {
 	case h.broadcast <- event:
 	default:
-		log.Printf("[SSE] broadcast channel full, dropping %s event", event.Type)
+		logging.DebugLog("browser", "SSE broadcast channel full, dropping %s event", event.Type)
 	}
 }
 
@@ -332,14 +333,15 @@ func (h *Handlers) setupEventListeners() {
 			h.eventHub.Broadcast(SSEEvent{
 				Type: "status-change",
 				Data: StatusUpdate{
-					PLC:          plc.Config.Name,
-					Status:       statusStr,
-					StatusClass:  statusClass,
-					TagCount:     len(plc.GetTags()),
-					Error:        errMsg,
-					ProductName:  productName,
-					SerialNumber: serialNumber,
-					Vendor:       vendor,
+					PLC:            plc.Config.Name,
+					Status:         statusStr,
+					StatusClass:    statusClass,
+					TagCount:       len(plc.GetTags()),
+					Error:          errMsg,
+					ProductName:    productName,
+					SerialNumber:   serialNumber,
+					Vendor:         vendor,
+					ConnectionMode: plc.GetConnectionMode(),
 				},
 			})
 		}
@@ -636,7 +638,7 @@ func (h *Handlers) getRepublisherTagData(plcName, tagName string) *RepublisherTa
 			if !plc.LastPoll.IsZero() {
 				lastPollStr = plc.LastPoll.Format("2006-01-02 15:04:05")
 			}
-			rt := h.buildRepublisherTag(tag.Name, tag.TypeName, configMap, childTagsMap, values, lastChanged, lastPollStr)
+			rt := h.buildRepublisherTag(tag.Name, tag.TypeName, configMap, childTagsMap, values, lastChanged, lastPollStr, plcCfg.IsAddressBased(), !plcCfg.SupportsDiscovery())
 			return &rt
 		}
 	}

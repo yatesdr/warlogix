@@ -69,7 +69,7 @@ var (
 	sshPassword  = flag.String("ssh-password", "", "Password for SSH authentication (daemon mode only)")
 	sshKeys      = flag.String("ssh-keys", "", "Path to authorized_keys file or directory (daemon mode only)")
 	logFile      = flag.String("log", "", "Path to log file (optional, writes alongside debug window)")
-	logDebug     = flag.String("log-debug", "", "Enable debug logging to debug.log. Use without value for all, or specify protocol (omron,ads,logix,s7,mqtt,kafka,valkey,tui)")
+	logDebug     = flag.String("log-debug", "", "Enable debug logging to debug.log. Use without value for all, or specify protocol (omron,ads,logix,s7,mqtt,kafka,valkey,tui,browser)")
 	testBrokers  = flag.Bool("stress-test-republishing", false, "Run stress tests for republishing (Kafka, MQTT, Valkey) and exit")
 	testDuration = flag.Duration("test-duration", 10*time.Second, "Duration for each broker stress test")
 	testTags     = flag.Int("test-tags", 100, "Number of simulated tags for stress test")

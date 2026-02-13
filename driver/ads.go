@@ -28,6 +28,9 @@ func NewADSAdapter(cfg *config.PLCConfig) (*ADSAdapter, error) {
 func (a *ADSAdapter) Connect() error {
 	opts := []ads.Option{}
 
+	if a.config.Timeout > 0 {
+		opts = append(opts, ads.WithTimeout(a.config.Timeout))
+	}
 	if a.config.AmsNetId != "" {
 		opts = append(opts, ads.WithAmsNetId(a.config.AmsNetId))
 	}

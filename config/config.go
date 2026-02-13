@@ -109,8 +109,10 @@ type PLCConfig struct {
 	Slot               byte           `yaml:"slot"`
 	Family             PLCFamily      `yaml:"family,omitempty"`
 	Enabled            bool           `yaml:"enabled"`
+	DiscoverTags       *bool          `yaml:"discover_tags,omitempty"`        // Auto-discover tags on connect (default true for capable families)
 	HealthCheckEnabled *bool          `yaml:"health_check_enabled,omitempty"` // Publish health status (default true)
 	PollRate           time.Duration  `yaml:"poll_rate,omitempty"`            // Per-PLC poll rate (0 = use global)
+	Timeout            time.Duration  `yaml:"timeout,omitempty"`              // Connection/operation timeout (0 = driver default)
 	Tags               []TagSelection `yaml:"tags,omitempty"`
 
 	// Beckhoff/TwinCAT-specific settings
@@ -156,13 +158,37 @@ func (p *PLCConfig) IsOmronFINS() bool {
 }
 
 // SupportsDiscovery returns true if this PLC configuration supports tag discovery.
-// This is protocol-aware for Omron PLCs (EIP supports discovery, FINS doesn't).
+// If DiscoverTags is explicitly set, that value is used. Otherwise, the family/protocol
+// default applies (true for logix, micro800, beckhoff, omron-eip; false for s7, omron-fins).
 func (p *PLCConfig) SupportsDiscovery() bool {
+	if p.DiscoverTags != nil {
+		return *p.DiscoverTags
+	}
 	family := p.GetFamily()
 	if family == FamilyOmron {
 		return p.IsOmronEIP() // Only EIP supports discovery
 	}
 	return family.SupportsDiscovery()
+}
+
+// IsDiscoverTagsExplicit returns whether DiscoverTags was explicitly set in config.
+// IsAddressBased returns true if this PLC family uses address-based tag names
+// (e.g. S7 "DB1.DBX0.0", Omron FINS "D100") where dots are literal parts of
+// the address rather than hierarchy separators. This is independent of whether
+// discovery is enabled.
+func (p *PLCConfig) IsAddressBased() bool {
+	family := p.GetFamily()
+	if family == FamilyS7 {
+		return true
+	}
+	if family == FamilyOmron && p.IsOmronFINS() {
+		return true
+	}
+	return false
+}
+
+func (p *PLCConfig) IsDiscoverTagsExplicit() bool {
+	return p.DiscoverTags != nil
 }
 
 // IsHealthCheckEnabled returns whether health check publishing is enabled (defaults to true).

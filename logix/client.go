@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"warlink/logging"
 )
@@ -26,6 +27,7 @@ type options struct {
 	routePath       []byte
 	skipForwardOpen bool
 	micro800        bool
+	timeout         time.Duration
 }
 
 // Option is a functional option for Connect.
@@ -67,6 +69,14 @@ func WithMicro800() Option {
 	}
 }
 
+// WithTimeout sets the connection and operation timeout for the EIP client.
+// If not set or zero, the EIP client's default timeout (5s) is used.
+func WithTimeout(d time.Duration) Option {
+	return func(o *options) {
+		o.timeout = d
+	}
+}
+
 // Connect establishes a connection to a Logix PLC at the given address.
 // It attempts to establish a CIP connection (Forward Open) for efficient messaging.
 // If Forward Open fails, it falls back to unconnected messaging with a warning.
@@ -77,8 +87,10 @@ func Connect(address string, opts ...Option) (*Client, error) {
 		opt(cfg)
 	}
 
+	debugLog("Connect %s: slot=%d, micro800=%v, skipForwardOpen=%v", address, cfg.slot, cfg.micro800, cfg.skipForwardOpen)
+
 	// Create low-level PLC connection
-	plc, err := NewPLC(address)
+	plc, err := NewPLC(address, cfg.timeout)
 	if err != nil {
 		return nil, fmt.Errorf("Connect: %w", err)
 	}
@@ -243,6 +255,22 @@ func (c *Client) GetTagInfo(tagName string) (TagInfo, bool) {
 	}
 	info, ok := c.tagInfo[tagName]
 	return info, ok
+}
+
+// ResolveTagType searches the symbol table for a tag by name and returns its
+// symbol table TypeCode (with structure flag + template ID for structures).
+// This is useful in manual mode where the CIP Read Tag response DataType (0x02A0)
+// doesn't contain the template ID needed for structure expansion.
+// Returns (typeCode, true) if found, (0, false) if not found or on error.
+func (c *Client) ResolveTagType(tagName string) (uint16, bool) {
+	if c == nil || c.plc == nil {
+		return 0, false
+	}
+	info, err := c.plc.FindSymbolByName(tagName)
+	if err != nil || info == nil {
+		return 0, false
+	}
+	return info.TypeCode, true
 }
 
 // GetElementCount returns the element count that would be used when reading a tag.
@@ -1589,6 +1617,23 @@ func (c *Client) GetTemplateByID(templateID uint16) (*Template, error) {
 	// Construct a type code with structure flag
 	typeCode := TypeStructureMask | templateID
 	return c.GetTemplate(typeCode)
+}
+
+// GetMemberTypes returns a map of member name → type name for a structure type.
+// For nested structures, the type name is "STRUCT(<templateID>)".
+func (c *Client) GetMemberTypes(typeCode uint16) map[string]string {
+	tmpl, err := c.GetTemplate(typeCode)
+	if err != nil {
+		return nil
+	}
+	types := make(map[string]string)
+	for _, member := range tmpl.Members {
+		if member.Hidden || member.Name == "" {
+			continue
+		}
+		types[member.Name] = TypeName(member.Type)
+	}
+	return types
 }
 
 // ClearTemplateCache clears all cached templates, forcing re-fetch on next access.
