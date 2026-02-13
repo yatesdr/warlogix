@@ -165,15 +165,26 @@ var RepublisherSSE = (function() {
         var plcGroup = document.querySelector('.plc-group[data-plc="' + WarLink.escapeSelector(data.plc) + '"]');
         if (!plcGroup) return;
 
-        // Check if this is a child tag (contains a dot)
-        var dotIdx = data.tag.indexOf('.');
-        if (dotIdx > 0) {
-            // This is a child tag - update the parent's publishedChildren
-            var parentName = data.tag.substring(0, dotIdx);
-            var childPath = data.tag.substring(dotIdx + 1);
-
-            var tagItem = plcGroup.querySelector('.tag-item[data-name="' + WarLink.escapeSelector(parentName) + '"]');
-            if (!tagItem) return;
+        // Check if this is a child tag by finding the longest parent prefix
+        // that matches a tag item in the DOM. Walk backwards through dots
+        // to handle cases like "Program:MainProgram.Tag.Member".
+        var tagItem = null;
+        var parentName = '';
+        var childPath = '';
+        var tag = data.tag;
+        for (var i = tag.length - 1; i >= 0; i--) {
+            if (tag[i] === '.') {
+                var prefix = tag.substring(0, i);
+                var item = plcGroup.querySelector('.tag-item[data-name="' + WarLink.escapeSelector(prefix) + '"]');
+                if (item) {
+                    tagItem = item;
+                    parentName = prefix;
+                    childPath = tag.substring(i + 1);
+                    break;
+                }
+            }
+        }
+        if (tagItem && childPath) {
 
             // Update publishedChildren data attribute
             var publishedChildren = {};
@@ -212,7 +223,7 @@ var RepublisherSSE = (function() {
         }
 
         // This is a root tag
-        var tagItem = plcGroup.querySelector('.tag-item[data-name="' + WarLink.escapeSelector(data.tag) + '"]');
+        tagItem = plcGroup.querySelector('.tag-item[data-name="' + WarLink.escapeSelector(data.tag) + '"]');
         if (!tagItem) return;
 
         // Update data attributes
@@ -230,8 +241,8 @@ var RepublisherSSE = (function() {
             } else {
                 tagRow.classList.remove('monitored');
             }
-            // Sync inline publish toggle
-            var toggle = tagRow.querySelector('.publish-toggle input');
+            // Sync inline publish checkbox
+            var toggle = tagRow.querySelector('.publish-checkbox input');
             if (toggle) toggle.checked = data.enabled;
         }
 

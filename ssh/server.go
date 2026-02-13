@@ -9,11 +9,11 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/gdamore/tcell/v2/terminfo"
 	gossh "golang.org/x/crypto/ssh"
-	"warlink/api"
 	"warlink/config"
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
+	"warlink/push"
 	"warlink/tagpack"
 	"warlink/trigger"
 	"warlink/tui"
@@ -27,11 +27,12 @@ type SharedManagers struct {
 	Config     *config.Config
 	ConfigPath string
 	PLCMan     *plcman.Manager
-	APIServer  *api.Server
+	WebServer  tui.WebServer
 	MQTTMgr    *mqtt.Manager
 	ValkeyMgr  *valkey.Manager
 	KafkaMgr   *kafka.Manager
 	TriggerMgr *trigger.Manager
+	PushMgr    *push.Manager
 	PackMgr    *tagpack.Manager
 }
 
@@ -44,8 +45,8 @@ func (m *SharedManagers) GetConfigPath() string { return m.ConfigPath }
 // GetPLCMan returns the shared PLC manager.
 func (m *SharedManagers) GetPLCMan() *plcman.Manager { return m.PLCMan }
 
-// GetAPIServer returns the shared API server.
-func (m *SharedManagers) GetAPIServer() *api.Server { return m.APIServer }
+// GetWebServer returns the shared web server.
+func (m *SharedManagers) GetWebServer() tui.WebServer { return m.WebServer }
 
 // GetMQTTMgr returns the shared MQTT manager.
 func (m *SharedManagers) GetMQTTMgr() *mqtt.Manager { return m.MQTTMgr }
@@ -58,6 +59,9 @@ func (m *SharedManagers) GetKafkaMgr() *kafka.Manager { return m.KafkaMgr }
 
 // GetTriggerMgr returns the shared trigger manager.
 func (m *SharedManagers) GetTriggerMgr() *trigger.Manager { return m.TriggerMgr }
+
+// GetPushMgr returns the shared push manager.
+func (m *SharedManagers) GetPushMgr() *push.Manager { return m.PushMgr }
 
 // GetPackMgr returns the shared TagPack manager.
 func (m *SharedManagers) GetPackMgr() *tagpack.Manager { return m.PackMgr }

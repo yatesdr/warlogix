@@ -11,6 +11,7 @@ import (
 	"warlink/kafka"
 	"warlink/logging"
 	"warlink/plcman"
+	"warlink/push"
 	"warlink/trigger"
 	"warlink/tui"
 )
@@ -83,6 +84,15 @@ type TriggerStatusUpdate struct {
 	FireCount   int64  `json:"fireCount"`
 	LastFire    string `json:"lastFire,omitempty"`
 	Error       string `json:"error,omitempty"`
+}
+
+// PushStatusUpdate represents a push webhook status change.
+type PushStatusUpdate struct {
+	Name         string `json:"name"`
+	Status       string `json:"status"`
+	StatusClass  string `json:"statusClass"`
+	SendCount    int64  `json:"sendCount"`
+	LastHTTPCode int    `json:"lastHTTPCode"`
 }
 
 // DebugLogUpdate represents a debug log entry.
@@ -192,6 +202,21 @@ func (h *EventHub) BroadcastEntityChange(entityType, action, name string) {
 			EntityType: entityType,
 			Action:     action,
 			Name:       name,
+		},
+	})
+}
+
+// BroadcastConfigChange broadcasts a tag configuration change to all clients.
+// This is a lightweight update that doesn't trigger a full tree refresh.
+func (h *EventHub) BroadcastConfigChange(plcName, tagName string, enabled, writable bool, ignores []string) {
+	h.Broadcast(SSEEvent{
+		Type: "config-change",
+		Data: ConfigUpdate{
+			PLC:      plcName,
+			Tag:      tagName,
+			Enabled:  enabled,
+			Writable: writable,
+			Ignores:  ignores,
 		},
 	})
 }
@@ -424,6 +449,7 @@ func (h *Handlers) pollServiceStatuses() {
 	lastValkey := make(map[string]string)
 	lastKafka := make(map[string]string)
 	lastTrigger := make(map[string]string)
+	lastPush := make(map[string]string)
 
 	for {
 		select {
@@ -542,6 +568,26 @@ func (h *Handlers) pollServiceStatuses() {
 					}
 				}
 			}
+
+			// Poll Push statuses
+			if pushMgr := h.managers.GetPushMgr(); pushMgr != nil {
+				for _, info := range pushMgr.GetAllPushInfo() {
+					statusStr := pushStatusString(info.Status)
+					if lastPush[info.Name] != statusStr {
+						lastPush[info.Name] = statusStr
+						h.eventHub.Broadcast(SSEEvent{
+							Type: "push-status",
+							Data: PushStatusUpdate{
+								Name:         info.Name,
+								Status:       statusStr,
+								StatusClass:  "status-" + statusStr,
+								SendCount:    info.SendCount,
+								LastHTTPCode: info.LastHTTPCode,
+							},
+						})
+					}
+				}
+			}
 		}
 	}
 }
@@ -570,6 +616,24 @@ func triggerStatusString(s trigger.Status) string {
 	case trigger.StatusCooldown:
 		return "cooldown"
 	case trigger.StatusError:
+		return "error"
+	default:
+		return "disabled"
+	}
+}
+
+// pushStatusString converts a push Status to a string.
+func pushStatusString(s push.Status) string {
+	switch s {
+	case push.StatusArmed:
+		return "armed"
+	case push.StatusFiring:
+		return "firing"
+	case push.StatusWaitingClear:
+		return "waiting"
+	case push.StatusMinInterval:
+		return "cooldown"
+	case push.StatusError:
 		return "error"
 	default:
 		return "disabled"

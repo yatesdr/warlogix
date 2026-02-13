@@ -8,19 +8,32 @@ import (
 	"strings"
 	"time"
 
+	"warlink/config"
 	"warlink/kafka"
 	"warlink/plcman"
+	"warlink/push"
 	"warlink/trigger"
 	"warlink/tui"
 )
 
 // handleLoginPage renders the login page.
 func (h *Handlers) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	// If no users exist, redirect to setup
+	if len(h.managers.GetConfig().Web.UI.Users) == 0 {
+		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+		return
+	}
+
 	// If already logged in, redirect to home
 	if username, _, ok := h.sessions.getUser(r); ok && username != "" {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
+
+	// Clear any stale session cookie so login starts fresh.
+	// This handles the case where a session secret was rotated (e.g. after
+	// config reset) and the browser still holds a cookie signed with the old key.
+	h.sessions.clear(w, r)
 
 	h.renderTemplate(w, "login.html", nil)
 }
@@ -62,6 +75,12 @@ func (h *Handlers) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Redirect to password change if required
+	if user.MustChangePassword {
+		http.Redirect(w, r, "/change-password", http.StatusSeeOther)
+		return
+	}
+
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -69,6 +88,219 @@ func (h *Handlers) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	h.sessions.clear(w, r)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// handleChangePasswordPage renders the change password form.
+func (h *Handlers) handleChangePasswordPage(w http.ResponseWriter, r *http.Request) {
+	username, _, ok := h.sessions.getUser(r)
+	if !ok || username == "" {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	h.renderTemplate(w, "change_password.html", map[string]interface{}{
+		"Username": username,
+	})
+}
+
+// handleChangePasswordSubmit handles the change password form submission.
+func (h *Handlers) handleChangePasswordSubmit(w http.ResponseWriter, r *http.Request) {
+	username, _, ok := h.sessions.getUser(r)
+	if !ok || username == "" {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	currentPassword := r.FormValue("current_password")
+	newPassword := r.FormValue("new_password")
+	confirmPassword := r.FormValue("confirm_password")
+
+	renderError := func(msg string) {
+		h.renderTemplate(w, "change_password.html", map[string]interface{}{
+			"Username": username,
+			"Error":    msg,
+		})
+	}
+
+	if currentPassword == "" || newPassword == "" || confirmPassword == "" {
+		renderError("All fields are required")
+		return
+	}
+
+	if newPassword != confirmPassword {
+		renderError("New passwords do not match")
+		return
+	}
+
+	if newPassword == "admin" {
+		renderError("Password cannot be 'admin'")
+		return
+	}
+
+	if len(newPassword) < 4 {
+		renderError("Password must be at least 4 characters")
+		return
+	}
+
+	cfg := h.managers.GetConfig()
+	user := cfg.FindWebUser(username)
+	if user == nil {
+		renderError("User not found")
+		return
+	}
+
+	if !checkPassword(currentPassword, user.PasswordHash) {
+		renderError("Current password is incorrect")
+		return
+	}
+
+	hash, err := hashPassword(newPassword)
+	if err != nil {
+		renderError("Failed to hash password")
+		return
+	}
+
+	cfg.Lock()
+	user.PasswordHash = hash
+	user.MustChangePassword = false
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
+		renderError("Failed to save: " + err.Error())
+		return
+	}
+
+	// Clear unsecured deadline since password was changed
+	if h.webServer != nil {
+		h.webServer.ClearUnsecuredDeadline()
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleSetupPage renders the first-run setup page.
+func (h *Handlers) handleSetupPage(w http.ResponseWriter, r *http.Request) {
+	// If users already exist, redirect to login
+	if len(h.managers.GetConfig().Web.UI.Users) > 0 {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	h.renderTemplate(w, "setup.html", nil)
+}
+
+// handleSetupSubmit handles the first-run setup form submission.
+func (h *Handlers) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
+	cfg := h.managers.GetConfig()
+
+	// Guard against race/replay — if users already exist, reject
+	if len(cfg.Web.UI.Users) > 0 {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	confirmPassword := r.FormValue("confirm_password")
+
+	renderError := func(msg string) {
+		h.renderTemplate(w, "setup.html", map[string]interface{}{
+			"Error":    msg,
+			"Username": username,
+		})
+	}
+
+	if username == "" {
+		renderError("Username is required")
+		return
+	}
+
+	if len(password) < 4 {
+		renderError("Password must be at least 4 characters")
+		return
+	}
+
+	if password != confirmPassword {
+		renderError("Passwords do not match")
+		return
+	}
+
+	hash, err := hashPassword(password)
+	if err != nil {
+		renderError("Failed to hash password")
+		return
+	}
+
+	cfg.Lock()
+	cfg.AddWebUser(config.WebUser{
+		Username:           username,
+		PasswordHash:       hash,
+		Role:               config.RoleAdmin,
+		MustChangePassword: false,
+	})
+
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
+		renderError("Failed to save: " + err.Error())
+		return
+	}
+
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// handleSetupNamespacePage renders the mandatory namespace setup page.
+func (h *Handlers) handleSetupNamespacePage(w http.ResponseWriter, r *http.Request) {
+	username, role, ok := h.sessions.getUser(r)
+	if !ok || username == "" {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	cfg := h.managers.GetConfig()
+	if cfg.Namespace != "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	h.renderTemplate(w, "setup_namespace.html", map[string]interface{}{
+		"IsAdmin": isAdmin(role),
+	})
+}
+
+// handleSetupNamespaceSubmit handles the namespace setup form submission.
+func (h *Handlers) handleSetupNamespaceSubmit(w http.ResponseWriter, r *http.Request) {
+	_, role, ok := h.sessions.getUser(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	if !isAdmin(role) {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	namespace := strings.TrimSpace(r.FormValue("namespace"))
+
+	if !config.IsValidNamespace(namespace) {
+		h.renderTemplate(w, "setup_namespace.html", map[string]interface{}{
+			"IsAdmin":   true,
+			"Error":     "Invalid namespace. Use lowercase letters, numbers, and hyphens (e.g. plant-floor-1).",
+			"Namespace": namespace,
+		})
+		return
+	}
+
+	cfg := h.managers.GetConfig()
+	cfg.Lock()
+	cfg.Namespace = namespace
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
+		h.renderTemplate(w, "setup_namespace.html", map[string]interface{}{
+			"IsAdmin":   true,
+			"Error":     "Failed to save: " + err.Error(),
+			"Namespace": namespace,
+		})
+		return
+	}
+
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // handleDashboard redirects to PLCs page.
@@ -332,6 +564,38 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 			AllowManualTags: plc.AllowManualTags(),
 		}
 
+		// Get runtime data
+		tags := plc.GetTags()
+		programs := plc.GetPrograms()
+		values := plc.GetValues()
+		var lastChanged map[string]time.Time // not tracked yet
+		addressBased := plc.Config.IsAddressBased()
+		isManual := !plc.Config.SupportsDiscovery()
+
+		// Build tag name set for parent matching
+		tagNameSet := make(map[string]bool, len(tags))
+		for _, t := range tags {
+			tagNameSet[t.Name] = true
+		}
+
+		// For non-discovery PLCs, filter out child tags that would be shown as UDT
+		// members when the parent is expanded. filterStructChildren in the manager
+		// only works after type resolution; this catches the pre-resolution case
+		// by checking if a parent tag name exists in the tag list.
+		if isManual && !addressBased {
+			filtered := tags[:0:0]
+			for _, t := range tags {
+				if idx := strings.Index(t.Name, "."); idx > 0 {
+					parent := t.Name[:idx]
+					if tagNameSet[parent] {
+						continue // Skip: parent exists, will be shown as child
+					}
+				}
+				filtered = append(filtered, t)
+			}
+			tags = filtered
+		}
+
 		// Build config lookup map for enabled/writable/ignored settings
 		configMap := make(map[string]*struct {
 			Alias         string
@@ -339,7 +603,10 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 			Writable      bool
 			IgnoreChanges []string
 		})
-		// Also build a map of parent tag -> published children
+		// Build map of parent tag -> published children.
+		// Match child paths against the actual tag list to find the correct parent,
+		// since tags like "Program:MainProgram.HMI_Edit.Member" have the parent
+		// "Program:MainProgram.HMI_Edit", not "Program:MainProgram".
 		childTagsMap := make(map[string]map[string]PublishedChild)
 		for i := range plc.Config.Tags {
 			sel := &plc.Config.Tags[i]
@@ -355,26 +622,27 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 				IgnoreChanges: sel.IgnoreChanges,
 			}
 
-			// Check if this is a child tag (contains a dot after the parent name)
-			// e.g., "Robot1.Position.X" -> parent="Robot1", path="Position.X"
-			if idx := strings.Index(sel.Name, "."); idx > 0 {
-				parentName := sel.Name[:idx]
-				childPath := sel.Name[idx+1:]
-				if childTagsMap[parentName] == nil {
-					childTagsMap[parentName] = make(map[string]PublishedChild)
-				}
-				childTagsMap[parentName][childPath] = PublishedChild{
-					Enabled:  sel.Enabled,
-					Writable: sel.Writable,
+			// Check if this config entry is a child of a known tag.
+			// Walk backwards through dots to find the longest parent prefix
+			// that exists in the tag list.
+			name := sel.Name
+			for idx := len(name) - 1; idx >= 0; idx-- {
+				if name[idx] == '.' {
+					prefix := name[:idx]
+					if tagNameSet[prefix] {
+						childPath := name[idx+1:]
+						if childTagsMap[prefix] == nil {
+							childTagsMap[prefix] = make(map[string]PublishedChild)
+						}
+						childTagsMap[prefix][childPath] = PublishedChild{
+							Enabled:  sel.Enabled,
+							Writable: sel.Writable,
+						}
+						break
+					}
 				}
 			}
 		}
-
-		// Get runtime data
-		tags := plc.GetTags()
-		programs := plc.GetPrograms()
-		values := plc.GetValues()
-		var lastChanged map[string]time.Time // not tracked yet
 
 		// Build program prefix set for Beckhoff-style grouping
 		programPrefixes := make(map[string]bool)
@@ -386,8 +654,6 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 		controllerTags := make([]RepublisherTag, 0)
 		programTags := make(map[string][]RepublisherTag)
 
-		addressBased := plc.Config.IsAddressBased()
-		isManual := !plc.Config.SupportsDiscovery()
 		for _, tag := range tags {
 			rt := h.buildRepublisherTag(tag.Name, tag.TypeName, configMap, childTagsMap, values, lastChanged, lastPollStr, addressBased, isManual)
 
@@ -851,6 +1117,115 @@ func (h *Handlers) getTagPacksData() []TagPackData {
 	})
 
 	return result
+}
+
+// PushData holds Push display data.
+type PushData struct {
+	Name         string
+	URL          string
+	Method       string
+	Status       string
+	StatusClass  string
+	Enabled      bool
+	SendCount    int64
+	LastSend     string
+	LastHTTPCode int
+	Conditions   []PushConditionDisplay
+}
+
+// PushConditionDisplay holds display data for a push condition.
+type PushConditionDisplay struct {
+	PLC      string
+	Tag      string
+	Operator string
+	Value    string
+}
+
+// handlePushPage renders the push webhooks page.
+func (h *Handlers) handlePushPage(w http.ResponseWriter, r *http.Request) {
+	data := h.getUserInfo(r)
+	data["Page"] = "push"
+	data["Pushes"] = h.getPushData()
+	h.renderTemplate(w, "push.html", data)
+}
+
+func (h *Handlers) getPushData() []PushData {
+	cfg := h.managers.GetConfig()
+	pushMgr := h.managers.GetPushMgr()
+	result := make([]PushData, 0, len(cfg.Pushes))
+
+	for _, pushCfg := range cfg.Pushes {
+		statusClass := "status-disconnected"
+		status := "Stopped"
+
+		if pushMgr != nil {
+			pStatus, _, _, _, _ := pushMgr.GetPushStatus(pushCfg.Name)
+			status, statusClass = pushStatusDisplay(pStatus)
+		}
+
+		var sendCount int64
+		var lastSend time.Time
+		var lastHTTPCode int
+		if pushMgr != nil {
+			_, _, sendCount, lastSend, lastHTTPCode = pushMgr.GetPushStatus(pushCfg.Name)
+		}
+
+		lastSendStr := ""
+		if !lastSend.IsZero() {
+			lastSendStr = lastSend.Format("2006-01-02 15:04:05")
+		}
+
+		method := pushCfg.Method
+		if method == "" {
+			method = "POST"
+		}
+
+		conditions := make([]PushConditionDisplay, len(pushCfg.Conditions))
+		for i, cond := range pushCfg.Conditions {
+			conditions[i] = PushConditionDisplay{
+				PLC:      cond.PLC,
+				Tag:      cond.Tag,
+				Operator: cond.Operator,
+				Value:    fmt.Sprintf("%v", cond.Value),
+			}
+		}
+
+		result = append(result, PushData{
+			Name:         pushCfg.Name,
+			URL:          pushCfg.URL,
+			Method:       method,
+			Status:       status,
+			StatusClass:  statusClass,
+			Enabled:      pushCfg.Enabled,
+			SendCount:    sendCount,
+			LastSend:     lastSendStr,
+			LastHTTPCode: lastHTTPCode,
+			Conditions:   conditions,
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+
+	return result
+}
+
+func pushStatusDisplay(s push.Status) (string, string) {
+	switch s {
+	case push.StatusArmed:
+		return "Armed", "status-connected"
+	case push.StatusFiring:
+		return "Firing", "status-connecting"
+	case push.StatusWaitingClear:
+		return "Waiting", "status-connecting"
+	case push.StatusMinInterval:
+		return "Cooldown", "status-connecting"
+	case push.StatusError:
+		return "Error", "status-error"
+	default:
+		return "Stopped", "status-disconnected"
+	}
 }
 
 // TriggerData holds Trigger display data.

@@ -136,16 +136,22 @@ func (t *PLCsTab) onSelect(row, col int) {
 	}
 	if plc.GetStatus() == plcman.StatusConnected {
 		// Disable auto-connect and disconnect in background
+		t.app.LockConfig()
 		if cfg := t.app.config.FindPLC(name); cfg != nil {
 			cfg.Enabled = false
-			t.app.SaveConfig()
+			t.app.UnlockAndSaveConfig()
+		} else {
+			t.app.UnlockConfig()
 		}
 		go t.app.manager.Disconnect(name)
 	} else {
 		// Enable auto-connect and connect in background
+		t.app.LockConfig()
 		if cfg := t.app.config.FindPLC(name); cfg != nil {
 			cfg.Enabled = true
-			t.app.SaveConfig()
+			t.app.UnlockAndSaveConfig()
+		} else {
+			t.app.UnlockConfig()
 		}
 		go t.app.manager.Connect(name)
 	}
@@ -1102,8 +1108,9 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			FinsUnit:    byte(finsUnit),
 		}
 
+		t.app.LockConfig()
 		t.app.config.AddPLC(cfg)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 		if addedCfg := t.app.config.FindPLC(state.name); addedCfg != nil {
 			t.app.manager.AddPLC(addedCfg)
 		}
@@ -1442,8 +1449,9 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 			FinsUnit:    byte(finsUnit),
 		}
 
+		t.app.LockConfig()
 		t.app.config.UpdatePLC(state.originalName, updated)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		// Close dialog first
 		t.app.closeModal(pageName)
@@ -1547,8 +1555,9 @@ func (t *PLCsTab) removeSelected() {
 	}
 
 	t.app.showConfirm("Remove PLC", fmt.Sprintf("Remove %s?", name), func() {
+		t.app.LockConfig()
 		t.app.config.RemovePLC(name)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 		t.app.UpdateMQTTPLCNames()
 		t.app.setStatus(fmt.Sprintf("Removing PLC: %s...", name))
 
@@ -1577,9 +1586,12 @@ func (t *PLCsTab) connectSelected() {
 	t.app.setStatus(fmt.Sprintf("Connecting to %s...", name))
 
 	// Enable auto-connect so it stays connected
+	t.app.LockConfig()
 	if cfg := t.app.config.FindPLC(name); cfg != nil {
 		cfg.Enabled = true
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
+	} else {
+		t.app.UnlockConfig()
 	}
 
 	// Connect runs in background - manager will log success/failure
@@ -1594,9 +1606,12 @@ func (t *PLCsTab) disconnectSelected() {
 	t.app.setStatus(fmt.Sprintf("Disconnecting from %s...", name))
 
 	// Disable auto-connect to prevent auto-reconnect
+	t.app.LockConfig()
 	if cfg := t.app.config.FindPLC(name); cfg != nil {
 		cfg.Enabled = false
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
+	} else {
+		t.app.UnlockConfig()
 	}
 
 	go func() {

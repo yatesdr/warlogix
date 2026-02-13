@@ -46,16 +46,17 @@ func newSessionStore(secret string) *sessionStore {
 }
 
 // get retrieves the session from the request.
-func (s *sessionStore) get(r *http.Request) (*sessions.Session, error) {
-	return s.store.Get(r, sessionName)
+// Gorilla's CookieStore.Get may return a decode error for stale cookies
+// (e.g. after session secret rotation), but always returns a usable session.
+// We ignore the error so stale cookies don't block login/logout.
+func (s *sessionStore) get(r *http.Request) *sessions.Session {
+	session, _ := s.store.Get(r, sessionName)
+	return session
 }
 
 // getUser returns the username and role from the session.
 func (s *sessionStore) getUser(r *http.Request) (username, role string, ok bool) {
-	session, err := s.get(r)
-	if err != nil {
-		return "", "", false
-	}
+	session := s.get(r)
 
 	user, uok := session.Values[sessionUserKey].(string)
 	role, rok := session.Values[sessionRoleKey].(string)
@@ -68,11 +69,7 @@ func (s *sessionStore) getUser(r *http.Request) (username, role string, ok bool)
 
 // setUser stores the username and role in the session.
 func (s *sessionStore) setUser(w http.ResponseWriter, r *http.Request, username, role string) error {
-	session, err := s.get(r)
-	if err != nil {
-		return err
-	}
-
+	session := s.get(r)
 	session.Values[sessionUserKey] = username
 	session.Values[sessionRoleKey] = role
 	return session.Save(r, w)
@@ -80,11 +77,7 @@ func (s *sessionStore) setUser(w http.ResponseWriter, r *http.Request, username,
 
 // clear removes the user from the session.
 func (s *sessionStore) clear(w http.ResponseWriter, r *http.Request) error {
-	session, err := s.get(r)
-	if err != nil {
-		return err
-	}
-
+	session := s.get(r)
 	delete(session.Values, sessionUserKey)
 	delete(session.Values, sessionRoleKey)
 	session.Options.MaxAge = -1

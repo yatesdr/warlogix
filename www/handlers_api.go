@@ -19,6 +19,7 @@ import (
 	"warlink/logix"
 	"warlink/mqtt"
 	"warlink/omron"
+	"warlink/push"
 	"warlink/s7"
 	"warlink/tui"
 )
@@ -97,9 +98,12 @@ func (h *Handlers) handlePLCConnect(w http.ResponseWriter, r *http.Request) {
 
 	// Persist enabled state
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	if plcCfg := cfg.FindPLC(name); plcCfg != nil {
 		plcCfg.Enabled = true
-		cfg.Save(h.managers.GetConfigPath())
+		cfg.UnlockAndSave(h.managers.GetConfigPath())
+	} else {
+		cfg.Unlock()
 	}
 
 	if err := plcMan.Connect(name); err != nil {
@@ -125,9 +129,12 @@ func (h *Handlers) handlePLCDisconnect(w http.ResponseWriter, r *http.Request) {
 
 	// Persist disabled state
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	if plcCfg := cfg.FindPLC(name); plcCfg != nil {
 		plcCfg.Enabled = false
-		cfg.Save(h.managers.GetConfigPath())
+		cfg.UnlockAndSave(h.managers.GetConfigPath())
+	} else {
+		cfg.Unlock()
 	}
 
 	plcMan.Disconnect(name)
@@ -285,8 +292,10 @@ func (h *Handlers) handlePLCUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	plcCfg := cfg.FindPLC(name)
 	if plcCfg == nil {
+		cfg.Unlock()
 		http.Error(w, "PLC not found", http.StatusNotFound)
 		return
 	}
@@ -332,7 +341,7 @@ func (h *Handlers) handlePLCUpdate(w http.ResponseWriter, r *http.Request) {
 	plcCfg.DiscoverTags = req.DiscoverTags
 
 	// Save config
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -465,10 +474,11 @@ func (h *Handlers) handlePLCCreate(w http.ResponseWriter, r *http.Request) {
 	plcCfg.FinsUnit = byte(req.FinsUnit)
 
 	// Add to config
+	cfg.Lock()
 	cfg.PLCs = append(cfg.PLCs, plcCfg)
 
 	// Save config
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -494,6 +504,7 @@ func (h *Handlers) handlePLCDelete(w http.ResponseWriter, r *http.Request) {
 	plcMan := h.managers.GetPLCMan()
 
 	// Find and remove PLC from config
+	cfg.Lock()
 	found := false
 	newPLCs := make([]config.PLCConfig, 0, len(cfg.PLCs))
 	for _, plc := range cfg.PLCs {
@@ -505,6 +516,7 @@ func (h *Handlers) handlePLCDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !found {
+		cfg.Unlock()
 		http.Error(w, "PLC not found", http.StatusNotFound)
 		return
 	}
@@ -515,7 +527,7 @@ func (h *Handlers) handlePLCDelete(w http.ResponseWriter, r *http.Request) {
 	cfg.PLCs = newPLCs
 
 	// Save config
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -541,6 +553,7 @@ type TagCreateRequest struct {
 }
 
 // handleTagRead reads a tag's current value on demand.
+// Falls back to cached values when the PLC is offline.
 func (h *Handlers) handleTagRead(w http.ResponseWriter, r *http.Request) {
 	plcName := chi.URLParam(r, "plc")
 	plcName, _ = url.PathUnescape(plcName)
@@ -550,8 +563,19 @@ func (h *Handlers) handleTagRead(w http.ResponseWriter, r *http.Request) {
 	plcMan := h.managers.GetPLCMan()
 	tv, err := plcMan.ReadTag(plcName, tagName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		// Fall back to cached value if PLC is offline
+		plc := plcMan.GetPLC(plcName)
+		if plc != nil {
+			values := plc.GetValues()
+			if cached, ok := values[tagName]; ok && cached != nil {
+				tv = cached
+				err = nil
+			}
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	resp := map[string]interface{}{
@@ -591,8 +615,10 @@ func (h *Handlers) handleTagUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	plcCfg := cfg.FindPLC(plcName)
 	if plcCfg == nil {
+		cfg.Unlock()
 		http.Error(w, "PLC not found", http.StatusNotFound)
 		return
 	}
@@ -660,12 +686,25 @@ func (h *Handlers) handleTagUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save config
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	h.managers.GetPLCMan().RefreshManualTags(plcName)
+	// Only rebuild manual tags when a new tag was auto-created.
+	// Toggling enabled/writable/ignore on existing tags doesn't change the tag list.
+	if !tagFound {
+		h.managers.GetPLCMan().RefreshManualTags(plcName)
+	}
+
+	// Broadcast config-change so the web UI updates indicators without a full tree refresh.
+	// Find the final tag state to broadcast.
+	for _, sel := range plcCfg.Tags {
+		if sel.Name == tagName {
+			h.eventHub.BroadcastConfigChange(plcName, tagName, sel.Enabled, sel.Writable, sel.IgnoreChanges)
+			break
+		}
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -683,8 +722,10 @@ func (h *Handlers) handleTagPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	plcCfg := cfg.FindPLC(plcName)
 	if plcCfg == nil {
+		cfg.Unlock()
 		http.Error(w, "PLC not found", http.StatusNotFound)
 		return
 	}
@@ -715,13 +756,27 @@ func (h *Handlers) handleTagPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save config
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	h.managers.GetPLCMan().RefreshManualTags(plcName)
-	h.eventHub.BroadcastEntityChange("plc", "update", plcName)
+	// Only rebuild manual tags when a new tag was added.
+	// Toggling enabled/writable on existing tags doesn't change the tag list.
+	if !tagFound {
+		h.managers.GetPLCMan().RefreshManualTags(plcName)
+	}
+
+	// Broadcast appropriate SSE event:
+	// - Child tags (dotted paths like "Parent.Member"): config-change only (no tree refresh)
+	// - New root tags: entity-change (triggers tree refresh to show new tag)
+	// - Existing root tag updates: config-change only
+	isChildTag := strings.Contains(tagName, ".")
+	if isChildTag || tagFound {
+		h.eventHub.BroadcastConfigChange(plcName, tagName, req.Enabled, req.Writable, nil)
+	} else {
+		h.eventHub.BroadcastEntityChange("plc", "update", plcName)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -733,8 +788,10 @@ func (h *Handlers) handleTagDelete(w http.ResponseWriter, r *http.Request) {
 	tagName, _ = url.PathUnescape(tagName)
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	plcCfg := cfg.FindPLC(plcName)
 	if plcCfg == nil {
+		cfg.Unlock()
 		http.Error(w, "PLC not found", http.StatusNotFound)
 		return
 	}
@@ -750,11 +807,12 @@ func (h *Handlers) handleTagDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !found {
+		cfg.Unlock()
 		http.Error(w, "Tag not found", http.StatusNotFound)
 		return
 	}
 
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -892,6 +950,20 @@ func (h *Handlers) handleDebugClear(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// handleAPIToggle toggles the REST API enabled state.
+func (h *Handlers) handleAPIToggle(w http.ResponseWriter, r *http.Request) {
+	cfg := h.managers.GetConfig()
+	cfg.Lock()
+	cfg.Web.API.Enabled = !cfg.Web.API.Enabled
+	enabled := cfg.Web.API.Enabled
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"enabled": enabled})
+}
+
 // --- MQTT CRUD ---
 
 type mqttRequest struct {
@@ -943,8 +1015,9 @@ func (h *Handlers) handleMQTTCreate(w http.ResponseWriter, r *http.Request) {
 		Enabled:  req.Enabled,
 	}
 
+	cfg.Lock()
 	cfg.AddMQTT(mqttCfg)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1029,8 +1102,9 @@ func (h *Handlers) handleMQTTUpdate(w http.ResponseWriter, r *http.Request) {
 		Enabled:  req.Enabled,
 	}
 
+	cfg.Lock()
 	cfg.UpdateMQTT(name, updated)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1053,12 +1127,14 @@ func (h *Handlers) handleMQTTDelete(w http.ResponseWriter, r *http.Request) {
 	name, _ = url.PathUnescape(name)
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	if !cfg.RemoveMQTT(name) {
+		cfg.Unlock()
 		http.Error(w, "MQTT broker not found", http.StatusNotFound)
 		return
 	}
 
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1123,8 +1199,9 @@ func (h *Handlers) handleValkeyCreate(w http.ResponseWriter, r *http.Request) {
 		Enabled:         req.Enabled,
 	}
 
+	cfg.Lock()
 	cfg.AddValkey(valkeyCfg)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1214,8 +1291,9 @@ func (h *Handlers) handleValkeyUpdate(w http.ResponseWriter, r *http.Request) {
 		Enabled:         req.Enabled,
 	}
 
+	cfg.Lock()
 	cfg.UpdateValkey(name, updated)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1236,12 +1314,14 @@ func (h *Handlers) handleValkeyDelete(w http.ResponseWriter, r *http.Request) {
 	name, _ = url.PathUnescape(name)
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	if !cfg.RemoveValkey(name) {
+		cfg.Unlock()
 		http.Error(w, "Valkey server not found", http.StatusNotFound)
 		return
 	}
 
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1352,8 +1432,9 @@ func (h *Handlers) handleKafkaCreate(w http.ResponseWriter, r *http.Request) {
 		WriteMaxAge:      writeMaxAge,
 	}
 
+	cfg.Lock()
 	cfg.AddKafka(kafkaCfg)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1480,8 +1561,9 @@ func (h *Handlers) handleKafkaUpdate(w http.ResponseWriter, r *http.Request) {
 		WriteMaxAge:      writeMaxAge,
 	}
 
+	cfg.Lock()
 	cfg.UpdateKafka(name, updated)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1505,12 +1587,14 @@ func (h *Handlers) handleKafkaDelete(w http.ResponseWriter, r *http.Request) {
 	name, _ = url.PathUnescape(name)
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	if !cfg.RemoveKafka(name) {
+		cfg.Unlock()
 		http.Error(w, "Kafka cluster not found", http.StatusNotFound)
 		return
 	}
 
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1582,8 +1666,9 @@ func (h *Handlers) handleTagPackCreate(w http.ResponseWriter, r *http.Request) {
 		Members:       req.Members,
 	}
 
+	cfg.Lock()
 	cfg.AddTagPack(packCfg)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1653,8 +1738,9 @@ func (h *Handlers) handleTagPackUpdate(w http.ResponseWriter, r *http.Request) {
 		Members:       req.Members,
 	}
 
+	cfg.Lock()
 	cfg.UpdateTagPack(name, updated)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1670,12 +1756,14 @@ func (h *Handlers) handleTagPackDelete(w http.ResponseWriter, r *http.Request) {
 	name, _ = url.PathUnescape(name)
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	if !cfg.RemoveTagPack(name) {
+		cfg.Unlock()
 		http.Error(w, "TagPack not found", http.StatusNotFound)
 		return
 	}
 
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1691,14 +1779,17 @@ func (h *Handlers) handleTagPackToggle(w http.ResponseWriter, r *http.Request) {
 	name, _ = url.PathUnescape(name)
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	pc := cfg.FindTagPack(name)
 	if pc == nil {
+		cfg.Unlock()
 		http.Error(w, "TagPack not found", http.StatusNotFound)
 		return
 	}
 
 	pc.Enabled = !pc.Enabled
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	enabled := pc.Enabled
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1707,7 +1798,7 @@ func (h *Handlers) handleTagPackToggle(w http.ResponseWriter, r *http.Request) {
 
 	h.eventHub.BroadcastEntityChange("tagpack", "update", name)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"enabled": pc.Enabled})
+	json.NewEncoder(w).Encode(map[string]bool{"enabled": enabled})
 }
 
 func (h *Handlers) handleTagPackServiceToggle(w http.ResponseWriter, r *http.Request) {
@@ -1716,8 +1807,10 @@ func (h *Handlers) handleTagPackServiceToggle(w http.ResponseWriter, r *http.Req
 	service := chi.URLParam(r, "service")
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	pc := cfg.FindTagPack(name)
 	if pc == nil {
+		cfg.Unlock()
 		http.Error(w, "TagPack not found", http.StatusNotFound)
 		return
 	}
@@ -1734,11 +1827,12 @@ func (h *Handlers) handleTagPackServiceToggle(w http.ResponseWriter, r *http.Req
 		pc.ValkeyEnabled = !pc.ValkeyEnabled
 		enabled = pc.ValkeyEnabled
 	default:
+		cfg.Unlock()
 		http.Error(w, "Invalid service: "+service, http.StatusBadRequest)
 		return
 	}
 
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1765,14 +1859,16 @@ func (h *Handlers) handleTagPackAddMember(w http.ResponseWriter, r *http.Request
 	}
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	pc := cfg.FindTagPack(name)
 	if pc == nil {
+		cfg.Unlock()
 		http.Error(w, "TagPack not found", http.StatusNotFound)
 		return
 	}
 
 	pc.Members = append(pc.Members, member)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1793,19 +1889,22 @@ func (h *Handlers) handleTagPackRemoveMember(w http.ResponseWriter, r *http.Requ
 	}
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	pc := cfg.FindTagPack(name)
 	if pc == nil {
+		cfg.Unlock()
 		http.Error(w, "TagPack not found", http.StatusNotFound)
 		return
 	}
 
 	if index < 0 || index >= len(pc.Members) {
+		cfg.Unlock()
 		http.Error(w, "Member index out of range", http.StatusBadRequest)
 		return
 	}
 
 	pc.Members = append(pc.Members[:index], pc.Members[index+1:]...)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1826,19 +1925,23 @@ func (h *Handlers) handleTagPackToggleMemberIgnore(w http.ResponseWriter, r *htt
 	}
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	pc := cfg.FindTagPack(name)
 	if pc == nil {
+		cfg.Unlock()
 		http.Error(w, "TagPack not found", http.StatusNotFound)
 		return
 	}
 
 	if index < 0 || index >= len(pc.Members) {
+		cfg.Unlock()
 		http.Error(w, "Member index out of range", http.StatusBadRequest)
 		return
 	}
 
 	pc.Members[index].IgnoreChanges = !pc.Members[index].IgnoreChanges
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	ignoreChanges := pc.Members[index].IgnoreChanges
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1847,7 +1950,7 @@ func (h *Handlers) handleTagPackToggleMemberIgnore(w http.ResponseWriter, r *htt
 	h.eventHub.BroadcastEntityChange("tagpack", "update", name)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"ignore_changes": pc.Members[index].IgnoreChanges})
+	json.NewEncoder(w).Encode(map[string]bool{"ignore_changes": ignoreChanges})
 }
 
 // --- Trigger CRUD ---
@@ -1901,8 +2004,9 @@ func (h *Handlers) handleTriggerCreate(w http.ResponseWriter, r *http.Request) {
 		PublishPack:  req.PublishPack,
 	}
 
+	cfg.Lock()
 	cfg.AddTrigger(triggerCfg)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1992,8 +2096,9 @@ func (h *Handlers) handleTriggerUpdate(w http.ResponseWriter, r *http.Request) {
 		PublishPack:  req.PublishPack,
 	}
 
+	cfg.Lock()
 	cfg.UpdateTrigger(name, updated)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2013,12 +2118,14 @@ func (h *Handlers) handleTriggerDelete(w http.ResponseWriter, r *http.Request) {
 	name, _ = url.PathUnescape(name)
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	if !cfg.RemoveTrigger(name) {
+		cfg.Unlock()
 		http.Error(w, "Trigger not found", http.StatusNotFound)
 		return
 	}
 
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2060,8 +2167,10 @@ func (h *Handlers) handleTriggerAddTag(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	tc := cfg.FindTrigger(name)
 	if tc == nil {
+		cfg.Unlock()
 		http.Error(w, "Trigger not found", http.StatusNotFound)
 		return
 	}
@@ -2069,13 +2178,14 @@ func (h *Handlers) handleTriggerAddTag(w http.ResponseWriter, r *http.Request) {
 	// Check for duplicate
 	for _, t := range tc.Tags {
 		if t == req.Tag {
+			cfg.Unlock()
 			http.Error(w, "Tag already exists in trigger", http.StatusConflict)
 			return
 		}
 	}
 
 	tc.Tags = append(tc.Tags, req.Tag)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2098,19 +2208,22 @@ func (h *Handlers) handleTriggerRemoveTag(w http.ResponseWriter, r *http.Request
 	}
 
 	cfg := h.managers.GetConfig()
+	cfg.Lock()
 	tc := cfg.FindTrigger(name)
 	if tc == nil {
+		cfg.Unlock()
 		http.Error(w, "Trigger not found", http.StatusNotFound)
 		return
 	}
 
 	if index < 0 || index >= len(tc.Tags) {
+		cfg.Unlock()
 		http.Error(w, "Tag index out of range", http.StatusBadRequest)
 		return
 	}
 
 	tc.Tags = append(tc.Tags[:index], tc.Tags[index+1:]...)
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2210,6 +2323,336 @@ func flattenTagValue(prefix string, m map[string]interface{}, results *[]plcTagE
 		if child, ok := val.(map[string]interface{}); ok {
 			flattenTagValue(path, child, results)
 		}
+	}
+}
+
+// --- Push CRUD ---
+
+type pushRequest struct {
+	Name            string                `json:"name"`
+	Enabled         bool                  `json:"enabled"`
+	Conditions      []config.PushCondition `json:"conditions"`
+	URL             string                `json:"url"`
+	Method          string                `json:"method"`
+	ContentType     string                `json:"content_type"`
+	Headers         map[string]string     `json:"headers,omitempty"`
+	Body            string                `json:"body"`
+	Auth            config.PushAuthConfig `json:"auth"`
+	CooldownMin     string                `json:"cooldown_min"`
+	CooldownPerCond bool                  `json:"cooldown_per_condition"`
+	Timeout         string                `json:"timeout"`
+}
+
+func (h *Handlers) handlePushCreate(w http.ResponseWriter, r *http.Request) {
+	var req pushRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" || req.URL == "" {
+		http.Error(w, "Name and URL are required", http.StatusBadRequest)
+		return
+	}
+
+	cfg := h.managers.GetConfig()
+	if cfg.FindPush(req.Name) != nil {
+		http.Error(w, "Push with this name already exists", http.StatusConflict)
+		return
+	}
+
+	var cooldown time.Duration
+	if req.CooldownMin != "" {
+		if d, err := time.ParseDuration(req.CooldownMin); err == nil {
+			cooldown = d
+		}
+	}
+	var timeout time.Duration
+	if req.Timeout != "" {
+		if d, err := time.ParseDuration(req.Timeout); err == nil {
+			timeout = d
+		}
+	}
+
+	method := req.Method
+	if method == "" {
+		method = "POST"
+	}
+
+	conditions := req.Conditions
+	if conditions == nil {
+		conditions = []config.PushCondition{}
+	}
+
+	pushCfg := config.PushConfig{
+		Name:            req.Name,
+		Enabled:         req.Enabled,
+		Conditions:      conditions,
+		URL:             req.URL,
+		Method:          method,
+		ContentType:     req.ContentType,
+		Headers:         req.Headers,
+		Body:            req.Body,
+		Auth:            req.Auth,
+		CooldownMin:     cooldown,
+		CooldownPerCond: req.CooldownPerCond,
+		Timeout:         timeout,
+	}
+
+	cfg.Lock()
+	cfg.AddPush(pushCfg)
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	pushMgr := h.managers.GetPushMgr()
+	if pushMgr != nil {
+		pc := cfg.FindPush(req.Name)
+		if pc != nil {
+			pushMgr.AddPush(pc)
+			if req.Enabled {
+				pushMgr.StartPush(req.Name)
+			}
+		}
+	}
+
+	h.eventHub.BroadcastEntityChange("push", "add", req.Name)
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (h *Handlers) handlePushGet(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	name, _ = url.PathUnescape(name)
+
+	cfg := h.managers.GetConfig()
+	pc := cfg.FindPush(name)
+	if pc == nil {
+		http.Error(w, "Push not found", http.StatusNotFound)
+		return
+	}
+
+	pushMgr := h.managers.GetPushMgr()
+	var statusStr string
+	var sendCount int64
+	var lastSendStr string
+	var lastHTTPCode int
+	var errStr string
+
+	if pushMgr != nil {
+		pStatus, pErr, count, lastSend, lastCode := pushMgr.GetPushStatus(name)
+		statusStr = pushStatusStr(pStatus)
+		sendCount = count
+		lastHTTPCode = lastCode
+		if !lastSend.IsZero() {
+			lastSendStr = lastSend.Format("2006-01-02 15:04:05")
+		}
+		if pErr != nil {
+			errStr = pErr.Error()
+		}
+	}
+
+	resp := map[string]interface{}{
+		"name":                  pc.Name,
+		"enabled":               pc.Enabled,
+		"conditions":            pc.Conditions,
+		"url":                   pc.URL,
+		"method":                pc.Method,
+		"content_type":          pc.ContentType,
+		"headers":               pc.Headers,
+		"body":                  pc.Body,
+		"cooldown_min":          pc.CooldownMin.String(),
+		"cooldown_per_condition": pc.CooldownPerCond,
+		"timeout":               pc.Timeout.String(),
+		"status":                statusStr,
+		"send_count":            sendCount,
+		"last_http_code":        lastHTTPCode,
+		"auth_type":             string(pc.Auth.Type),
+		"has_token":             pc.Auth.Token != "",
+	}
+	if lastSendStr != "" {
+		resp["last_send"] = lastSendStr
+	}
+	if errStr != "" {
+		resp["error"] = errStr
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handlers) handlePushUpdate(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	name, _ = url.PathUnescape(name)
+
+	var req pushRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	cfg := h.managers.GetConfig()
+	if cfg.FindPush(name) == nil {
+		http.Error(w, "Push not found", http.StatusNotFound)
+		return
+	}
+
+	var cooldown time.Duration
+	if req.CooldownMin != "" {
+		if d, err := time.ParseDuration(req.CooldownMin); err == nil {
+			cooldown = d
+		}
+	}
+	var timeout time.Duration
+	if req.Timeout != "" {
+		if d, err := time.ParseDuration(req.Timeout); err == nil {
+			timeout = d
+		}
+	}
+
+	method := req.Method
+	if method == "" {
+		method = "POST"
+	}
+
+	conditions := req.Conditions
+	if conditions == nil {
+		conditions = []config.PushCondition{}
+	}
+
+	updated := config.PushConfig{
+		Name:            name,
+		Enabled:         req.Enabled,
+		Conditions:      conditions,
+		URL:             req.URL,
+		Method:          method,
+		ContentType:     req.ContentType,
+		Headers:         req.Headers,
+		Body:            req.Body,
+		Auth:            req.Auth,
+		CooldownMin:     cooldown,
+		CooldownPerCond: req.CooldownPerCond,
+		Timeout:         timeout,
+	}
+
+	cfg.Lock()
+	cfg.UpdatePush(name, updated)
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	pushMgr := h.managers.GetPushMgr()
+	if pushMgr != nil {
+		pc := cfg.FindPush(name)
+		if pc != nil {
+			pushMgr.UpdatePush(pc)
+			if req.Enabled {
+				pushMgr.StartPush(name)
+			}
+		}
+	}
+
+	h.eventHub.BroadcastEntityChange("push", "update", name)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handlers) handlePushDelete(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	name, _ = url.PathUnescape(name)
+
+	cfg := h.managers.GetConfig()
+	cfg.Lock()
+	if !cfg.RemovePush(name) {
+		cfg.Unlock()
+		http.Error(w, "Push not found", http.StatusNotFound)
+		return
+	}
+
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
+		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	pushMgr := h.managers.GetPushMgr()
+	if pushMgr != nil {
+		pushMgr.RemovePush(name)
+	}
+
+	h.eventHub.BroadcastEntityChange("push", "remove", name)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handlers) handlePushStart(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	name, _ = url.PathUnescape(name)
+
+	pushMgr := h.managers.GetPushMgr()
+	if pushMgr == nil {
+		http.Error(w, "Push manager not available", http.StatusInternalServerError)
+		return
+	}
+
+	if err := pushMgr.StartPush(name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handlers) handlePushStop(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	name, _ = url.PathUnescape(name)
+
+	pushMgr := h.managers.GetPushMgr()
+	if pushMgr == nil {
+		http.Error(w, "Push manager not available", http.StatusInternalServerError)
+		return
+	}
+
+	pushMgr.StopPush(name)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handlers) handlePushTestFire(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	name, _ = url.PathUnescape(name)
+
+	pushMgr := h.managers.GetPushMgr()
+	if pushMgr == nil {
+		http.Error(w, "Push manager not available", http.StatusInternalServerError)
+		return
+	}
+
+	if err := pushMgr.TestFirePush(name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// handlePushPartial returns the push list partial.
+func (h *Handlers) handlePushPartial(w http.ResponseWriter, r *http.Request) {
+	data := h.getUserInfo(r)
+	data["Pushes"] = h.getPushData()
+	h.renderTemplate(w, "push_table.html", data)
+}
+
+func pushStatusStr(s push.Status) string {
+	switch s {
+	case push.StatusArmed:
+		return "armed"
+	case push.StatusFiring:
+		return "firing"
+	case push.StatusWaitingClear:
+		return "waiting"
+	case push.StatusMinInterval:
+		return "cooldown"
+	case push.StatusError:
+		return "error"
+	default:
+		return "disabled"
 	}
 }
 

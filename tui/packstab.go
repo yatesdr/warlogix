@@ -447,8 +447,9 @@ func (t *PacksTab) showCreateDialog() {
 			Members:       []config.TagPackMember{},
 		}
 
+		t.app.LockConfig()
 		t.app.config.AddTagPack(cfg)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		// Reload pack manager
 		if t.app.packMgr != nil {
@@ -497,12 +498,13 @@ func (t *PacksTab) showAddTagDialog() {
 		}
 
 		// Add member (changes trigger publish by default, IgnoreChanges=false)
+		t.app.LockConfig()
 		cfg.Members = append(cfg.Members, config.TagPackMember{
 			PLC:           plc,
 			Tag:           tag,
 			IgnoreChanges: false,
 		})
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		if t.app.packMgr != nil {
 			t.app.packMgr.Reload()
@@ -536,8 +538,9 @@ func (t *PacksTab) removeSelectedMember() {
 
 	t.app.showConfirm("Remove Tag", fmt.Sprintf("Remove %s:%s from pack?", member.PLC, member.Tag), func() {
 		// Remove member
+		t.app.LockConfig()
 		cfg.Members = append(cfg.Members[:idx], cfg.Members[idx+1:]...)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		if t.app.packMgr != nil {
 			t.app.packMgr.Reload()
@@ -566,8 +569,9 @@ func (t *PacksTab) toggleMemberIgnore() {
 		return
 	}
 
+	t.app.LockConfig()
 	cfg.Members[idx].IgnoreChanges = !cfg.Members[idx].IgnoreChanges
-	t.app.SaveConfig()
+	t.app.UnlockAndSaveConfig()
 
 	if t.app.packMgr != nil {
 		t.app.packMgr.Reload()
@@ -588,8 +592,9 @@ func (t *PacksTab) removeSelected() {
 	}
 
 	t.app.showConfirm("Remove Pack", fmt.Sprintf("Remove pack '%s'?", name), func() {
+		t.app.LockConfig()
 		t.app.config.RemoveTagPack(name)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		if t.app.packMgr != nil {
 			t.app.packMgr.Reload()
@@ -612,8 +617,9 @@ func (t *PacksTab) toggleEnabled() {
 	}
 
 	wasEnabled := cfg.Enabled
+	t.app.LockConfig()
 	cfg.Enabled = !cfg.Enabled
-	t.app.SaveConfig()
+	t.app.UnlockAndSaveConfig()
 
 	if t.app.packMgr != nil {
 		t.app.packMgr.Reload()
@@ -670,12 +676,13 @@ func (t *PacksTab) showEditDialog() {
 			return
 		}
 
+		t.app.LockConfig()
 		cfg.Name = newName
 		cfg.MQTTEnabled = mqttEnabled
 		cfg.KafkaEnabled = kafkaEnabled
 		cfg.ValkeyEnabled = valkeyEnabled
 
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		if t.app.packMgr != nil {
 			t.app.packMgr.Reload()

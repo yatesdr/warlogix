@@ -92,6 +92,7 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add user
+	cfg.Lock()
 	cfg.AddWebUser(config.WebUser{
 		Username:     req.Username,
 		PasswordHash: hash,
@@ -99,7 +100,7 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Save config
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -150,10 +151,11 @@ func (h *Handlers) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 		updated.PasswordHash = hash
 	}
 
+	cfg.Lock()
 	cfg.UpdateWebUser(username, updated)
 
 	// Save config
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -192,13 +194,15 @@ func (h *Handlers) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove user
+	cfg.Lock()
 	if !cfg.RemoveWebUser(username) {
+		cfg.Unlock()
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 
 	// Save config
-	if err := cfg.Save(h.managers.GetConfigPath()); err != nil {
+	if err := cfg.UnlockAndSave(h.managers.GetConfigPath()); err != nil {
 		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

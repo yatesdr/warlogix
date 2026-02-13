@@ -424,9 +424,13 @@ function updateFamilyFields() {
     var family = document.getElementById('edit-family').value;
     document.getElementById('beckhoff-fields').style.display = family === 'beckhoff' ? 'block' : 'none';
     document.getElementById('omron-fields').style.display = family === 'omron' ? 'block' : 'none';
+    updateDiscoverTagsVisibility('edit');
 }
 
 document.getElementById('edit-family').addEventListener('change', updateFamilyFields);
+document.getElementById('edit-protocol').addEventListener('change', function() {
+    updateDiscoverTagsVisibility('edit');
+});
 
 function savePLC(e) {
     e.preventDefault();
@@ -499,7 +503,12 @@ function updateAddFamilyFields() {
     var family = document.getElementById('add-family').value;
     document.getElementById('add-beckhoff-fields').style.display = family === 'beckhoff' ? 'block' : 'none';
     document.getElementById('add-omron-fields').style.display = family === 'omron' ? 'block' : 'none';
+    updateDiscoverTagsVisibility('add');
 }
+
+document.getElementById('add-protocol').addEventListener('change', function() {
+    updateDiscoverTagsVisibility('add');
+});
 
 function addPLC(e) {
     e.preventDefault();
@@ -729,6 +738,31 @@ function addFromDetected(ip, family, productName, amsNetId) {
     updateAddFamilyFields();
     hideDetectModal();
     document.getElementById('plc-add-modal').style.display = 'flex';
+}
+
+// Show/hide the "Auto-discover Tags" checkbox based on family/protocol.
+// S7: always hide and uncheck (no tag discovery support)
+// Omron FINS: hide and uncheck (FINS doesn't support discovery)
+// Omron EIP, Logix, Micro800, Beckhoff: show
+function updateDiscoverTagsVisibility(prefix) {
+    var family = document.getElementById(prefix + '-family').value;
+    var discoverGroup = document.getElementById(prefix + '-discover-tags').closest('.form-group');
+    var discoverCheck = document.getElementById(prefix + '-discover-tags');
+
+    if (family === 's7') {
+        discoverGroup.style.display = 'none';
+        discoverCheck.checked = false;
+    } else if (family === 'omron') {
+        var protocol = document.getElementById(prefix + '-protocol').value;
+        if (protocol === 'fins') {
+            discoverGroup.style.display = 'none';
+            discoverCheck.checked = false;
+        } else {
+            discoverGroup.style.display = '';
+        }
+    } else {
+        discoverGroup.style.display = '';
+    }
 }
 
 function escapeHtml(text) {

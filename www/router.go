@@ -13,6 +13,7 @@ import (
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
+	"warlink/push"
 	"warlink/tagpack"
 	"warlink/trigger"
 	"warlink/valkey"
@@ -27,25 +28,33 @@ type Managers interface {
 	GetValkeyMgr() *valkey.Manager
 	GetKafkaMgr() *kafka.Manager
 	GetTriggerMgr() *trigger.Manager
+	GetPushMgr() *push.Manager
 	GetPackMgr() *tagpack.Manager
+}
+
+// WebServer provides methods to control the web server from handlers.
+type WebServer interface {
+	ClearUnsecuredDeadline()
 }
 
 // Handlers holds all HTTP handlers for the web UI.
 type Handlers struct {
-	cfg      *config.WebUIConfig
-	managers Managers
-	sessions *sessionStore
-	tmpl     *template.Template
-	eventHub *EventHub
+	cfg       *config.WebUIConfig
+	managers  Managers
+	webServer WebServer
+	sessions  *sessionStore
+	tmpl      *template.Template
+	eventHub  *EventHub
 }
 
 // newHandlers creates a new handlers instance.
-func newHandlers(cfg *config.WebUIConfig, managers Managers) *Handlers {
+func newHandlers(cfg *config.WebUIConfig, managers Managers, ws WebServer) *Handlers {
 	h := &Handlers{
-		cfg:      cfg,
-		managers: managers,
-		sessions: newSessionStore(cfg.SessionSecret),
-		eventHub: newEventHub(),
+		cfg:       cfg,
+		managers:  managers,
+		webServer: ws,
+		sessions:  newSessionStore(cfg.SessionSecret),
+		eventHub:  newEventHub(),
 	}
 
 	// Parse templates
@@ -72,8 +81,8 @@ func newHandlers(cfg *config.WebUIConfig, managers Managers) *Handlers {
 }
 
 // NewRouter creates the web UI router.
-func NewRouter(cfg *config.WebUIConfig, managers Managers) chi.Router {
-	h := newHandlers(cfg, managers)
+func NewRouter(cfg *config.WebUIConfig, managers Managers, ws WebServer) chi.Router {
+	h := newHandlers(cfg, managers, ws)
 
 	r := chi.NewRouter()
 
@@ -81,10 +90,22 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers) chi.Router {
 	staticSub, _ := fs.Sub(staticFS, "static")
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
+	// Setup (public — only functional when no users exist)
+	r.Get("/setup", h.handleSetupPage)
+	r.Post("/setup", h.handleSetupSubmit)
+
 	// Login/logout (public)
 	r.Get("/login", h.handleLoginPage)
 	r.Post("/login", h.handleLoginSubmit)
 	r.Post("/logout", h.handleLogout)
+
+	// Change password (requires session but exempt from MustChangePassword redirect)
+	r.Get("/change-password", h.handleChangePasswordPage)
+	r.Post("/change-password", h.handleChangePasswordSubmit)
+
+	// Namespace setup (requires session but exempt from namespace redirect)
+	r.Get("/setup-namespace", h.handleSetupNamespacePage)
+	r.Post("/setup-namespace", h.handleSetupNamespaceSubmit)
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -99,6 +120,7 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers) chi.Router {
 		r.Get("/republisher", h.handleRepublisherPage)
 		r.Get("/tagpacks", h.handleTagPacksPage)
 		r.Get("/triggers", h.handleTriggersPage)
+		r.Get("/push", h.handlePushPage)
 		r.Get("/rest", h.handleRESTPage)
 		r.Get("/mqtt", h.handleMQTTPage)
 		r.Get("/valkey", h.handleValkeyPage)
@@ -113,6 +135,7 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers) chi.Router {
 		r.Get("/htmx/kafka", h.handleKafkaPartial)
 		r.Get("/htmx/tagpacks", h.handleTagPacksPartial)
 		r.Get("/htmx/triggers", h.handleTriggersPartial)
+		r.Get("/htmx/push", h.handlePushPartial)
 		r.Get("/htmx/debug", h.handleDebugPartial)
 
 		// Actions (admin only)
@@ -176,9 +199,21 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers) chi.Router {
 			r.Post("/htmx/triggers/{name}/tags", h.handleTriggerAddTag)
 			r.Delete("/htmx/triggers/{name}/tags/{index}", h.handleTriggerRemoveTag)
 
+			// Push actions
+			r.Post("/htmx/push", h.handlePushCreate)
+			r.Get("/htmx/push/{name}", h.handlePushGet)
+			r.Put("/htmx/push/{name}", h.handlePushUpdate)
+			r.Delete("/htmx/push/{name}", h.handlePushDelete)
+			r.Post("/htmx/push/{name}/start", h.handlePushStart)
+			r.Post("/htmx/push/{name}/stop", h.handlePushStop)
+			r.Post("/htmx/push/{name}/test", h.handlePushTestFire)
+
 			// Tag picker data
 			r.Get("/htmx/available-tags", h.handleAvailableTags)
 			r.Get("/htmx/plc-tags/{plc}", h.handlePLCTags)
+
+			// Web server config actions
+			r.Post("/htmx/api-toggle", h.handleAPIToggle)
 
 			// Debug actions
 			r.Post("/htmx/debug/clear", h.handleDebugClear)
@@ -208,9 +243,20 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers) chi.Router {
 	return r
 }
 
-// authMiddleware checks if the user is authenticated.
+// authMiddleware checks if the user is authenticated and enforces password change and namespace setup.
 func (h *Handlers) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// If no users exist, redirect to setup
+		if len(h.managers.GetConfig().Web.UI.Users) == 0 {
+			if r.Header.Get("HX-Request") == "true" {
+				w.Header().Set("HX-Redirect", "/setup")
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			http.Redirect(w, r, "/setup", http.StatusSeeOther)
+			return
+		}
+
 		username, _, ok := h.sessions.getUser(r)
 		if !ok || username == "" {
 			// Check if this is an htmx request
@@ -224,7 +270,9 @@ func (h *Handlers) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Verify user still exists in config
-		if h.managers.GetConfig().FindWebUser(username) == nil {
+		cfg := h.managers.GetConfig()
+		user := cfg.FindWebUser(username)
+		if user == nil {
 			h.sessions.clear(w, r)
 			if r.Header.Get("HX-Request") == "true" {
 				w.Header().Set("HX-Redirect", "/login")
@@ -233,6 +281,29 @@ func (h *Handlers) authMiddleware(next http.Handler) http.Handler {
 			}
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
+		}
+
+		// Force password change if required
+		if user.MustChangePassword {
+			path := r.URL.Path
+			if path != "/change-password" && path != "/logout" && !strings.HasPrefix(path, "/static/") {
+				http.Redirect(w, r, "/change-password", http.StatusSeeOther)
+				return
+			}
+		}
+
+		// Force namespace setup if empty
+		if cfg.Namespace == "" {
+			path := r.URL.Path
+			if path != "/setup-namespace" && path != "/logout" && !strings.HasPrefix(path, "/static/") {
+				if r.Header.Get("HX-Request") == "true" {
+					w.Header().Set("HX-Redirect", "/setup-namespace")
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				http.Redirect(w, r, "/setup-namespace", http.StatusSeeOther)
+				return
+			}
 		}
 
 		next.ServeHTTP(w, r)

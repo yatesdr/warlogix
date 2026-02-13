@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WarLink - Namespace Setup</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="login-body">
+    <div class="login-container">
+        <div class="login-card">
+            <h1>WarLink</h1>
+            {{if .IsAdmin}}
+            <p class="login-subtitle">A namespace is required to run WarLink.</p>
+            <p class="login-hint">The namespace isolates this instance's data when publishing to MQTT, Kafka, or Valkey.<br>
+            Examples: plant-floor-1, factory-east, packaging-line</p>
+
+            {{if .Error}}
+            <div class="alert alert-error">{{.Error}}</div>
+            {{end}}
+
+            <form action="/setup-namespace" method="post" class="login-form">
+                <div class="form-group">
+                    <label for="namespace">Namespace</label>
+                    <input type="text" id="namespace" name="namespace" value="{{.Namespace}}" required autofocus placeholder="my-plant">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Save Namespace</button>
+            </form>
+            {{else}}
+            <p class="login-subtitle">An administrator must configure the namespace before you can continue.</p>
+            {{end}}
+        </div>
+    </div>
+</body>
+</html>

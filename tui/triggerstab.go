@@ -465,8 +465,9 @@ func (t *TriggersTab) showAddDialog() {
 			Metadata:     make(map[string]string),
 		}
 
+		t.app.LockConfig()
 		t.app.config.AddTrigger(cfg)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		if err := t.app.triggerMgr.AddTrigger(&cfg); err != nil {
 			t.app.showError("Error", fmt.Sprintf("Failed to add trigger: %v", err))
@@ -696,8 +697,9 @@ func (t *TriggersTab) showEditDialog() {
 			Metadata:     cfg.Metadata,
 		}
 
+		t.app.LockConfig()
 		t.app.config.UpdateTrigger(originalName, updated)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		t.app.triggerMgr.RemoveTrigger(originalName)
 		if err := t.app.triggerMgr.AddTrigger(&updated); err != nil {
@@ -753,16 +755,18 @@ func (t *TriggersTab) showAddDataTagDialog() {
 		ExcludeTags:  excludeTags,
 		ExcludePacks: excludePacks,
 		OnSelectTag: func(plc, tag string) {
+			t.app.LockConfig()
 			cfg.Tags = append(cfg.Tags, tag)
-			t.app.SaveConfig()
+			t.app.UnlockAndSaveConfig()
 			t.app.triggerMgr.UpdateTrigger(cfg)
 			t.updateDataTagsList()
 			t.app.setStatus(fmt.Sprintf("Added: %s", tag))
 			t.app.app.SetFocus(t.dataTable)
 		},
 		OnSelectPack: func(packName string) {
+			t.app.LockConfig()
 			cfg.Tags = append(cfg.Tags, "pack:"+packName)
-			t.app.SaveConfig()
+			t.app.UnlockAndSaveConfig()
 			t.app.triggerMgr.UpdateTrigger(cfg)
 			t.updateDataTagsList()
 			t.app.setStatus(fmt.Sprintf("Added pack: %s", packName))
@@ -795,8 +799,9 @@ func (t *TriggersTab) confirmRemoveDataTag() {
 
 	t.app.showConfirm("Remove Tag", fmt.Sprintf("Remove %s?", displayName), func() {
 		// Remove from config
+		t.app.LockConfig()
 		cfg.Tags = append(cfg.Tags[:idx], cfg.Tags[idx+1:]...)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		// Update trigger manager
 		t.app.triggerMgr.UpdateTrigger(cfg)
@@ -815,8 +820,9 @@ func (t *TriggersTab) confirmRemoveTrigger() {
 	t.app.showConfirm("Remove Trigger", fmt.Sprintf("Remove %s?", name), func() {
 		t.app.triggerMgr.StopTrigger(name)
 		t.app.triggerMgr.RemoveTrigger(name)
+		t.app.LockConfig()
 		t.app.config.RemoveTrigger(name)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Removed trigger: %s", name))
 	})
@@ -835,8 +841,9 @@ func (t *TriggersTab) toggleSelected() {
 
 	if cfg.Enabled {
 		// Stop the trigger
+		t.app.LockConfig()
 		cfg.Enabled = false
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 		if err := t.app.triggerMgr.StopTrigger(name); err != nil {
 			t.app.setStatus(fmt.Sprintf("Failed to stop: %v", err))
 			return
@@ -845,8 +852,9 @@ func (t *TriggersTab) toggleSelected() {
 		t.app.setStatus(fmt.Sprintf("Stopped trigger: %s", name))
 	} else {
 		// Start the trigger
+		t.app.LockConfig()
 		cfg.Enabled = true
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 		if err := t.app.triggerMgr.StartTrigger(name); err != nil {
 			t.app.setStatus(fmt.Sprintf("Failed to start: %v", err))
 			return

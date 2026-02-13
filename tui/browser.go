@@ -506,8 +506,10 @@ func (t *BrowserTab) autoPopulateIgnoreList(tagName string, typeCode uint16) {
 	}
 
 	// Add volatile members to the ignore list in config
+	t.app.config.Lock()
 	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg == nil {
+		t.app.config.Unlock()
 		return
 	}
 
@@ -526,8 +528,8 @@ func (t *BrowserTab) autoPopulateIgnoreList(tagName string, typeCode uint16) {
 		}
 	}
 
-	// Save config
-	t.app.SaveConfig()
+	// Save config (unlocks internally)
+	t.app.config.UnlockAndSave(t.app.configPath)
 
 	// Notify user
 	if len(volatileMembers) == 1 {
@@ -588,8 +590,10 @@ func (t *BrowserTab) toggleNodeIgnore(node *tview.TreeNode) {
 		return
 	}
 
+	t.app.config.Lock()
 	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg == nil {
+		t.app.config.Unlock()
 		return
 	}
 
@@ -603,6 +607,7 @@ func (t *BrowserTab) toggleNodeIgnore(node *tview.TreeNode) {
 	}
 
 	if tagSel == nil {
+		t.app.config.Unlock()
 		// Parent tag not in config - the UDT hasn't been enabled yet
 		t.app.setStatus("Enable the parent tag first to configure ignore list")
 		return
@@ -622,8 +627,8 @@ func (t *BrowserTab) toggleNodeIgnore(node *tview.TreeNode) {
 	}
 	t.ignoredMembers[parentTag][memberName] = !wasIgnored
 
-	// Save config
-	t.app.SaveConfig()
+	// Save config (unlocks internally)
+	t.app.config.UnlockAndSave(t.app.configPath)
 
 	// Update node text
 	enabled := t.enabledTags[tagPath]
@@ -770,8 +775,10 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *driver.TagInfo, e
 }
 
 func (t *BrowserTab) updateConfigTag(tagName string, enabled, writable bool) {
+	t.app.config.Lock()
 	plc := t.app.config.FindPLC(t.selectedPLC)
 	if plc == nil {
+		t.app.config.Unlock()
 		return
 	}
 
@@ -794,7 +801,7 @@ func (t *BrowserTab) updateConfigTag(tagName string, enabled, writable bool) {
 		})
 	}
 
-	t.app.SaveConfig()
+	t.app.config.UnlockAndSave(t.app.configPath)
 }
 
 func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
@@ -1332,7 +1339,7 @@ func (t *BrowserTab) RefreshTheme() {
 	ApplyTreeViewTheme(t.tree)
 	// Update tree root color
 	t.treeRoot.SetColor(th.Accent).SetSelectedTextStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
-	t.loadTags() // Refresh tree nodes with new theme colors
+	t.loadTagsPreserveState() // Refresh tree nodes with new theme colors
 }
 
 // ReloadConfigState reloads the enabled/writable/ignored state from config.
@@ -1344,8 +1351,11 @@ func (t *BrowserTab) ReloadConfigState() {
 		return
 	}
 
+	// Lock config during read to prevent races with HTTP handler writes
+	t.app.config.Lock()
 	cfg := t.app.config.FindPLC(t.selectedPLC)
 	if cfg == nil {
+		t.app.config.Unlock()
 		return
 	}
 
@@ -1399,6 +1409,7 @@ func (t *BrowserTab) ReloadConfigState() {
 			changes = append(changes, tagChange{name: sel.Name, ignoreChanged: ignoreChanged})
 		}
 	}
+	t.app.config.Unlock()
 
 	if len(changes) == 0 {
 		return
@@ -1485,7 +1496,7 @@ func (t *BrowserTab) Refresh() {
 	if t.selectedPLC != "" && selectedIdx >= 0 {
 		if selectedPLCStatus == plcman.StatusConnected && t.lastConnectionStatus != plcman.StatusConnected {
 			t.lastConnectionStatus = selectedPLCStatus
-			t.loadTags()
+			t.loadTagsPreserveState()
 			return
 		}
 		t.lastConnectionStatus = selectedPLCStatus
@@ -1496,7 +1507,7 @@ func (t *BrowserTab) Refresh() {
 				gen := plc.GetManualTagGen()
 				if gen != t.lastManualTagGen {
 					t.lastManualTagGen = gen
-					t.loadTags()
+					t.loadTagsPreserveState()
 					return
 				}
 			}
@@ -1566,6 +1577,57 @@ func (t *BrowserTab) clearTree() {
 	t.ignoredMembers = make(map[string]map[string]bool)
 	t.details.SetText("")
 	t.statusBar.SetText(" No PLC selected")
+}
+
+// loadTagsPreserveState rebuilds the tag tree while preserving cursor position
+// and section expansion state. Used by Refresh() to avoid UX disruption.
+func (t *BrowserTab) loadTagsPreserveState() {
+	// Save cursor position
+	var cursorTagName string
+	if cur := t.tree.GetCurrentNode(); cur != nil {
+		if ref := cur.GetReference(); ref != nil {
+			if tagInfo, ok := ref.(*driver.TagInfo); ok {
+				cursorTagName = tagInfo.Name
+			}
+		}
+	}
+
+	// Save which section nodes are collapsed (they default to expanded)
+	collapsedSections := make(map[string]bool)
+	for _, section := range t.treeRoot.GetChildren() {
+		if !section.IsExpanded() {
+			collapsedSections[section.GetText()] = true
+		}
+	}
+
+	t.loadTags()
+
+	// Restore section collapse state
+	for _, section := range t.treeRoot.GetChildren() {
+		if collapsedSections[section.GetText()] {
+			section.SetExpanded(false)
+		}
+	}
+
+	// Restore cursor position (fall back to parent if child was filtered out)
+	if cursorTagName != "" {
+		if node, ok := t.tagNodes[cursorTagName]; ok {
+			t.tree.SetCurrentNode(node)
+		} else {
+			// Try parent tag (e.g., "Access_Card" for "Access_Card.Card_Number")
+			for name := cursorTagName; ; {
+				dot := strings.LastIndex(name, ".")
+				if dot < 0 {
+					break
+				}
+				name = name[:dot]
+				if node, ok := t.tagNodes[name]; ok {
+					t.tree.SetCurrentNode(node)
+					break
+				}
+			}
+		}
+	}
 }
 
 func (t *BrowserTab) loadTags() {
@@ -2101,12 +2163,13 @@ func (t *BrowserTab) showServicesDialog(node *tview.TreeNode) {
 
 	form.AddButton("Save", func() {
 		// Update config with inverted values
+		t.app.config.Lock()
 		sel.NoREST = !restEnabled
 		sel.NoMQTT = !mqttEnabled
 		sel.NoKafka = !kafkaEnabled
 		sel.NoValkey = !valkeyEnabled
 
-		t.app.SaveConfig()
+		t.app.config.UnlockAndSave(t.app.configPath)
 		t.app.pages.RemovePage(pageName)
 		t.app.app.SetFocus(t.tree)
 
@@ -2237,10 +2300,12 @@ func (t *BrowserTab) showAddTagDialog() {
 		}
 
 		// Check for duplicate
+		t.app.config.Lock()
 		cfg := t.app.config.FindPLC(t.selectedPLC)
 		if cfg != nil {
 			for _, tag := range cfg.Tags {
 				if tag.Name == tagName {
+					t.app.config.Unlock()
 					t.app.showErrorWithFocus("Error", "Tag already exists: "+tagName, form)
 					return
 				}
@@ -2255,10 +2320,12 @@ func (t *BrowserTab) showAddTagDialog() {
 				Writable: writable,
 			})
 
-			t.app.SaveConfig()
+			t.app.config.UnlockAndSave(t.app.configPath)
 
 			// Refresh manual tags in manager
 			t.app.manager.RefreshManualTags(t.selectedPLC)
+		} else {
+			t.app.config.Unlock()
 		}
 
 		t.app.closeModal(pageName)
@@ -2404,12 +2471,13 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 		}
 
 		// Update the tag
+		t.app.config.Lock()
 		cfg.Tags[tagIdx].Name = tagName
 		cfg.Tags[tagIdx].DataType = typeOptions[typeIdx]
 		cfg.Tags[tagIdx].Alias = alias
 		cfg.Tags[tagIdx].Writable = writable
 
-		t.app.SaveConfig()
+		t.app.config.UnlockAndSave(t.app.configPath)
 
 		// Refresh manual tags in manager
 		t.app.manager.RefreshManualTags(t.selectedPLC)
@@ -2506,6 +2574,7 @@ func (t *BrowserTab) deleteManualTag(node *tview.TreeNode) {
 	tagName := tagInfo.Name
 
 	t.app.showConfirm("Delete Tag", fmt.Sprintf("Delete tag %s?", tagName), func() {
+		t.app.config.Lock()
 		cfg := t.app.config.FindPLC(t.selectedPLC)
 		if cfg != nil {
 			// Remove from config
@@ -2515,10 +2584,12 @@ func (t *BrowserTab) deleteManualTag(node *tview.TreeNode) {
 					break
 				}
 			}
-			t.app.SaveConfig()
+			t.app.config.UnlockAndSave(t.app.configPath)
 
 			// Refresh manual tags in manager
 			t.app.manager.RefreshManualTags(t.selectedPLC)
+		} else {
+			t.app.config.Unlock()
 		}
 
 		t.loadTags()

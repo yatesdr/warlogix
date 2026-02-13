@@ -49,9 +49,8 @@
                             {{if .HasIgnores}}<span class="indicator indicator-ignore" title="Has {{.IgnoreCount}} ignored members">I</span>{{end}}
                             {{if .Writable}}<span class="indicator indicator-write" title="Writable">W</span>{{end}}
                         </span>
-                        <label class="publish-toggle" onclick="event.stopPropagation()" title="Toggle publishing">
+                        <label class="publish-checkbox" onclick="event.stopPropagation()" title="Toggle publishing">
                             <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="quickTogglePublish(this)">
-                            <span class="publish-slider"></span>
                         </label>
                         <span class="tag-name" title="{{.Name}}">{{.TreeDisplay}}</span>
                         {{if not .IsStruct}}<span class="tag-value">{{.Value}}</span>{{end}}

@@ -7,15 +7,26 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlink/api"
 	"warlink/config"
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
+	"warlink/push"
 	"warlink/tagpack"
 	"warlink/trigger"
 	"warlink/valkey"
 )
+
+// WebServer is the interface for the web server used by the TUI.
+// This avoids importing warlink/web directly, which would create an import cycle
+// (tui → web → www → tui).
+type WebServer interface {
+	Start() error
+	Stop() error
+	IsRunning() bool
+	Address() string
+	Reload(cfg *config.WebConfig)
+}
 
 // App is the main TUI application.
 type App struct {
@@ -34,12 +45,14 @@ type App struct {
 	valkeyTab   *ValkeyTab
 	kafkaTab    *KafkaTab
 	triggersTab *TriggersTab
+	pushTab     *PushTab
 	debugTab    *DebugTab
 
 	packMgr *tagpack.Manager
+	pushMgr *push.Manager
 
 	manager    *plcman.Manager
-	apiServer  *api.Server
+	webServer  WebServer
 	mqttMgr    *mqtt.Manager
 	valkeyMgr  *valkey.Manager
 	kafkaMgr   *kafka.Manager
@@ -65,7 +78,7 @@ type App struct {
 }
 
 // NewApp creates a new TUI application.
-func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager) *App {
+func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, webServer WebServer, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager) *App {
 	// Auto-detect ASCII mode based on locale, then allow config override
 	AutoDetectAndEnableASCIIMode()
 
@@ -82,12 +95,12 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiS
 		config:     cfg,
 		configPath: configPath,
 		manager:    manager,
-		apiServer:  apiServer,
+		webServer:  webServer,
 		mqttMgr:    mqttMgr,
 		valkeyMgr:  valkeyMgr,
 		kafkaMgr:   kafkaMgr,
 		triggerMgr: triggerMgr,
-		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabREST, TabMQTT, TabValkey, TabKafka, TabDebug},
+		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 	}
 
@@ -97,7 +110,7 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, apiS
 
 // NewAppWithScreen creates a TUI application that uses the provided tcell.Screen.
 // This is used for daemon mode where the TUI runs on a PTY.
-func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Manager, apiServer *api.Server, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, screen tcell.Screen) *App {
+func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Manager, webServer WebServer, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, screen tcell.Screen) *App {
 	// Auto-detect ASCII mode based on locale, then allow config override
 	AutoDetectAndEnableASCIIMode()
 
@@ -114,12 +127,12 @@ func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Man
 		config:     cfg,
 		configPath: configPath,
 		manager:    manager,
-		apiServer:  apiServer,
+		webServer:  webServer,
 		mqttMgr:    mqttMgr,
 		valkeyMgr:  valkeyMgr,
 		kafkaMgr:   kafkaMgr,
 		triggerMgr: triggerMgr,
-		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabREST, TabMQTT, TabValkey, TabKafka, TabDebug},
+		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 		daemonMode: true,
 	}
@@ -135,11 +148,12 @@ type SharedManagers interface {
 	GetConfig() *config.Config
 	GetConfigPath() string
 	GetPLCMan() *plcman.Manager
-	GetAPIServer() *api.Server
+	GetWebServer() WebServer
 	GetMQTTMgr() *mqtt.Manager
 	GetValkeyMgr() *valkey.Manager
 	GetKafkaMgr() *kafka.Manager
 	GetTriggerMgr() *trigger.Manager
+	GetPushMgr() *push.Manager
 	GetPackMgr() *tagpack.Manager
 }
 
@@ -166,13 +180,14 @@ func NewAppWithSharedBackend(screen tcell.Screen, managers SharedManagers) (*App
 		config:     cfg,
 		configPath: managers.GetConfigPath(),
 		manager:    managers.GetPLCMan(),
-		apiServer:  managers.GetAPIServer(),
+		webServer:  managers.GetWebServer(),
 		mqttMgr:    managers.GetMQTTMgr(),
 		valkeyMgr:  managers.GetValkeyMgr(),
 		kafkaMgr:   managers.GetKafkaMgr(),
 		triggerMgr: managers.GetTriggerMgr(),
+		pushMgr:    managers.GetPushMgr(),
 		packMgr:    managers.GetPackMgr(),
-		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabREST, TabMQTT, TabValkey, TabKafka, TabDebug},
+		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 		daemonMode: true,
 	}
@@ -212,6 +227,15 @@ func (a *App) registerListeners() {
 	// Register for config changes to sync state across sessions
 	a.configListenerID = a.config.AddOnChangeListener(func() {
 		a.app.QueueUpdateDraw(func() {
+			// Dismiss mandatory namespace modal if namespace was set externally
+			if a.config.Namespace != "" {
+				frontPage, _ := a.pages.GetFrontPage()
+				if frontPage == "mandatory-namespace" {
+					a.closeModal("mandatory-namespace")
+					a.updateNamespaceIndicator()
+				}
+			}
+
 			if a.browserTab != nil {
 				a.browserTab.ReloadConfigState()
 			}
@@ -308,6 +332,7 @@ func (a *App) setupUI() {
 	a.valkeyTab = NewValkeyTab(a)
 	a.kafkaTab = NewKafkaTab(a)
 	a.triggersTab = NewTriggersTab(a)
+	a.pushTab = NewPushTab(a)
 	a.debugTab = NewDebugTab(a)
 
 	// Add pages
@@ -315,7 +340,8 @@ func (a *App) setupUI() {
 	a.pages.AddPage(TabBrowser, a.browserTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabPacks, a.packsTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabTriggers, a.triggersTab.GetPrimitive(), true, false)
-	a.pages.AddPage(TabREST, a.restTab.GetPrimitive(), true, false)
+	a.pages.AddPage(TabPush, a.pushTab.GetPrimitive(), true, false)
+	a.pages.AddPage(TabWeb, a.restTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabMQTT, a.mqttTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabValkey, a.valkeyTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabKafka, a.kafkaTab.GetPrimitive(), true, false)
@@ -363,7 +389,7 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	frontPage, _ := a.pages.GetFrontPage()
 
 	// List of known tab pages - anything else is considered a modal
-	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabPacks || frontPage == TabTriggers || frontPage == TabREST || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabKafka || frontPage == TabDebug
+	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabPacks || frontPage == TabTriggers || frontPage == TabPush || frontPage == TabWeb || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabKafka || frontPage == TabDebug
 
 	// Don't intercept keys (including Shift-Q) when a modal/form is open
 	if !isMainTab {
@@ -411,8 +437,9 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		// Refresh all tabs to apply new theme colors
 		a.refreshAllThemes()
 		// Save theme preference to config
+		a.LockConfig()
 		a.config.UI.Theme = themeName
-		a.SaveConfig()
+		a.UnlockAndSaveConfig()
 		// Force full redraw to apply theme changes
 		a.app.Sync()
 		return nil
@@ -438,20 +465,23 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'G': // triGGers
 		a.switchToTab(3)
 		return nil
-	case 'E': // rEst/Endpoint
+	case 'U': // pUsh
 		a.switchToTab(4)
 		return nil
-	case 'M': // MQTT
+	case 'E': // wEb
 		a.switchToTab(5)
 		return nil
-	case 'V': // Valkey
+	case 'M': // MQTT
 		a.switchToTab(6)
 		return nil
-	case 'K': // Kafka
+	case 'V': // Valkey
 		a.switchToTab(7)
 		return nil
-	case 'D': // Debug
+	case 'K': // Kafka
 		a.switchToTab(8)
+		return nil
+	case 'D': // Debug
+		a.switchToTab(9)
 		return nil
 	}
 
@@ -482,14 +512,16 @@ func (a *App) focusCurrentTab() {
 	case 3:
 		a.app.SetFocus(a.triggersTab.GetFocusable())
 	case 4:
-		a.app.SetFocus(a.restTab.GetFocusable())
+		a.app.SetFocus(a.pushTab.GetFocusable())
 	case 5:
-		a.app.SetFocus(a.mqttTab.GetFocusable())
+		a.app.SetFocus(a.restTab.GetFocusable())
 	case 6:
-		a.app.SetFocus(a.valkeyTab.GetFocusable())
+		a.app.SetFocus(a.mqttTab.GetFocusable())
 	case 7:
-		a.app.SetFocus(a.kafkaTab.GetFocusable())
+		a.app.SetFocus(a.valkeyTab.GetFocusable())
 	case 8:
+		a.app.SetFocus(a.kafkaTab.GetFocusable())
+	case 9:
 		a.app.SetFocus(a.debugTab.GetFocusable())
 	}
 }
@@ -508,7 +540,8 @@ func (a *App) updateTabsDisplay() {
 		{"Repu", "B", "lisher"},    // Republisher
 		{"", "T", "agPacks"},       // TagPacks
 		{"Tri", "G", "gers"},       // Triggers
-		{"R", "E", "ST"},           // REST
+		{"P", "U", "sh"},           // Push
+		{"W", "E", "b"},            // Web
 		{"", "M", "QTT"},           // MQTT
 		{"", "V", "alkey"},         // Valkey
 		{"", "K", "afka"},          // Kafka
@@ -518,8 +551,8 @@ func (a *App) updateTabsDisplay() {
 	text := ""
 	for i, name := range a.tabNames {
 		if i > 0 {
-			// Use diamond separator between PLC-side tabs (Triggers) and Services (REST)
-			if name == TabREST {
+			// Use diamond separator between PLC-side tabs (Triggers) and Services (Web)
+			if name == TabWeb { // Diamond separator between PLC-side tabs and Services
 				text += th.TagTextDim + "  │ " + th.TagAccent + "◆" + th.TagTextDim + " │  " + th.TagReset
 			} else {
 				text += th.TagTextDim + "  │  " + th.TagReset
@@ -640,8 +673,9 @@ func (a *App) showNamespaceModal() {
 		}
 
 		// Update config and save
+		a.LockConfig()
 		a.config.Namespace = ns
-		if err := a.SaveConfig(); err != nil {
+		if err := a.UnlockAndSaveConfig(); err != nil {
 			statusText.SetText(CurrentTheme.TagError + "Save failed: " + err.Error() + CurrentTheme.TagReset)
 			return
 		}
@@ -725,8 +759,9 @@ Examples: plant-floor-1, factory-east, packaging-line` + CurrentTheme.TagReset)
 		}
 
 		// Update config and save
+		a.LockConfig()
 		a.config.Namespace = ns
-		if err := a.SaveConfig(); err != nil {
+		if err := a.UnlockAndSaveConfig(); err != nil {
 			statusText.SetText(CurrentTheme.TagError + "Save failed: " + err.Error() + CurrentTheme.TagReset)
 			return
 		}
@@ -799,9 +834,24 @@ func (a *App) showConfirm(title, message string, onConfirm func()) {
 	a.pages.AddPage("confirm", modal, true, true)
 }
 
-// SaveConfig saves the current configuration.
+// SaveConfig saves the current configuration (self-locking).
 func (a *App) SaveConfig() error {
 	return a.config.Save(a.configPath)
+}
+
+// LockConfig acquires the config data mutex.
+func (a *App) LockConfig() {
+	a.config.Lock()
+}
+
+// UnlockConfig releases the config data mutex without saving.
+func (a *App) UnlockConfig() {
+	a.config.Unlock()
+}
+
+// UnlockAndSaveConfig marshals under lock, then unlocks and writes to disk.
+func (a *App) UnlockAndSaveConfig() error {
+	return a.config.UnlockAndSave(a.configPath)
 }
 
 // Run starts the TUI application.
@@ -820,6 +870,30 @@ func (a *App) Run() error {
 		a.manager.SetOnLog(func(format string, args ...interface{}) {
 			DebugLog(format, args...)
 		})
+
+		// Listen for config changes from external sources (e.g. web UI)
+		a.configListenerID = a.config.AddOnChangeListener(func() {
+			a.app.QueueUpdateDraw(func() {
+				// Dismiss mandatory namespace modal if namespace was set externally
+				if a.config.Namespace != "" {
+					frontPage, _ := a.pages.GetFrontPage()
+					if frontPage == "mandatory-namespace" {
+						a.closeModal("mandatory-namespace")
+						a.updateNamespaceIndicator()
+					}
+				}
+
+				// Surgically update tag tree (preserves cursor & expansion)
+				if a.browserTab != nil {
+					a.browserTab.ReloadConfigState()
+				}
+
+				// Refresh config-driven tabs
+				if a.restTab != nil {
+					a.restTab.Refresh()
+				}
+			})
+		})
 	}
 
 	// Refresh all tabs to reflect current state after auto-connect/auto-start
@@ -829,6 +903,7 @@ func (a *App) Run() error {
 	a.valkeyTab.Refresh()
 	a.kafkaTab.Refresh()
 	a.triggersTab.Refresh()
+	a.pushTab.Refresh()
 	a.restTab.Refresh()
 
 	// Start periodic refresh goroutine for MQTT, Valkey, and Debug tabs
@@ -855,9 +930,9 @@ func (a *App) periodicRefresh() {
 				frontPage, _ := a.pages.GetFrontPage()
 				isModalOpen := frontPage != TabPLCs && frontPage != TabBrowser &&
 					frontPage != TabPacks && frontPage != TabTriggers &&
-					frontPage != TabREST && frontPage != TabMQTT &&
-					frontPage != TabValkey && frontPage != TabKafka &&
-					frontPage != TabDebug
+					frontPage != TabPush && frontPage != TabWeb &&
+					frontPage != TabMQTT && frontPage != TabValkey &&
+					frontPage != TabKafka && frontPage != TabDebug
 
 				// Only refresh if tabs are initialized and no modal is open
 				if a.debugTab != nil {
@@ -873,13 +948,16 @@ func (a *App) periodicRefresh() {
 				if a.triggersTab != nil && a.currentTab == 3 {
 					a.triggersTab.Refresh()
 				}
-				if a.mqttTab != nil && a.currentTab == 5 {
+				if a.pushTab != nil && a.currentTab == 4 {
+					a.pushTab.Refresh()
+				}
+				if a.mqttTab != nil && a.currentTab == 6 {
 					a.mqttTab.Refresh()
 				}
-				if a.valkeyTab != nil && a.currentTab == 6 {
+				if a.valkeyTab != nil && a.currentTab == 7 {
 					a.valkeyTab.Refresh()
 				}
-				if a.kafkaTab != nil && a.currentTab == 7 {
+				if a.kafkaTab != nil && a.currentTab == 8 {
 					a.kafkaTab.Refresh()
 				}
 			})
@@ -969,9 +1047,12 @@ func (a *App) Shutdown() {
 	// All these operations can potentially block, so wrap them together
 	done := make(chan struct{})
 	go func() {
-		// Stop triggers first (they may be waiting on PLC reads or Kafka writes)
+		// Stop triggers and pushes first (they may be waiting on PLC reads)
 		if a.triggerMgr != nil {
 			a.triggerMgr.Stop()
+		}
+		if a.pushMgr != nil {
+			a.pushMgr.Stop()
 		}
 
 		// Stop messaging services
@@ -985,9 +1066,9 @@ func (a *App) Shutdown() {
 			a.kafkaMgr.StopAll()
 		}
 
-		// Stop API and manager
-		if a.apiServer != nil {
-			a.apiServer.Stop()
+		// Stop web server and manager
+		if a.webServer != nil {
+			a.webServer.Stop()
 		}
 		if a.manager != nil {
 			a.manager.Stop()
@@ -1041,6 +1122,11 @@ func (a *App) QueueUpdateDraw(f func()) {
 // SetPackManager sets the TagPack manager for the app.
 func (a *App) SetPackManager(mgr *tagpack.Manager) {
 	a.packMgr = mgr
+}
+
+// SetPushManager sets the Push manager for the app.
+func (a *App) SetPushManager(mgr *push.Manager) {
+	a.pushMgr = mgr
 }
 
 // ForcePublishTag publishes a single tag's current value to enabled services (MQTT, Valkey, Kafka).
@@ -1164,9 +1250,9 @@ func (a *App) isModalOpen() bool {
 	frontPage, _ := a.pages.GetFrontPage()
 	return frontPage != TabPLCs && frontPage != TabBrowser &&
 		frontPage != TabPacks && frontPage != TabTriggers &&
-		frontPage != TabREST && frontPage != TabMQTT &&
-		frontPage != TabValkey && frontPage != TabKafka &&
-		frontPage != TabDebug
+		frontPage != TabPush && frontPage != TabWeb &&
+		frontPage != TabMQTT && frontPage != TabValkey &&
+		frontPage != TabKafka && frontPage != TabDebug
 }
 
 // refreshAllThemes calls RefreshTheme on all tabs to apply theme changes.
@@ -1192,6 +1278,9 @@ func (a *App) refreshAllThemes() {
 	}
 	if a.triggersTab != nil {
 		a.triggersTab.RefreshTheme()
+	}
+	if a.pushTab != nil {
+		a.pushTab.RefreshTheme()
 	}
 	if a.restTab != nil {
 		a.restTab.RefreshTheme()

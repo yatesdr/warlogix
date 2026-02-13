@@ -224,8 +224,9 @@ func (t *ValkeyTab) showAddDialog() {
 			EnableWriteback: enableWriteback,
 		}
 
+		t.app.LockConfig()
 		t.app.config.AddValkey(cfg)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		// Add to manager
 		pub := t.app.valkeyMgr.Add(&t.app.config.Valkey[len(t.app.config.Valkey)-1], t.app.config.Namespace)
@@ -323,8 +324,9 @@ func (t *ValkeyTab) showEditDialog() {
 			EnableWriteback: enableWriteback,
 		}
 
+		t.app.LockConfig()
 		t.app.config.UpdateValkey(originalName, updated)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		// Close dialog immediately
 		t.app.closeModal(pageName)
@@ -384,8 +386,9 @@ func (t *ValkeyTab) removeSelected() {
 			t.app.valkeyMgr.Remove(name)
 
 			t.app.QueueUpdateDraw(func() {
+				t.app.LockConfig()
 				t.app.config.RemoveValkey(name)
-				t.app.SaveConfig()
+				t.app.UnlockAndSaveConfig()
 				t.Refresh()
 				t.app.setStatus(fmt.Sprintf("Removed Valkey server: %s", name))
 			})
@@ -420,9 +423,12 @@ func (t *ValkeyTab) connectSelected() {
 			if err != nil {
 				t.app.setStatus(fmt.Sprintf("Valkey connect failed: %v", err))
 			} else {
+				t.app.LockConfig()
 				if cfg := t.app.config.FindValkey(pubName); cfg != nil {
 					cfg.Enabled = true
-					t.app.SaveConfig()
+					t.app.UnlockAndSaveConfig()
+				} else {
+					t.app.UnlockConfig()
 				}
 				t.app.setStatus(fmt.Sprintf("Valkey connected to %s", pub.Address()))
 			}
@@ -456,9 +462,12 @@ func (t *ValkeyTab) disconnectSelected() {
 		pub.Stop()
 
 		t.app.QueueUpdateDraw(func() {
+			t.app.LockConfig()
 			if cfg := t.app.config.FindValkey(pubName); cfg != nil {
 				cfg.Enabled = false
-				t.app.SaveConfig()
+				t.app.UnlockAndSaveConfig()
+			} else {
+				t.app.UnlockConfig()
 			}
 			t.Refresh()
 			t.app.setStatus(fmt.Sprintf("Valkey disconnected from %s", pubName))

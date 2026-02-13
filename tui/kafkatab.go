@@ -323,8 +323,9 @@ func (t *KafkaTab) showAddDialog() {
 			cfg.Brokers[i] = strings.TrimSpace(cfg.Brokers[i])
 		}
 
+		t.app.LockConfig()
 		t.app.config.AddKafka(cfg)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		// Add to manager
 		t.app.kafkaMgr.AddCluster(&kafka.Config{
@@ -440,8 +441,9 @@ func (t *KafkaTab) showEditDialog() {
 			updated.Brokers[i] = strings.TrimSpace(updated.Brokers[i])
 		}
 
+		t.app.LockConfig()
 		t.app.config.UpdateKafka(originalName, updated)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		// Update manager
 		t.app.kafkaMgr.RemoveCluster(originalName)
@@ -487,8 +489,9 @@ func (t *KafkaTab) removeSelected() {
 	t.app.showConfirm("Remove Kafka Cluster", fmt.Sprintf("Remove %s?", name), func() {
 		t.app.kafkaMgr.Disconnect(name)
 		t.app.kafkaMgr.RemoveCluster(name)
+		t.app.LockConfig()
 		t.app.config.RemoveKafka(name)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Removed Kafka cluster: %s", name))
 	})
@@ -505,8 +508,9 @@ func (t *KafkaTab) connectSelected() {
 		return
 	}
 
+	t.app.LockConfig()
 	cfg.Enabled = true
-	t.app.SaveConfig()
+	t.app.UnlockAndSaveConfig()
 
 	t.app.setStatus(fmt.Sprintf("Connecting to %s...", name))
 	go func() {
@@ -534,10 +538,13 @@ func (t *KafkaTab) disconnectSelected() {
 		return
 	}
 
+	t.app.LockConfig()
 	cfg := t.app.config.FindKafka(name)
 	if cfg != nil {
 		cfg.Enabled = false
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
+	} else {
+		t.app.UnlockConfig()
 	}
 
 	t.app.kafkaMgr.Disconnect(name)

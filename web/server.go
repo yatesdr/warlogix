@@ -19,6 +19,7 @@ import (
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
+	"warlink/push"
 	"warlink/tagpack"
 	"warlink/trigger"
 	"warlink/valkey"
@@ -35,6 +36,7 @@ type Managers interface {
 	GetValkeyMgr() *valkey.Manager
 	GetKafkaMgr() *kafka.Manager
 	GetTriggerMgr() *trigger.Manager
+	GetPushMgr() *push.Manager
 	GetPackMgr() *tagpack.Manager
 }
 
@@ -46,6 +48,10 @@ type Server struct {
 	router   chi.Router
 	running  bool
 	mu       sync.RWMutex
+
+	// Unsecured deadline timer
+	deadlineTimer *time.Timer
+	deadlineMu    sync.Mutex
 }
 
 // NewServer creates a new unified web server.
@@ -75,8 +81,8 @@ func (s *Server) setupRoutes() {
 	}
 
 	// Mount Web UI at root
-	if s.config.UI.Enabled && len(s.config.UI.Users) > 0 {
-		r.Mount("/", www.NewRouter(&s.config.UI, s.managers))
+	if s.config.UI.Enabled {
+		r.Mount("/", www.NewRouter(&s.config.UI, s.managers, s))
 	}
 
 	s.router = r
@@ -177,5 +183,34 @@ func (s *Server) Reload(cfg *config.WebConfig) {
 	s.setupRoutes()
 	if s.server != nil {
 		s.server.Handler = s.router
+	}
+}
+
+// SetUnsecuredDeadline starts a timer that stops the server after the given duration.
+// The onExpiry callback is called after the server is stopped.
+func (s *Server) SetUnsecuredDeadline(d time.Duration, onExpiry func()) {
+	s.deadlineMu.Lock()
+	defer s.deadlineMu.Unlock()
+
+	if s.deadlineTimer != nil {
+		s.deadlineTimer.Stop()
+	}
+
+	s.deadlineTimer = time.AfterFunc(d, func() {
+		s.Stop()
+		if onExpiry != nil {
+			onExpiry()
+		}
+	})
+}
+
+// ClearUnsecuredDeadline cancels the unsecured deadline timer if running.
+func (s *Server) ClearUnsecuredDeadline() {
+	s.deadlineMu.Lock()
+	defer s.deadlineMu.Unlock()
+
+	if s.deadlineTimer != nil {
+		s.deadlineTimer.Stop()
+		s.deadlineTimer = nil
 	}
 }

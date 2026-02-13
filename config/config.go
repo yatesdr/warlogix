@@ -2,6 +2,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,9 +71,15 @@ type Config struct {
 	Valkey    []ValkeyConfig   `yaml:"valkey,omitempty"`
 	Kafka     []KafkaConfig    `yaml:"kafka,omitempty"`
 	Triggers  []TriggerConfig  `yaml:"triggers,omitempty"`
+	Pushes    []PushConfig     `yaml:"pushes,omitempty"`
 	TagPacks  []TagPackConfig  `yaml:"tag_packs,omitempty"`
 	PollRate  time.Duration    `yaml:"poll_rate"`
 	UI        UIConfig         `yaml:"ui,omitempty"`
+
+	// Data mutex protects all config fields against concurrent access.
+	// Callers that modify config should Lock(), modify, then call UnlockAndSave().
+	// Save() acquires the lock internally for callers that don't hold it.
+	dataMu sync.Mutex `yaml:"-"`
 
 	// Change listeners (not serialized)
 	changeListeners map[ConfigListenerID]func() `yaml:"-"`
@@ -295,9 +303,10 @@ type WebUIConfig struct {
 
 // WebUser represents a web interface user.
 type WebUser struct {
-	Username     string `yaml:"username"`
-	PasswordHash string `yaml:"password_hash"` // bcrypt
-	Role         string `yaml:"role"`          // "admin" or "viewer"
+	Username           string `yaml:"username"`
+	PasswordHash       string `yaml:"password_hash"`                  // bcrypt
+	Role               string `yaml:"role"`                           // "admin" or "viewer"
+	MustChangePassword bool   `yaml:"must_change_password,omitempty"` // Force password change on first login
 }
 
 // Web user roles
@@ -362,6 +371,52 @@ type KafkaConfig struct {
 	WriteMaxAge     time.Duration `yaml:"write_max_age,omitempty"`    // Max age of write requests to process (default: 2s)
 }
 
+// PushCondition defines a condition that can trigger a push notification.
+// Each condition references a specific PLC and tag with a comparison operator.
+type PushCondition struct {
+	PLC      string      `yaml:"plc"`
+	Tag      string      `yaml:"tag"`
+	Operator string      `yaml:"operator"` // ==, !=, >, <, >=, <=
+	Value    interface{} `yaml:"value"`
+}
+
+// PushAuthType represents the authentication method for a push endpoint.
+type PushAuthType string
+
+const (
+	PushAuthNone         PushAuthType = ""
+	PushAuthBearer       PushAuthType = "bearer"
+	PushAuthBasic        PushAuthType = "basic"
+	PushAuthJWT          PushAuthType = "jwt"
+	PushAuthCustomHeader PushAuthType = "custom_header"
+)
+
+// PushAuthConfig holds authentication configuration for a push endpoint.
+type PushAuthConfig struct {
+	Type        PushAuthType `yaml:"type,omitempty"`
+	Token       string       `yaml:"token,omitempty"`        // Bearer/JWT
+	Username    string       `yaml:"username,omitempty"`      // Basic auth
+	Password    string       `yaml:"password,omitempty"`      // Basic auth
+	HeaderName  string       `yaml:"header_name,omitempty"`   // Custom header
+	HeaderValue string       `yaml:"header_value,omitempty"`  // Custom header
+}
+
+// PushConfig holds configuration for an HTTP push notification.
+type PushConfig struct {
+	Name            string            `yaml:"name"`
+	Enabled         bool              `yaml:"enabled"`
+	Conditions      []PushCondition   `yaml:"conditions"`                       // Multiple triggers (OR logic)
+	URL             string            `yaml:"url"`
+	Method          string            `yaml:"method"`                           // GET, POST, PUT, PATCH
+	ContentType     string            `yaml:"content_type,omitempty"`           // application/json, text/plain
+	Headers         map[string]string `yaml:"headers,omitempty"`
+	Body            string            `yaml:"body,omitempty"`                   // Template with #PLC.tagName refs
+	Auth            PushAuthConfig    `yaml:"auth,omitempty"`
+	CooldownMin     time.Duration     `yaml:"cooldown_min,omitempty"`           // Min interval (default 15m)
+	CooldownPerCond bool              `yaml:"cooldown_per_condition,omitempty"` // false=global, true=per-condition
+	Timeout         time.Duration     `yaml:"timeout,omitempty"`                // HTTP timeout (default 30s)
+}
+
 // TriggerCondition defines when a trigger fires.
 type TriggerCondition struct {
 	Operator string      `yaml:"operator"` // ==, !=, >, <, >=, <=
@@ -390,26 +445,22 @@ func DefaultConfig() *Config {
 	return &Config{
 		PLCs:     []PLCConfig{},
 		PollRate: time.Second,
-		REST: RESTConfig{
-			Enabled: false,
-			Port:    8080,
-			Host:    "0.0.0.0",
-		},
 		Web: WebConfig{
-			Enabled: false,
+			Enabled: true,
 			Host:    "0.0.0.0",
 			Port:    8080,
 			API: WebAPIConfig{
 				Enabled: true,
 			},
 			UI: WebUIConfig{
-				Enabled: false,
+				Enabled: true,
 			},
 		},
 		MQTT:     []MQTTConfig{},
 		Valkey:   []ValkeyConfig{},
 		Kafka:    []KafkaConfig{},
 		Triggers: []TriggerConfig{},
+		Pushes:   []PushConfig{},
 	}
 }
 
@@ -548,17 +599,46 @@ func DefaultPath() string {
 
 // Load reads configuration from a YAML file.
 func Load(path string) (*Config, error) {
+	cfg := DefaultConfig()
+	dirty := false
+
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return DefaultConfig(), nil
+		if !os.IsNotExist(err) {
+			return nil, err
 		}
-		return nil, err
+		// File doesn't exist — use defaults, will save after auto-admin creation
+		dirty = true
+	} else {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, err
+		}
 	}
 
-	cfg := DefaultConfig()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, err
+	// Migrate legacy REST config to Web config
+	if cfg.REST.Enabled && !cfg.Web.Enabled {
+		if cfg.REST.Host != "" {
+			cfg.Web.Host = cfg.REST.Host
+		}
+		if cfg.REST.Port != 0 {
+			cfg.Web.Port = cfg.REST.Port
+		}
+		cfg.Web.Enabled = true
+		cfg.Web.API.Enabled = true
+		cfg.REST = RESTConfig{} // Zero out legacy block
+		dirty = true
+	}
+
+	// Generate session secret if not already set (needed for login/setup pages)
+	if cfg.Web.UI.SessionSecret == "" {
+		secret := make([]byte, 32)
+		rand.Read(secret)
+		cfg.Web.UI.SessionSecret = base64.StdEncoding.EncodeToString(secret)
+		dirty = true
+	}
+
+	if dirty {
+		cfg.Save(path) // Best-effort save
 	}
 
 	return cfg, nil
@@ -602,15 +682,38 @@ func (c *Config) notifyChangeListeners() {
 	}
 }
 
-// Save writes configuration to a YAML file and notifies change listeners.
+// Lock acquires the config data mutex for exclusive access.
+// Use this before modifying config fields, then call UnlockAndSave.
+func (c *Config) Lock() { c.dataMu.Lock() }
+
+// Unlock releases the config data mutex without saving.
+// Prefer UnlockAndSave when modifications were made.
+func (c *Config) Unlock() { c.dataMu.Unlock() }
+
+// Save acquires the lock, marshals, writes, and notifies.
+// Use this when the caller does not already hold the lock.
 func (c *Config) Save(path string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	c.dataMu.Lock()
+	return c.saveLocked(path)
+}
+
+// UnlockAndSave marshals, releases the lock, writes, and notifies.
+// The caller must already hold the lock via Lock().
+func (c *Config) UnlockAndSave(path string) error {
+	return c.saveLocked(path)
+}
+
+// saveLocked marshals config (lock must be held), unlocks, then writes and notifies.
+func (c *Config) saveLocked(path string) error {
+	data, err := yaml.Marshal(c)
+	c.dataMu.Unlock() // Release lock after marshal, before I/O
+
+	if err != nil {
 		return err
 	}
 
-	data, err := yaml.Marshal(c)
-	if err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
@@ -728,6 +831,57 @@ func (c *Config) UpdateTrigger(name string, updated TriggerConfig) bool {
 	for i, t := range c.Triggers {
 		if t.Name == name {
 			c.Triggers[i] = updated
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultPushConfig returns a default push configuration.
+func DefaultPushConfig(name string) PushConfig {
+	return PushConfig{
+		Name:        name,
+		Enabled:     false,
+		Conditions:  []PushCondition{},
+		Method:      "POST",
+		ContentType: "application/json",
+		CooldownMin: 15 * time.Minute,
+		Timeout:     30 * time.Second,
+		Headers:     make(map[string]string),
+	}
+}
+
+// FindPush returns the Push config with the given name, or nil if not found.
+func (c *Config) FindPush(name string) *PushConfig {
+	for i := range c.Pushes {
+		if c.Pushes[i].Name == name {
+			return &c.Pushes[i]
+		}
+	}
+	return nil
+}
+
+// AddPush adds a new Push configuration.
+func (c *Config) AddPush(push PushConfig) {
+	c.Pushes = append(c.Pushes, push)
+}
+
+// RemovePush removes a Push config by name.
+func (c *Config) RemovePush(name string) bool {
+	for i, p := range c.Pushes {
+		if p.Name == name {
+			c.Pushes = append(c.Pushes[:i], c.Pushes[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// UpdatePush updates an existing Push configuration.
+func (c *Config) UpdatePush(name string, updated PushConfig) bool {
+	for i, p := range c.Pushes {
+		if p.Name == name {
+			c.Pushes[i] = updated
 			return true
 		}
 	}

@@ -221,8 +221,9 @@ func (t *MQTTTab) showAddDialog() {
 			UseTLS:    useTLS,
 		}
 
+		t.app.LockConfig()
 		t.app.config.AddMQTT(cfg)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		// Add to manager
 		pub := mqtt.NewPublisher(&t.app.config.MQTT[len(t.app.config.MQTT)-1], t.app.config.Namespace)
@@ -314,8 +315,9 @@ func (t *MQTTTab) showEditDialog() {
 			UseTLS:    useTLS,
 		}
 
+		t.app.LockConfig()
 		t.app.config.UpdateMQTT(originalName, updated)
-		t.app.SaveConfig()
+		t.app.UnlockAndSaveConfig()
 
 		// Close dialog immediately
 		t.app.closeModal(pageName)
@@ -373,8 +375,9 @@ func (t *MQTTTab) removeSelected() {
 			t.app.mqttMgr.Remove(name)
 
 			t.app.QueueUpdateDraw(func() {
+				t.app.LockConfig()
 				t.app.config.RemoveMQTT(name)
-				t.app.SaveConfig()
+				t.app.UnlockAndSaveConfig()
 				t.Refresh()
 				t.app.setStatus(fmt.Sprintf("Removed MQTT broker: %s", name))
 			})
@@ -413,9 +416,12 @@ func (t *MQTTTab) connectSelected() {
 				t.app.setStatus(fmt.Sprintf("MQTT connect failed: %v", err))
 				DebugLogError("MQTT %s connection failed: %v", pubName, err)
 			} else {
+				t.app.LockConfig()
 				if cfg := t.app.config.FindMQTT(pubName); cfg != nil {
 					cfg.Enabled = true
-					t.app.SaveConfig()
+					t.app.UnlockAndSaveConfig()
+				} else {
+					t.app.UnlockConfig()
 				}
 				t.app.setStatus(fmt.Sprintf("MQTT connected to %s", pubAddr))
 				DebugLogMQTT("Connected to %s (broker: %s, topic: %s)", pubName, pubAddr, pubTopic)
@@ -455,9 +461,12 @@ func (t *MQTTTab) disconnectSelected() {
 		pub.Stop()
 
 		t.app.QueueUpdateDraw(func() {
+			t.app.LockConfig()
 			if cfg := t.app.config.FindMQTT(pubName); cfg != nil {
 				cfg.Enabled = false
-				t.app.SaveConfig()
+				t.app.UnlockAndSaveConfig()
+			} else {
+				t.app.UnlockConfig()
 			}
 			t.Refresh()
 			t.app.setStatus(fmt.Sprintf("MQTT disconnected from %s", pubName))

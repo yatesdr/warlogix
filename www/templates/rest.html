@@ -12,7 +12,14 @@
         <table class="info-table">
             <tr>
                 <th>Enabled:</th>
-                <td><span class="status-badge {{if .APIEnabled}}status-connected{{else}}status-disconnected{{end}}">{{if .APIEnabled}}Yes{{else}}No{{end}}</span></td>
+                <td>
+                    <span id="api-status" class="status-badge {{if .APIEnabled}}status-connected{{else}}status-disconnected{{end}}">{{if .APIEnabled}}Yes{{else}}No{{end}}</span>
+                    {{if .IsAdmin}}
+                    <button id="api-toggle-btn" class="btn btn-sm" onclick="toggleAPI()" style="margin-left: 8px">
+                        {{if .APIEnabled}}Disable{{else}}Enable{{end}}
+                    </button>
+                    {{end}}
+                </td>
             </tr>
             <tr>
                 <th>Host:</th>
@@ -88,5 +95,33 @@
         </table>
     </div>
 </div>
+
+{{if .IsAdmin}}
+<script>
+function toggleAPI() {
+    fetch('/htmx/api-toggle', { method: 'POST' })
+        .then(function(response) {
+            if (!response.ok) throw new Error('Failed to toggle API');
+            return response.json();
+        })
+        .then(function(data) {
+            var badge = document.getElementById('api-status');
+            var btn = document.getElementById('api-toggle-btn');
+            if (data.enabled) {
+                badge.className = 'status-badge status-connected';
+                badge.textContent = 'Yes';
+                btn.textContent = 'Disable';
+            } else {
+                badge.className = 'status-badge status-disconnected';
+                badge.textContent = 'No';
+                btn.textContent = 'Enable';
+            }
+        })
+        .catch(function(err) {
+            alert('Error: ' + err.message);
+        });
+}
+</script>
+{{end}}
 
 {{template "footer" .}}

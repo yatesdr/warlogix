@@ -280,17 +280,26 @@ func (m *ManagedPLC) filterStructChildren(tags []driver.TagInfo) []driver.TagInf
 }
 
 // BuildManualTags creates TagInfo entries from config.Tags for non-discovery PLCs.
+// Preserves previously resolved TypeCodes so that struct types don't get reset to
+// defaults on every rebuild, avoiding unnecessary resolveManualTagTypes cycles.
 func (m *ManagedPLC) BuildManualTags() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.ManualTags = nil
-	m.ManualTagGen++
 	if m.Config == nil {
+		m.ManualTags = nil
+		m.ManualTagGen++
 		return
 	}
 
+	// Index existing resolved types by name so we can carry them forward
+	oldTypes := make(map[string]driver.TagInfo, len(m.ManualTags))
+	for _, t := range m.ManualTags {
+		oldTypes[t.Name] = t
+	}
+
 	family := m.Config.GetFamily()
+	newTags := make([]driver.TagInfo, 0, len(m.Config.Tags))
 
 	for _, sel := range m.Config.Tags {
 		var typeCode uint16
@@ -336,6 +345,13 @@ func (m *ManagedPLC) BuildManualTags() {
 			typeName = logix.TypeName(typeCode)
 		}
 
+		// Carry forward previously resolved type if config didn't specify one
+		// (e.g., struct types that can't be persisted to config)
+		if old, exists := oldTypes[sel.Name]; exists && !ok && old.TypeCode != typeCode {
+			typeCode = old.TypeCode
+			typeName = old.TypeName
+		}
+
 		tagInfo := driver.TagInfo{
 			Name:       sel.Name,
 			TypeCode:   typeCode,
@@ -343,7 +359,23 @@ func (m *ManagedPLC) BuildManualTags() {
 			Writable:   sel.Writable,
 			Dimensions: dimensions,
 		}
-		m.ManualTags = append(m.ManualTags, tagInfo)
+		newTags = append(newTags, tagInfo)
+	}
+
+	// Only bump generation if the tag list actually changed
+	changed := len(newTags) != len(m.ManualTags)
+	if !changed {
+		for i := range newTags {
+			if newTags[i].Name != m.ManualTags[i].Name || newTags[i].TypeCode != m.ManualTags[i].TypeCode {
+				changed = true
+				break
+			}
+		}
+	}
+
+	m.ManualTags = newTags
+	if changed {
+		m.ManualTagGen++
 	}
 }
 
@@ -835,9 +867,9 @@ func (w *PLCWorker) resolveManualTagTypes() {
 		values, err := drv.Read(requests)
 		if err == nil {
 			readResults := make(map[string]uint16)
-			for i, val := range values {
+			for _, val := range values {
 				if val != nil && val.Error == nil && val.DataType != 0 {
-					readResults[needsRead[i]] = val.DataType
+					readResults[val.Name] = val.DataType
 				}
 			}
 			for i := range unresolved {
@@ -900,13 +932,17 @@ func (w *PLCWorker) resolveManualTagTypes() {
 		return
 	}
 
-	// Apply results under lock
+	// Apply results under lock, tracking whether anything actually changed
 	plc.mu.Lock()
+	anyChanged := false
 	for _, r := range resolved {
 		for i := range plc.ManualTags {
 			if plc.ManualTags[i].Name == r.Name {
-				plc.ManualTags[i].TypeCode = r.TypeCode
-				plc.ManualTags[i].TypeName = r.TypeName
+				if plc.ManualTags[i].TypeCode != r.TypeCode {
+					plc.ManualTags[i].TypeCode = r.TypeCode
+					plc.ManualTags[i].TypeName = r.TypeName
+					anyChanged = true
+				}
 
 				// Persist atomic types to config
 				for j := range cfg.Tags {
@@ -932,8 +968,10 @@ func (w *PLCWorker) resolveManualTagTypes() {
 			}
 		}
 	}
-	// Bump generation to signal UI that types changed
-	plc.ManualTagGen++
+	// Only bump generation if a type actually changed (avoids unnecessary tree rebuilds)
+	if anyChanged {
+		plc.ManualTagGen++
+	}
 	updatedGen := plc.ManualTagGen
 	plc.mu.Unlock()
 

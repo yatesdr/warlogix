@@ -14,6 +14,7 @@ import (
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
+	"warlink/push"
 	"warlink/tagpack"
 	"warlink/trigger"
 	"warlink/valkey"
@@ -28,7 +29,56 @@ type Managers interface {
 	GetValkeyMgr() *valkey.Manager
 	GetKafkaMgr() *kafka.Manager
 	GetTriggerMgr() *trigger.Manager
+	GetPushMgr() *push.Manager
 	GetPackMgr() *tagpack.Manager
+}
+
+// PLCResponse is the JSON response for PLC info.
+type PLCResponse struct {
+	Name        string `json:"name"`
+	Address     string `json:"address"`
+	Slot        byte   `json:"slot"`
+	Status      string `json:"status"`
+	ProductName string `json:"product_name,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// TagResponse is the JSON response for a tag value.
+// When a tag has an alias, Name contains the alias and MemLoc contains the original address.
+type TagResponse struct {
+	PLC       string      `json:"plc"`
+	Name      string      `json:"name"`
+	MemLoc    string      `json:"memloc,omitempty"` // Memory location (S7/Omron address) when alias is used
+	Type      string      `json:"type"`
+	Value     interface{} `json:"value"`
+	Error     string      `json:"error,omitempty"`
+	Timestamp string      `json:"timestamp,omitempty"`
+}
+
+// HealthResponse is the JSON structure for PLC health status.
+type HealthResponse struct {
+	PLC       string `json:"plc"`
+	Online    bool   `json:"online"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	Timestamp string `json:"timestamp"`
+}
+
+// WriteRequest is the JSON request for writing a tag value.
+type WriteRequest struct {
+	PLC   string      `json:"plc"`
+	Tag   string      `json:"tag"`
+	Value interface{} `json:"value"`
+}
+
+// WriteResponse is the JSON response after writing a tag value.
+type WriteResponse struct {
+	PLC       string      `json:"plc"`
+	Tag       string      `json:"tag"`
+	Value     interface{} `json:"value"`
+	Success   bool        `json:"success"`
+	Error     string      `json:"error,omitempty"`
+	Timestamp string      `json:"timestamp"`
 }
 
 // handlers holds the API handler functions.

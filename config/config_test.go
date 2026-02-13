@@ -105,11 +105,20 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.PollRate != time.Second {
 		t.Errorf("expected 1s poll rate, got %v", cfg.PollRate)
 	}
-	if cfg.REST.Port != 8080 {
-		t.Errorf("expected REST port 8080, got %d", cfg.REST.Port)
+	if !cfg.Web.Enabled {
+		t.Error("expected Web.Enabled true by default")
 	}
-	if cfg.REST.Host != "0.0.0.0" {
-		t.Errorf("expected REST host 0.0.0.0, got %s", cfg.REST.Host)
+	if !cfg.Web.UI.Enabled {
+		t.Error("expected Web.UI.Enabled true by default")
+	}
+	if !cfg.Web.API.Enabled {
+		t.Error("expected Web.API.Enabled true by default")
+	}
+	if cfg.Web.Port != 8080 {
+		t.Errorf("expected Web port 8080, got %d", cfg.Web.Port)
+	}
+	if cfg.Web.Host != "0.0.0.0" {
+		t.Errorf("expected Web host 0.0.0.0, got %s", cfg.Web.Host)
 	}
 	if len(cfg.PLCs) != 0 {
 		t.Errorf("expected empty PLCs slice")
@@ -218,8 +227,12 @@ func TestLoadAndSave(t *testing.T) {
 		if len(loaded.PLCs) != 1 || loaded.PLCs[0].Name != "TestPLC" {
 			t.Error("PLC config not preserved")
 		}
-		if loaded.REST.Port != 9090 {
-			t.Error("REST config not preserved")
+		// REST config migrates to Web on load
+		if loaded.Web.Port != 9090 {
+			t.Errorf("REST->Web migration: expected port 9090, got %d", loaded.Web.Port)
+		}
+		if !loaded.Web.API.Enabled {
+			t.Error("REST->Web migration: expected API enabled")
 		}
 		if len(loaded.MQTT) != 1 || loaded.MQTT[0].Broker != "mqtt.local" {
 			t.Error("MQTT config not preserved")
@@ -456,6 +469,80 @@ func TestTriggerOperations(t *testing.T) {
 			t.Error("Trigger not removed")
 		}
 	})
+}
+
+func TestRESTMigration(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "migrate.yaml")
+
+	// Write a config with legacy REST enabled and web disabled
+	os.WriteFile(path, []byte(`
+rest:
+  enabled: true
+  host: "127.0.0.1"
+  port: 9090
+web:
+  enabled: false
+  host: "0.0.0.0"
+  port: 8080
+  ui:
+    users:
+      - username: existing
+        password_hash: "$2a$10$test"
+        role: admin
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if !cfg.Web.Enabled {
+		t.Error("expected Web.Enabled after migration")
+	}
+	if !cfg.Web.API.Enabled {
+		t.Error("expected Web.API.Enabled after migration")
+	}
+	if cfg.Web.Host != "127.0.0.1" {
+		t.Errorf("expected Web.Host '127.0.0.1', got %s", cfg.Web.Host)
+	}
+	if cfg.Web.Port != 9090 {
+		t.Errorf("expected Web.Port 9090, got %d", cfg.Web.Port)
+	}
+	if cfg.REST.Enabled {
+		t.Error("expected REST.Enabled to be zeroed")
+	}
+}
+
+func TestNoAutoAdminCreation(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "autoadmin.yaml")
+
+	// Write a config with no users
+	os.WriteFile(path, []byte(`
+namespace: test
+web:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+  ui:
+    enabled: true
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// No auto-admin should be created (setup wizard handles first user)
+	if len(cfg.Web.UI.Users) != 0 {
+		t.Fatalf("expected 0 users (no auto-admin), got %d", len(cfg.Web.UI.Users))
+	}
+
+	// Session secret should still be generated
+	if cfg.Web.UI.SessionSecret == "" {
+		t.Error("expected session secret to be generated")
+	}
 }
 
 func TestDefaultPath(t *testing.T) {

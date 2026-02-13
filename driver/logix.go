@@ -162,8 +162,12 @@ func (a *LogixAdapter) Read(requests []TagRequest) ([]*TagValue, error) {
 	result := make([]*TagValue, len(values))
 	for i, v := range values {
 		if v == nil {
+			name := "unknown"
+			if i < len(names) {
+				name = names[i]
+			}
 			result[i] = &TagValue{
-				Name:   names[i],
+				Name:   name,
 				Family: "logix",
 				Error:  fmt.Errorf("nil response"),
 			}

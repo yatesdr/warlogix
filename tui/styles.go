@@ -959,11 +959,12 @@ const (
 	TabPLCs     = "PLCs"
 	TabBrowser  = "Republisher"
 	TabPacks    = "TagPacks"
-	TabREST     = "REST"
+	TabWeb      = "Web"
 	TabMQTT     = "MQTT"
 	TabValkey   = "Valkey"
 	TabKafka    = "Kafka"
 	TabTriggers = "Triggers"
+	TabPush     = "Push"
 	TabDebug    = "Debug"
 )
 
@@ -987,8 +988,8 @@ const helpTextBase = `
 
  Navigation
    Shift+Tab    Cycle tabs
-   P/B/T/G      PLCs / Browser / TagPacks / triGgers
-   E/M/V/K/D    rEst / Mqtt / Valkey / Kafka / Debug
+   P/B/T/G/U    PLCs / Browser / TagPacks / triGgers / pUsh
+   E/M/V/K/D    wEb / Mqtt / Valkey / Kafka / Debug
    Tab          Move between fields
    Enter        Select / Activate
    Space        Toggle checkbox
@@ -1031,6 +1032,13 @@ const helpTextBase = `
    s            Start trigger
    S            Stop trigger
    F            Fire trigger (test)
+
+ Push Tab
+   a            Add push
+   x            Remove push
+   e            Edit push
+   Space        Start/stop push
+   F            Test fire push
 
  Application
    N            Configure namespace

@@ -52,7 +52,10 @@ var expandedValueNodes = JSON.parse(localStorage.getItem('republisher-value-expa
 // Fetch a tag's value on demand if not already cached in the DOM.
 // Calls callback(tagItem) after the value is available.
 function ensureTagValue(plc, tagName, tagItem, callback) {
-    if (tagItem.dataset.json) {
+    var hasValue = !!tagItem.dataset.json;
+    var needsMemberTypes = tagItem.dataset.isStruct === 'true' && !tagItem.dataset.memberTypes;
+
+    if (hasValue && !needsMemberTypes) {
         callback(tagItem);
         return;
     }
@@ -65,39 +68,46 @@ function ensureTagValue(plc, tagName, tagItem, callback) {
             var jsonValue = JSON.stringify(data.value);
             tagItem.dataset.json = jsonValue;
             if (data.type) tagItem.dataset.type = data.type;
-            if (data.member_types) tagItem.dataset.memberTypes = JSON.stringify(data.member_types);
+            if (data.member_types) {
+                tagItem.dataset.memberTypes = JSON.stringify(data.member_types);
+            } else if (needsMemberTypes) {
+                // Mark that we tried — no member types for this PLC type
+                tagItem.dataset.memberTypes = 'null';
+            }
 
-            // Upgrade to struct if value is an object
-            var isStruct = data.value !== null && typeof data.value === 'object' && !Array.isArray(data.value);
-            if (isStruct && !tagItem.classList.contains('has-children')) {
-                tagItem.classList.add('has-children', 'collapsed');
-                tagItem.dataset.isStruct = 'true';
-                tagItem.dataset.fieldCount = String(Object.keys(data.value).length);
-                var tagRow = tagItem.querySelector('.tag-row');
-                if (tagRow && !tagRow.querySelector('.tag-expand')) {
-                    var expandSpan = document.createElement('span');
-                    expandSpan.className = 'tag-expand';
-                    expandSpan.innerHTML = '&#9660;';
-                    expandSpan.setAttribute('onclick', 'toggleTagExpand(event, this)');
-                    tagRow.insertBefore(expandSpan, tagRow.firstChild);
-                }
-                var tagValue = tagRow ? tagRow.querySelector('.tag-value') : null;
-                if (tagValue) tagValue.remove();
-                if (!tagItem.querySelector(':scope > .tag-children')) {
-                    var childDiv = document.createElement('div');
-                    childDiv.className = 'tag-children';
-                    tagItem.appendChild(childDiv);
-                }
-                // Update display text
-                var nameSpan = tagRow ? tagRow.querySelector('.tag-name') : null;
-                if (nameSpan) {
-                    var plcGroup = tagItem.closest('.plc-group');
-                    var isManual = plcGroup && plcGroup.dataset.manualTags === 'true';
-                    var displayName = tagItem.dataset.alias || getShortName(tagItem.dataset.name, isManual);
-                    var display = displayName;
-                    if (data.type) display += ' (' + data.type + ')';
-                    display += ' [' + Object.keys(data.value).length + ' fields]';
-                    nameSpan.textContent = display;
+            // Upgrade to struct if value is an object (only on first fetch)
+            if (!hasValue) {
+                var isStruct = data.value !== null && typeof data.value === 'object' && !Array.isArray(data.value);
+                if (isStruct && !tagItem.classList.contains('has-children')) {
+                    tagItem.classList.add('has-children', 'collapsed');
+                    tagItem.dataset.isStruct = 'true';
+                    tagItem.dataset.fieldCount = String(Object.keys(data.value).length);
+                    var tagRow = tagItem.querySelector('.tag-row');
+                    if (tagRow && !tagRow.querySelector('.tag-expand')) {
+                        var expandSpan = document.createElement('span');
+                        expandSpan.className = 'tag-expand';
+                        expandSpan.innerHTML = '&#9660;';
+                        expandSpan.setAttribute('onclick', 'toggleTagExpand(event, this)');
+                        tagRow.insertBefore(expandSpan, tagRow.firstChild);
+                    }
+                    var tagValue = tagRow ? tagRow.querySelector('.tag-value') : null;
+                    if (tagValue) tagValue.remove();
+                    if (!tagItem.querySelector(':scope > .tag-children')) {
+                        var childDiv = document.createElement('div');
+                        childDiv.className = 'tag-children';
+                        tagItem.appendChild(childDiv);
+                    }
+                    // Update display text
+                    var nameSpan = tagRow ? tagRow.querySelector('.tag-name') : null;
+                    if (nameSpan) {
+                        var plcGroup = tagItem.closest('.plc-group');
+                        var isManual = plcGroup && plcGroup.dataset.manualTags === 'true';
+                        var displayName = tagItem.dataset.alias || getShortName(tagItem.dataset.name, isManual);
+                        var display = displayName;
+                        if (data.type) display += ' (' + data.type + ')';
+                        display += ' [' + Object.keys(data.value).length + ' fields]';
+                        nameSpan.textContent = display;
+                    }
                 }
             }
             callback(tagItem);
@@ -149,6 +159,8 @@ function handleTagClick(event, el) {
     var plc = plcGroup ? plcGroup.dataset.plc : '';
 
     ensureTagValue(plc, tagItem.dataset.name, tagItem, function() {
+        var memberTypes = null;
+        try { memberTypes = JSON.parse(tagItem.dataset.memberTypes || 'null'); } catch (e) {}
         var info = {
             plc: plc,
             tagName: tagItem.dataset.name,
@@ -162,7 +174,8 @@ function handleTagClick(event, el) {
             hasIgnores: tagItem.dataset.hasIgnores === 'true',
             ignoreCount: parseInt(tagItem.dataset.ignoreCount) || 0,
             lastPoll: tagItem.dataset.lastPoll || '',
-            lastChanged: tagItem.dataset.lastChanged || ''
+            lastChanged: tagItem.dataset.lastChanged || '',
+            memberTypes: memberTypes
         };
 
         selectItem(el, info);
@@ -275,8 +288,9 @@ function toggleTagExpand(event, expandEl) {
 function buildTagChildrenIfNeeded(tagItem) {
     var childrenContainer = tagItem.querySelector(':scope > .tag-children');
     if (childrenContainer && childrenContainer.innerHTML === '') {
-        if (!tagItem.dataset.json) {
-            // No data yet — fetch it
+        var needsFetch = !tagItem.dataset.json;
+        var needsMemberTypes = tagItem.dataset.isStruct === 'true' && !tagItem.dataset.memberTypes;
+        if (needsFetch || needsMemberTypes) {
             var plcGroup = tagItem.closest('.plc-group');
             var plc = plcGroup ? plcGroup.dataset.plc : '';
             ensureTagValue(plc, tagItem.dataset.name, tagItem, function() {
@@ -309,7 +323,7 @@ function buildTagChildrenFromData(tagItem) {
     try {
         var parsed = JSON.parse(json);
         if (typeof parsed === 'object' && parsed !== null) {
-            childrenContainer.innerHTML = buildTagChildren(parsed, '', ignoreList, publishedChildren, memberTypes);
+            childrenContainer.innerHTML = buildTagChildren(parsed, '', ignoreList, publishedChildren, memberTypes, tagItem.dataset.type);
         }
     } catch (e) {}
 }
@@ -332,18 +346,21 @@ function isWritable(path, publishedChildren) {
     return publishedChildren[path] && publishedChildren[path].writable === true;
 }
 
-function buildTagChildren(obj, parentPath, ignoreList, publishedChildren, memberTypes) {
+function buildTagChildren(obj, parentPath, ignoreList, publishedChildren, memberTypes, parentType) {
     var html = '';
     var isArray = Array.isArray(obj);
     var keys = isArray ? obj.map(function(_, i) { return i; }) : Object.keys(obj).sort();
     ignoreList = ignoreList || [];
     publishedChildren = publishedChildren || {};
+    // For arrays, derive element type from parent type (e.g., "SINT[]" -> "SINT")
+    var arrayElementType = (isArray && parentType && parentType.endsWith('[]')) ? parentType.slice(0, -2) : null;
 
     for (var i = 0; i < keys.length; i++) {
         var key = keys[i];
         var value = obj[key];
-        // Use PLC member type if available, fall back to JS type inference
-        var valueType = (memberTypes && memberTypes[key]) ? memberTypes[key] : getValueType(value);
+        // Use PLC member type if available, array element type for arrays, fall back to JS type inference
+        var valueType = (memberTypes && memberTypes[key]) ? memberTypes[key] :
+            (isArray && arrayElementType) ? arrayElementType : getValueType(value);
         var displayKey = isArray ? '[' + key + ']' : key;
         var childPath = parentPath ? parentPath + '.' + key : String(key);
         var ignored = isIgnored(childPath, ignoreList);
@@ -434,7 +451,7 @@ function toggleChildExpand(event, expandEl) {
             try {
                 var parsed = JSON.parse(json);
                 if (typeof parsed === 'object' && parsed !== null) {
-                    childrenContainer.innerHTML = buildTagChildren(parsed, path, ignoreList, publishedChildren);
+                    childrenContainer.innerHTML = buildTagChildren(parsed, path, ignoreList, publishedChildren, null, row.dataset.type);
                 }
             } catch (e) {}
         }
@@ -570,6 +587,10 @@ function expandChildPath(tagItem, targetPath, ignoreList, publishedChildren) {
     // Walk through the path and ensure each level is built and expanded
     var parts = targetPath.split('.');
     var currentPath = '';
+    var memberTypes = null;
+    try {
+        memberTypes = JSON.parse(tagItem.dataset.memberTypes || 'null');
+    } catch (e) {}
 
     for (var i = 0; i < parts.length; i++) {
         currentPath = currentPath ? currentPath + '.' + parts[i] : parts[i];
@@ -590,7 +611,9 @@ function expandChildPath(tagItem, targetPath, ignoreList, publishedChildren) {
             try {
                 var parsed = JSON.parse(json);
                 if (typeof parsed === 'object' && parsed !== null) {
-                    childContainer.innerHTML = buildTagChildren(parsed, currentPath, ignoreList, publishedChildren);
+                    // Only pass root memberTypes for the first level; deeper levels use parentType
+                    var mt = (i === 0) ? memberTypes : null;
+                    childContainer.innerHTML = buildTagChildren(parsed, currentPath, ignoreList, publishedChildren, mt, row.dataset.type);
                 }
             } catch (e) {
                 return; // Failed to build, stop
@@ -618,9 +641,11 @@ function updateDetailsPanel(info) {
     try {
         var parsed = JSON.parse(info.json);
         if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-            valueHtml = '<div class="value-tree">' + buildValueTree(parsed, '') + '</div>';
+            valueHtml = '<div class="value-tree">' + buildValueTree(parsed, '', info.memberTypes || null) + '</div>';
         } else if (Array.isArray(parsed)) {
-            valueHtml = '<div class="value-tree">' + buildArrayTree(parsed, '') + '</div>';
+            // Derive element type from parent type (e.g., "SINT[]" -> "SINT")
+            var elType = (info.type && info.type.endsWith('[]')) ? info.type.slice(0, -2) : null;
+            valueHtml = '<div class="value-tree">' + buildArrayTree(parsed, '', elType) + '</div>';
         } else {
             valueHtml = '<div class="value-simple mono">' + escapeHtml(String(parsed)) + '</div>';
         }
@@ -790,8 +815,8 @@ function toggleTagEnabled(plc, tagName, enabled) {
                     } else {
                         tagRow.classList.remove('monitored');
                     }
-                    // Sync inline publish toggle
-                    var toggle = tagRow.querySelector('.publish-toggle input');
+                    // Sync inline publish checkbox
+                    var toggle = tagRow.querySelector('.publish-checkbox input');
                     if (toggle) toggle.checked = enabled;
                 }
                 // Update indicators
@@ -1181,26 +1206,27 @@ function updatePublishedChildren(plc, tagName, path, published, writable) {
     }
 }
 
-function buildValueTree(obj, parentPath) {
+function buildValueTree(obj, parentPath, memberTypes) {
     var html = '';
     var keys = Object.keys(obj).sort();
 
     for (var i = 0; i < keys.length; i++) {
         var key = keys[i];
         var value = obj[key];
-        var valueType = getValueType(value);
+        var valueType = (memberTypes && memberTypes[key]) ? memberTypes[key] : getValueType(value);
         var nodePath = parentPath ? parentPath + '.' + key : key;
 
         if (typeof value === 'object' && value !== null) {
             if (Array.isArray(value)) {
-                // Array
+                // Array - derive element type by stripping [] from this member's type
+                var arrElType = (valueType && valueType.endsWith('[]')) ? valueType.slice(0, -2) : null;
                 html += '<div class="tree-node expandable collapsed" data-node-path="' + escapeAttr(nodePath) + '" onclick="toggleTreeNode(event, this)">' +
                     '<span class="tree-expand">&#9660;</span>' +
                     '<span class="tree-key">' + escapeHtml(key) + '</span>' +
                     '<span class="tree-type">(' + valueType + ')</span>' +
                     '<span class="tree-summary">[' + value.length + ' items]</span>' +
                     '</div>' +
-                    '<div class="tree-children" style="display:none">' + buildArrayTree(value, nodePath) + '</div>';
+                    '<div class="tree-children" style="display:none">' + buildArrayTree(value, nodePath, arrElType) + '</div>';
             } else {
                 // Nested object
                 var fieldCount = Object.keys(value).length;
@@ -1224,11 +1250,11 @@ function buildValueTree(obj, parentPath) {
     return html;
 }
 
-function buildArrayTree(arr, parentPath) {
+function buildArrayTree(arr, parentPath, elementType) {
     var html = '';
     for (var i = 0; i < arr.length; i++) {
         var value = arr[i];
-        var valueType = getValueType(value);
+        var valueType = elementType || getValueType(value);
         var nodePath = parentPath ? parentPath + '[' + i + ']' : '[' + i + ']';
 
         if (typeof value === 'object' && value !== null) {
@@ -1664,6 +1690,10 @@ function restoreState() {
                 buildTagChildrenIfNeeded(tagItem);
 
                 // Expand all intermediate nodes in the path
+                var memberTypes = null;
+                try {
+                    memberTypes = JSON.parse(tagItem.dataset.memberTypes || 'null');
+                } catch (e) {}
                 var pathParts = selectedInfo.path.split('.');
                 var currentPath = '';
                 for (var i = 0; i < pathParts.length - 1; i++) {
@@ -1679,7 +1709,8 @@ function restoreState() {
                                 try {
                                     var parsed = JSON.parse(json);
                                     if (typeof parsed === 'object' && parsed !== null) {
-                                        childContainer.innerHTML = buildTagChildren(parsed, currentPath, ignoreList, publishedChildren);
+                                        var mt = (i === 0) ? memberTypes : null;
+                                        childContainer.innerHTML = buildTagChildren(parsed, currentPath, ignoreList, publishedChildren, mt, parentRow.dataset.type);
                                     }
                                 } catch (e) {}
                             }

@@ -195,10 +195,6 @@
 [data-theme="dark"] .log-level-kafka { color: #f0883e; }
 [data-theme="dark"] .log-level-logix { color: #f778ba; }
 
-[data-theme="dark"] .publish-slider::before {
-    background: #c9d1d9;
-}
-
 /* Theme Toggle Button */
 .theme-toggle {
     display: inline-flex;
@@ -677,6 +673,13 @@ main.container {
 .login-subtitle {
     color: var(--color-text-muted);
     margin-bottom: 1.5rem;
+}
+
+.login-hint {
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+    margin-bottom: 1.5rem;
+    line-height: 1.4;
 }
 
 .login-form {
@@ -1646,60 +1649,18 @@ main.container {
     background: rgba(230, 126, 34, 0.1);
 }
 
-/* Inline publish toggle */
-.publish-toggle {
-    position: relative;
-    display: inline-block;
-    width: 28px;
-    height: 16px;
+/* Inline publish checkbox */
+.publish-checkbox {
+    display: inline-flex;
+    align-items: center;
     flex-shrink: 0;
     cursor: pointer;
+    margin-right: 2px;
 }
 
-.publish-toggle input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-    position: absolute;
-}
-
-.publish-slider {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: var(--color-border);
-    border-radius: 16px;
-    transition: background 0.2s;
-}
-
-.publish-slider::before {
-    content: '';
-    position: absolute;
-    width: 12px;
-    height: 12px;
-    left: 2px;
-    bottom: 2px;
-    background: #fff;
-    border-radius: 50%;
-    transition: transform 0.2s;
-}
-
-.publish-toggle input:checked + .publish-slider {
-    background: var(--color-success);
-}
-
-.publish-toggle input:checked + .publish-slider::before {
-    transform: translateX(12px);
-}
-
-.tag-row.selected .publish-slider {
-    background: rgba(255,255,255,0.35);
-}
-
-.tag-row.selected .publish-toggle input:checked + .publish-slider {
-    background: rgba(255,255,255,0.5);
+.publish-checkbox input {
+    cursor: pointer;
+    margin: 0;
 }
 
 .tag-row.empty {

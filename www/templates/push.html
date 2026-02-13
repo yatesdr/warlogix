@@ -1,0 +1,579 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>Push Webhooks</h1>
+</div>
+
+{{if .IsAdmin}}
+<div class="action-bar">
+    <button class="btn btn-primary" onclick="showAddPushModal()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;vertical-align:-2px">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Add Push
+    </button>
+</div>
+{{end}}
+
+<div id="push-list" class="tagpacks-list">
+    {{range $push := .Pushes}}
+    <div class="tagpack-item collapsed" data-name="{{$push.Name}}" data-status="{{$push.Status}}" data-status-class="{{$push.StatusClass}}">
+        <div class="tagpack-header" onclick="togglePushExpand(this)">
+            <span class="tagpack-expand">&#9660;</span>
+            <span class="tagpack-name">{{$push.Name}}</span>
+            <span class="trigger-condition" title="{{$push.Method}} {{$push.URL}}">
+                {{$push.Method}} {{$push.URL}}
+            </span>
+            <span class="tagpack-member-count">{{len $push.Conditions}} cond{{if ne (len $push.Conditions) 1}}s{{end}}</span>
+            {{if $.IsAdmin}}
+            <button class="status-indicator {{$push.StatusClass}}" onclick="togglePush(event, '{{$push.Name}}', '{{$push.Status}}')"
+                    title="{{if or (eq $push.Status "Armed") (eq $push.Status "Firing")}}Click to stop{{else}}Click to start{{end}}">
+                {{$push.Status}}
+            </button>
+            <button class="btn-icon" title="Test Fire" onclick="testFirePush(event, '{{$push.Name}}')">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 1l2.5 5H13l-3.5 4 1.5 5L8 12.5 5 15l1.5-5L3 6h2.5z"/>
+                </svg>
+            </button>
+            <button class="btn-icon" title="Edit" onclick="showEditPushModal(event, '{{$push.Name}}')">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/>
+                    <path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/>
+                </svg>
+            </button>
+            <button class="btn-icon btn-icon-danger" title="Delete" onclick="deletePush(event, '{{$push.Name}}')">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/>
+                    <path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                    <path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/>
+                    <path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/>
+                </svg>
+            </button>
+            {{else}}
+            <span class="status-badge {{$push.StatusClass}}">{{$push.Status}}</span>
+            {{end}}
+        </div>
+        <div class="tagpack-members">
+            {{if $push.Conditions}}
+            {{range $i, $cond := $push.Conditions}}
+            <div class="member-row">
+                <span class="member-tag">{{$cond.PLC}}: {{$cond.Tag}} {{$cond.Operator}} {{$cond.Value}}</span>
+            </div>
+            {{end}}
+            {{else}}
+            <div class="member-empty">No conditions configured</div>
+            {{end}}
+            {{if $push.SendCount}}
+            <div class="member-row" style="opacity: 0.7; font-size: 0.85em;">
+                <span class="member-tag">Sends: {{$push.SendCount}} | Last HTTP: {{$push.LastHTTPCode}}{{if $push.LastSend}} | Last: {{$push.LastSend}}{{end}}</span>
+            </div>
+            {{end}}
+        </div>
+    </div>
+    {{else}}
+    <div id="empty-state" class="empty-state">No push webhooks configured</div>
+    {{end}}
+</div>
+
+<!-- Add Push Modal -->
+<div id="push-add-modal" class="modal" style="display:none">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h2>Add Push Webhook</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('push-add-modal')">&times;</button>
+        </div>
+        <form id="push-add-form" onsubmit="addPush(event)">
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="push-add-name" required placeholder="my-webhook">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>URL</label>
+                        <input type="text" id="push-add-url" required placeholder="https://example.com/webhook">
+                    </div>
+                    <div class="form-group" style="max-width:120px">
+                        <label>Method</label>
+                        <select id="push-add-method">
+                            <option value="POST">POST</option>
+                            <option value="GET">GET</option>
+                            <option value="PUT">PUT</option>
+                            <option value="PATCH">PATCH</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Content Type</label>
+                        <input type="text" id="push-add-content-type" value="application/json">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Auth Type</label>
+                        <select id="push-add-auth-type" onchange="toggleAuthFields('add')">
+                            <option value="">None</option>
+                            <option value="bearer">Bearer Token</option>
+                            <option value="basic">Basic Auth</option>
+                            <option value="jwt">JWT</option>
+                            <option value="custom_header">Custom Header</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="push-add-auth-fields" style="display:none">
+                    <div class="form-row">
+                        <div class="form-group" id="push-add-token-group">
+                            <label id="push-add-token-label">Token</label>
+                            <input type="text" id="push-add-token">
+                        </div>
+                        <div class="form-group" id="push-add-username-group" style="display:none">
+                            <label>Username</label>
+                            <input type="text" id="push-add-username">
+                        </div>
+                        <div class="form-group" id="push-add-header-name-group" style="display:none">
+                            <label>Header Name</label>
+                            <input type="text" id="push-add-header-name" placeholder="X-API-Key">
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Body <span style="opacity:0.6;font-weight:normal">(use #PLC.tagName to embed live tag values)</span></label>
+                    <textarea id="push-add-body" rows="8" placeholder='{"message": "Alert: #MyPLC.FaultCode"}'></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Cooldown</label>
+                        <input type="text" id="push-add-cooldown" value="15m" placeholder="15m">
+                    </div>
+                    <div class="form-group">
+                        <label>Timeout</label>
+                        <input type="text" id="push-add-timeout" value="30s" placeholder="30s">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="push-add-per-cond"> Per-condition cooldown
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="push-add-enabled" checked> Enabled
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('push-add-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Push</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Push Modal -->
+<div id="push-edit-modal" class="modal" style="display:none">
+    <div class="modal-content modal-lg">
+        <div class="modal-header">
+            <h2>Edit Push: <span id="push-edit-title"></span></h2>
+            <button class="modal-close" onclick="WarLink.hideModal('push-edit-modal')">&times;</button>
+        </div>
+        <form id="push-edit-form" onsubmit="savePush(event)">
+            <input type="hidden" id="push-edit-name">
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>URL</label>
+                        <input type="text" id="push-edit-url" required>
+                    </div>
+                    <div class="form-group" style="max-width:120px">
+                        <label>Method</label>
+                        <select id="push-edit-method">
+                            <option value="POST">POST</option>
+                            <option value="GET">GET</option>
+                            <option value="PUT">PUT</option>
+                            <option value="PATCH">PATCH</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Content Type</label>
+                        <input type="text" id="push-edit-content-type">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Auth Type</label>
+                        <select id="push-edit-auth-type" onchange="toggleAuthFields('edit')">
+                            <option value="">None</option>
+                            <option value="bearer">Bearer Token</option>
+                            <option value="basic">Basic Auth</option>
+                            <option value="jwt">JWT</option>
+                            <option value="custom_header">Custom Header</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="push-edit-auth-fields" style="display:none">
+                    <div class="form-row">
+                        <div class="form-group" id="push-edit-token-group">
+                            <label id="push-edit-token-label">Token</label>
+                            <input type="text" id="push-edit-token">
+                        </div>
+                        <div class="form-group" id="push-edit-username-group" style="display:none">
+                            <label>Username</label>
+                            <input type="text" id="push-edit-username">
+                        </div>
+                        <div class="form-group" id="push-edit-header-name-group" style="display:none">
+                            <label>Header Name</label>
+                            <input type="text" id="push-edit-header-name">
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Body <span style="opacity:0.6;font-weight:normal">(use #PLC.tagName to embed live tag values)</span></label>
+                    <textarea id="push-edit-body" rows="8"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Cooldown</label>
+                        <input type="text" id="push-edit-cooldown">
+                    </div>
+                    <div class="form-group">
+                        <label>Timeout</label>
+                        <input type="text" id="push-edit-timeout">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="push-edit-per-cond"> Per-condition cooldown
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="push-edit-enabled"> Enabled
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Conditions Section -->
+                <h3 style="margin-top:1em">Conditions (OR logic)</h3>
+                <div id="push-edit-conditions"></div>
+                <div class="form-row" style="margin-top:0.5em">
+                    <div class="form-group">
+                        <select id="push-edit-cond-plc" onchange="onEditCondPLCChange()">
+                            <option value="">PLC...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <div id="push-edit-cond-tag-container"></div>
+                    </div>
+                    <div class="form-group" style="max-width:80px">
+                        <select id="push-edit-cond-op">
+                            <option value="==">==</option>
+                            <option value="!=">!=</option>
+                            <option value=">">&gt;</option>
+                            <option value="<">&lt;</option>
+                            <option value=">=">&gt;=</option>
+                            <option value="<=">&lt;=</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="max-width:80px">
+                        <input type="text" id="push-edit-cond-value" placeholder="true">
+                    </div>
+                    <button type="button" class="btn btn-sm" onclick="addCondition()">Add</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('push-edit-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+var editConditions = [];
+var editCondTagPicker = null;
+
+function togglePushExpand(headerEl) {
+    var item = headerEl.closest('.tagpack-item');
+    item.classList.toggle('collapsed');
+}
+
+function parseValue(str) {
+    if (str === 'true') return true;
+    if (str === 'false') return false;
+    var num = Number(str);
+    if (!isNaN(num) && str !== '') return num;
+    return str;
+}
+
+function toggleAuthFields(prefix) {
+    var authType = document.getElementById('push-' + prefix + '-auth-type').value;
+    var fieldsDiv = document.getElementById('push-' + prefix + '-auth-fields');
+    var tokenGroup = document.getElementById('push-' + prefix + '-token-group');
+    var usernameGroup = document.getElementById('push-' + prefix + '-username-group');
+    var headerNameGroup = document.getElementById('push-' + prefix + '-header-name-group');
+    var tokenLabel = document.getElementById('push-' + prefix + '-token-label');
+
+    fieldsDiv.style.display = authType ? '' : 'none';
+    tokenGroup.style.display = '';
+    usernameGroup.style.display = 'none';
+    headerNameGroup.style.display = 'none';
+
+    switch (authType) {
+        case 'bearer':
+        case 'jwt':
+            tokenLabel.textContent = 'Token';
+            break;
+        case 'basic':
+            tokenLabel.textContent = 'Password';
+            usernameGroup.style.display = '';
+            break;
+        case 'custom_header':
+            tokenLabel.textContent = 'Header Value';
+            headerNameGroup.style.display = '';
+            break;
+        default:
+            tokenGroup.style.display = 'none';
+    }
+}
+
+function buildAuthConfig(prefix) {
+    var authType = document.getElementById('push-' + prefix + '-auth-type').value;
+    var auth = {type: authType};
+    if (!authType) return auth;
+
+    var token = document.getElementById('push-' + prefix + '-token').value;
+    switch (authType) {
+        case 'bearer':
+        case 'jwt':
+            auth.token = token;
+            break;
+        case 'basic':
+            auth.username = document.getElementById('push-' + prefix + '-username').value;
+            auth.password = token;
+            break;
+        case 'custom_header':
+            auth.header_name = document.getElementById('push-' + prefix + '-header-name').value;
+            auth.header_value = token;
+            break;
+    }
+    return auth;
+}
+
+function showAddPushModal() {
+    document.getElementById('push-add-form').reset();
+    document.getElementById('push-add-enabled').checked = true;
+    document.getElementById('push-add-auth-fields').style.display = 'none';
+    WarLink.showModal('push-add-modal');
+}
+
+function addPush(e) {
+    e.preventDefault();
+    var data = {
+        name: document.getElementById('push-add-name').value,
+        url: document.getElementById('push-add-url').value,
+        method: document.getElementById('push-add-method').value,
+        body: document.getElementById('push-add-body').value,
+        content_type: document.getElementById('push-add-content-type').value,
+        auth: buildAuthConfig('add'),
+        cooldown_min: document.getElementById('push-add-cooldown').value,
+        timeout: document.getElementById('push-add-timeout').value,
+        cooldown_per_condition: document.getElementById('push-add-per-cond').checked,
+        enabled: document.getElementById('push-add-enabled').checked,
+        conditions: []
+    };
+
+    WarLink.api.post('/htmx/push', data).then(function() {
+        WarLink.hideModal('push-add-modal');
+        location.reload();
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function showEditPushModal(event, name) {
+    event.stopPropagation();
+    WarLink.api.get('/htmx/push/' + encodeURIComponent(name)).then(function(data) {
+        document.getElementById('push-edit-name').value = data.name;
+        document.getElementById('push-edit-title').textContent = data.name;
+        document.getElementById('push-edit-url').value = data.url || '';
+        document.getElementById('push-edit-method').value = data.method || 'POST';
+        document.getElementById('push-edit-body').value = data.body || '';
+        document.getElementById('push-edit-content-type').value = data.content_type || 'application/json';
+        document.getElementById('push-edit-auth-type').value = data.auth_type || '';
+        toggleAuthFields('edit');
+        document.getElementById('push-edit-cooldown').value = data.cooldown_min || '15m';
+        document.getElementById('push-edit-timeout').value = data.timeout || '30s';
+        document.getElementById('push-edit-per-cond').checked = data.cooldown_per_condition || false;
+        document.getElementById('push-edit-enabled').checked = data.enabled;
+
+        // Load conditions
+        editConditions = data.conditions || [];
+        renderConditions();
+
+        // Load PLCs for condition editing
+        loadCondPLCOptions();
+
+        // Create tag picker for condition editing
+        if (editCondTagPicker) editCondTagPicker.destroy();
+        editCondTagPicker = WarLink.TagPicker(document.getElementById('push-edit-cond-tag-container'), {
+            placeholder: 'Search tag...'
+        });
+
+        WarLink.showModal('push-edit-modal');
+    }).catch(function(err) {
+        WarLink.toast('Error loading push: ' + err.message, 'error');
+    });
+}
+
+function loadCondPLCOptions() {
+    WarLink.api.get('/htmx/available-tags').then(function(tags) {
+        var select = document.getElementById('push-edit-cond-plc');
+        var plcs = {};
+        (tags || []).forEach(function(t) { plcs[t.plc] = true; });
+        select.innerHTML = '<option value="">PLC...</option>';
+        Object.keys(plcs).sort().forEach(function(name) {
+            select.innerHTML += '<option value="' + WarLink.escapeHtml(name) + '">' + WarLink.escapeHtml(name) + '</option>';
+        });
+    });
+}
+
+function onEditCondPLCChange() {
+    var plc = document.getElementById('push-edit-cond-plc').value;
+    if (editCondTagPicker) editCondTagPicker.setPLC(plc);
+}
+
+function renderConditions() {
+    var container = document.getElementById('push-edit-conditions');
+    if (editConditions.length === 0) {
+        container.innerHTML = '<div class="member-empty">No conditions - add at least one</div>';
+        return;
+    }
+    var html = '';
+    editConditions.forEach(function(cond, i) {
+        html += '<div class="member-row" style="display:flex;align-items:center;gap:8px">';
+        html += '<span class="member-tag">' + WarLink.escapeHtml(cond.plc || cond.PLC || '') + ': ' +
+                WarLink.escapeHtml(cond.tag || cond.Tag || '') + ' ' +
+                WarLink.escapeHtml(cond.operator || cond.Operator || '') + ' ' +
+                WarLink.escapeHtml(String(cond.value !== undefined ? cond.value : (cond.Value !== undefined ? cond.Value : ''))) + '</span>';
+        html += '<button type="button" class="btn-icon btn-icon-danger" onclick="removeCondition(' + i + ')" title="Remove">';
+        html += '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+        html += '</button></div>';
+    });
+    container.innerHTML = html;
+}
+
+function addCondition() {
+    var plc = document.getElementById('push-edit-cond-plc').value;
+    var tag = editCondTagPicker ? editCondTagPicker.getValue() : '';
+    var op = document.getElementById('push-edit-cond-op').value;
+    var value = document.getElementById('push-edit-cond-value').value;
+
+    if (!plc || !tag) {
+        WarLink.toast('Select PLC and tag', 'error');
+        return;
+    }
+
+    editConditions.push({
+        plc: plc,
+        tag: tag,
+        operator: op,
+        value: parseValue(value || 'true')
+    });
+    renderConditions();
+    if (editCondTagPicker) editCondTagPicker.setValue('');
+}
+
+function removeCondition(index) {
+    editConditions.splice(index, 1);
+    renderConditions();
+}
+
+function savePush(e) {
+    e.preventDefault();
+    var name = document.getElementById('push-edit-name').value;
+
+    var data = {
+        url: document.getElementById('push-edit-url').value,
+        method: document.getElementById('push-edit-method').value,
+        body: document.getElementById('push-edit-body').value,
+        content_type: document.getElementById('push-edit-content-type').value,
+        auth: buildAuthConfig('edit'),
+        cooldown_min: document.getElementById('push-edit-cooldown').value,
+        timeout: document.getElementById('push-edit-timeout').value,
+        cooldown_per_condition: document.getElementById('push-edit-per-cond').checked,
+        enabled: document.getElementById('push-edit-enabled').checked,
+        conditions: editConditions
+    };
+
+    WarLink.api.put('/htmx/push/' + encodeURIComponent(name), data).then(function() {
+        WarLink.hideModal('push-edit-modal');
+        location.reload();
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function deletePush(event, name) {
+    event.stopPropagation();
+    if (!confirm('Delete push webhook "' + name + '"?')) return;
+
+    WarLink.api.del('/htmx/push/' + encodeURIComponent(name)).then(function() {
+        var item = document.querySelector('.tagpack-item[data-name="' + name + '"]');
+        if (item) item.remove();
+        if (document.querySelectorAll('.tagpack-item').length === 0) {
+            var list = document.getElementById('push-list');
+            list.innerHTML = '<div id="empty-state" class="empty-state">No push webhooks configured</div>';
+        }
+        WarLink.toast('Push deleted', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function togglePush(event, name, currentStatus) {
+    event.stopPropagation();
+    var action = (currentStatus === 'Armed' || currentStatus === 'Firing') ? 'stop' : 'start';
+    var btn = event.currentTarget;
+    btn.disabled = true;
+    btn.textContent = action === 'start' ? 'Starting...' : 'Stopping...';
+
+    WarLink.api.post('/htmx/push/' + encodeURIComponent(name) + '/' + action).then(function() {
+        // SSE/reload will update the status
+        setTimeout(function() { location.reload(); }, 500);
+    }).catch(function(err) {
+        btn.disabled = false;
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+function testFirePush(event, name) {
+    event.stopPropagation();
+    WarLink.api.post('/htmx/push/' + encodeURIComponent(name) + '/test').then(function() {
+        WarLink.toast('Test fire sent', 'success');
+    }).catch(function(err) {
+        WarLink.toast('Error: ' + err.message, 'error');
+    });
+}
+
+// SSE for real-time status updates
+WarLink.createSSE('/events/republisher', {
+    onEntityChange: function(data) {
+        if (data.entityType !== 'push') return;
+        if (data.action === 'remove') {
+            var item = document.querySelector('.tagpack-item[data-name="' + data.name + '"]');
+            if (item) item.remove();
+            if (document.querySelectorAll('.tagpack-item').length === 0) {
+                var list = document.getElementById('push-list');
+                list.innerHTML = '<div id="empty-state" class="empty-state">No push webhooks configured</div>';
+            }
+        }
+        if (data.action === 'add') {
+            location.reload();
+        }
+    }
+});
+</script>
+
+{{template "footer" .}}
