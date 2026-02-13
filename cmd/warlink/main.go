@@ -502,7 +502,7 @@ func run(cfg *config.Config, headless bool) {
 		// (e.g. data races, panics) from corrupting the terminal display.
 		stderrPath := filepath.Join(filepath.Dir(*configPath), "warlink-crash.log")
 		if f, err := os.OpenFile(stderrPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
-			syscall.Dup2(int(f.Fd()), int(os.Stderr.Fd()))
+			redirectStderr(f)
 			defer f.Close()
 		}
 
