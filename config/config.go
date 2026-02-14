@@ -464,56 +464,6 @@ func DefaultConfig() *Config {
 	}
 }
 
-// DefaultMQTTConfig returns a default MQTT configuration.
-func DefaultMQTTConfig(name string) MQTTConfig {
-	return MQTTConfig{
-		Name:     name,
-		Enabled:  false,
-		Broker:   "localhost",
-		Port:     1883,
-		ClientID: "warlink-" + name,
-	}
-}
-
-// DefaultValkeyConfig returns a default Valkey configuration.
-func DefaultValkeyConfig(name string) ValkeyConfig {
-	return ValkeyConfig{
-		Name:            name,
-		Enabled:         false,
-		Address:         "localhost:6379",
-		Database:        0,
-		KeyTTL:          0,
-		PublishChanges:  true,
-		EnableWriteback: false,
-	}
-}
-
-// DefaultKafkaConfig returns a default Kafka configuration.
-func DefaultKafkaConfig(name string) KafkaConfig {
-	return KafkaConfig{
-		Name:            name,
-		Enabled:         false,
-		Brokers:         []string{"localhost:9092"},
-		RequiredAcks:    -1, // All replicas must acknowledge
-		MaxRetries:      3,
-		RetryBackoff:    100 * time.Millisecond,
-		EnableWriteback: false,
-		WriteMaxAge:     2 * time.Second, // Ignore write requests older than 2 seconds
-	}
-}
-
-// DefaultTriggerConfig returns a default trigger configuration.
-func DefaultTriggerConfig(name string) TriggerConfig {
-	return TriggerConfig{
-		Name:       name,
-		Enabled:    false,
-		Condition:  TriggerCondition{Operator: "==", Value: true},
-		DebounceMS: 100,
-		Tags:       []string{},
-		Metadata:   make(map[string]string),
-	}
-}
-
 // FindMQTT returns the MQTT config with the given name, or nil if not found.
 func (c *Config) FindMQTT(name string) *MQTTConfig {
 	for i := range c.MQTT {
@@ -837,20 +787,6 @@ func (c *Config) UpdateTrigger(name string, updated TriggerConfig) bool {
 	return false
 }
 
-// DefaultPushConfig returns a default push configuration.
-func DefaultPushConfig(name string) PushConfig {
-	return PushConfig{
-		Name:        name,
-		Enabled:     false,
-		Conditions:  []PushCondition{},
-		Method:      "POST",
-		ContentType: "application/json",
-		CooldownMin: 15 * time.Minute,
-		Timeout:     30 * time.Second,
-		Headers:     make(map[string]string),
-	}
-}
-
 // FindPush returns the Push config with the given name, or nil if not found.
 func (c *Config) FindPush(name string) *PushConfig {
 	for i := range c.Pushes {
@@ -923,18 +859,6 @@ func (c *Config) UpdateTagPack(name string, updated TagPackConfig) bool {
 		}
 	}
 	return false
-}
-
-// DefaultTagPackConfig returns a default TagPack configuration.
-func DefaultTagPackConfig(name string) TagPackConfig {
-	return TagPackConfig{
-		Name:          name,
-		Enabled:       true,
-		MQTTEnabled:   true,
-		KafkaEnabled:  false,
-		ValkeyEnabled: false,
-		Members:       []TagPackMember{},
-	}
 }
 
 // Validate checks the configuration for errors.

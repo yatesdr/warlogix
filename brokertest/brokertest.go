@@ -3,12 +3,10 @@ package brokertest
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,15 +48,6 @@ type TestConfig struct {
 	NumTags int
 	// NumPLCs is the number of simulated PLCs
 	NumPLCs int
-}
-
-// DefaultTestConfig returns sensible defaults for stress testing.
-func DefaultTestConfig() TestConfig {
-	return TestConfig{
-		Duration: 10 * time.Second,
-		NumTags:  100,
-		NumPLCs:  50,
-	}
 }
 
 // TestResult holds the results from a broker stress test.
@@ -276,95 +265,6 @@ done:
 		result.Success = errorRate < 0.01 // Less than 1% errors
 	} else {
 		result.Success = false
-	}
-
-	return result
-}
-
-// runKafkaStress executes the actual Kafka stress test (direct producer, not batched).
-func (r *Runner) runKafkaStress(producer *kafka.Producer, cfg *kafka.Config, result TestResult) TestResult {
-	var sent, errors, contextErrors int64
-	latencies := make([]time.Duration, 0, 100000)
-	var latencyMu sync.Mutex
-
-	// Use a stop channel instead of context for cleaner shutdown
-	stopChan := make(chan struct{})
-	time.AfterFunc(r.testCfg.Duration, func() { close(stopChan) })
-
-	startTime := time.Now()
-
-	// Generate test messages with multiple workers
-	var wg sync.WaitGroup
-	numWorkers := 4
-
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			localLatencies := make([]time.Duration, 0, 10000)
-
-			for {
-				select {
-				case <-stopChan:
-					// Merge local latencies
-					latencyMu.Lock()
-					latencies = append(latencies, localLatencies...)
-					latencyMu.Unlock()
-					return
-				default:
-					plcNum := rand.Intn(r.testCfg.NumPLCs)
-					tagNum := rand.Intn(r.testCfg.NumTags)
-
-					msg := map[string]interface{}{
-						"plc":       fmt.Sprintf("TestPLC%d", plcNum),
-						"tag":       fmt.Sprintf("Tag%d", tagNum),
-						"value":     rand.Intn(10000),
-						"type":      "DINT",
-						"writable":  false,
-						"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-					}
-					payload, _ := json.Marshal(msg)
-					key := []byte(fmt.Sprintf("TestPLC%d.Tag%d", plcNum, tagNum))
-
-					// Use a per-message context with generous timeout
-					// Note: cfg.Topic is no longer used; the producer uses its internal topic from builder
-					msgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					msgStart := time.Now()
-					err := producer.Produce(msgCtx, "warlink-test-stress", key, payload)
-					latency := time.Since(msgStart)
-					cancel()
-
-					if err != nil {
-						if strings.Contains(err.Error(), "context") {
-							atomic.AddInt64(&contextErrors, 1)
-						}
-						atomic.AddInt64(&errors, 1)
-					} else {
-						atomic.AddInt64(&sent, 1)
-						localLatencies = append(localLatencies, latency)
-					}
-				}
-			}
-		}(w)
-	}
-
-	wg.Wait()
-
-	result.Duration = time.Since(startTime)
-	result.MessagesSent = sent
-	result.MessagesAcked = sent // Kafka sync = sent == acked
-	result.Errors = errors
-
-	// Calculate throughput based on actual test duration
-	result.Throughput = float64(sent) / result.Duration.Seconds()
-
-	// Consider success if error rate is < 1%
-	errorRate := float64(errors) / float64(sent+errors)
-	result.Success = sent > 0 && errorRate < 0.01
-
-	// Calculate latency percentiles
-	if len(latencies) > 0 {
-		result.AvgLatency, result.P50Latency, result.P95Latency, result.P99Latency, result.MaxLatency = calculateLatencyStats(latencies)
 	}
 
 	return result

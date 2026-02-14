@@ -503,13 +503,6 @@ func (s *Server) Stop() error {
 	return nil
 }
 
-// IsRunning returns whether the server is running.
-func (s *Server) IsRunning() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.running
-}
-
 // SessionCount returns the number of active sessions.
 func (s *Server) SessionCount() int {
 	s.sessionsMu.RLock()

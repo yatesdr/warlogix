@@ -43,11 +43,6 @@ func (l *FileLogger) Log(format string, args ...interface{}) {
 	fmt.Fprintf(l.file, "%s %s\n", timestamp, msg)
 }
 
-// LogWithPrefix writes a message with a prefix (e.g., "MQTT:", "ERROR:").
-func (l *FileLogger) LogWithPrefix(prefix, format string, args ...interface{}) {
-	l.Log(prefix+" "+format, args...)
-}
-
 // Close closes the log file.
 func (l *FileLogger) Close() error {
 	l.mu.Lock()
@@ -61,14 +56,3 @@ func (l *FileLogger) Close() error {
 	return l.file.Close()
 }
 
-// Sync flushes any buffered data to the file.
-func (l *FileLogger) Sync() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.closed {
-		return nil
-	}
-
-	return l.file.Sync()
-}

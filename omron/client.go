@@ -99,24 +99,10 @@ func WithUnit(unit byte) Option {
 	}
 }
 
-// WithSourceNode sets the source node number.
-func WithSourceNode(node byte) Option {
-	return func(c *Client) {
-		c.srcNode = node
-	}
-}
-
 // WithTimeout sets the timeout duration.
 func WithTimeout(timeout time.Duration) Option {
 	return func(c *Client) {
 		c.timeout = timeout
-	}
-}
-
-// WithDebug enables debug logging.
-func WithDebug(enabled bool) Option {
-	return func(c *Client) {
-		c.debug = enabled
 	}
 }
 
@@ -861,141 +847,6 @@ func (c *Client) Read(addresses ...string) ([]*TagValue, error) {
 	return c.readFINSBatched(addresses)
 }
 
-// readFINS reads FINS addresses.
-func (c *Client) readFINS(addresses []string) ([]*TagValue, error) {
-	results := make([]*TagValue, len(addresses))
-	logging.DebugLog("Omron", "Read %d FINS addresses", len(addresses))
-
-	for i, addr := range addresses {
-		tv := &TagValue{
-			Name:      addr,
-			Count:     1,
-			bigEndian: true, // FINS is big-endian
-		}
-
-		parsed, err := ParseAddress(addr)
-		if err != nil {
-			logging.DebugLog("Omron", "Address parse error for %q: %v", addr, err)
-			tv.Error = err
-			results[i] = tv
-			continue
-		}
-
-		tv.DataType = parsed.TypeCode
-		tv.Count = parsed.Count
-
-		areaName := AreaName(parsed.MemoryArea)
-		logging.DebugLog("Omron", "Read %q: area=%s(0x%02X) addr=%d bit=%d type=%s count=%d",
-			addr, areaName, parsed.MemoryArea, parsed.Address, parsed.BitOffset,
-			TypeName(parsed.TypeCode), parsed.Count)
-
-		if parsed.TypeCode == TypeBool {
-			bitArea := BitAreaFromWordArea(parsed.MemoryArea)
-			logging.DebugLog("Omron", "Reading %d bits from area 0x%02X address %d.%d",
-				parsed.Count, bitArea, parsed.Address, parsed.BitOffset)
-			bits, err := c.fins.readBits(bitArea, parsed.Address, parsed.BitOffset, uint16(parsed.Count))
-			if err != nil {
-				logging.DebugLog("Omron", "Bit read error for %q: %v", addr, err)
-				tv.Error = err
-				results[i] = tv
-				continue
-			}
-			data := make([]byte, len(bits)*2)
-			for j, b := range bits {
-				if b {
-					data[j*2+1] = 1
-				}
-			}
-			tv.Bytes = data
-			logging.DebugLog("Omron", "Read %q: got %d bits", addr, len(bits))
-		} else {
-			wordCount := (TypeSize(parsed.TypeCode) * parsed.Count) / 2
-			if wordCount < 1 {
-				wordCount = 1
-			}
-			logging.DebugLog("Omron", "Reading %d words from area 0x%02X address %d",
-				wordCount, parsed.MemoryArea, parsed.Address)
-			words, err := c.fins.readWords(parsed.MemoryArea, parsed.Address, uint16(wordCount))
-			if err != nil {
-				logging.DebugLog("Omron", "Word read error for %q: %v", addr, err)
-				tv.Error = err
-				results[i] = tv
-				continue
-			}
-			data := make([]byte, len(words)*2)
-			for j, w := range words {
-				binary.BigEndian.PutUint16(data[j*2:j*2+2], w)
-			}
-			tv.Bytes = data
-			logging.DebugLog("Omron", "Read %q: got %d words (%d bytes)", addr, len(words), len(data))
-		}
-
-		if parsed.Count > 1 {
-			tv.DataType = MakeArrayType(parsed.TypeCode)
-		}
-		results[i] = tv
-	}
-
-	return results, nil
-}
-
-// readEIP reads symbolic tags via CIP.
-func (c *Client) readEIP(tagNames []string) ([]*TagValue, error) {
-	results := make([]*TagValue, len(tagNames))
-	logging.DebugLog("Omron", "Read %d EIP/CIP tags", len(tagNames))
-
-	for i, tagName := range tagNames {
-		tv := &TagValue{
-			Name:      tagName,
-			Count:     1,
-			bigEndian: false, // CIP is little-endian
-		}
-
-		path, err := cip.EPath().Symbol(tagName).Build()
-		if err != nil {
-			logging.DebugLog("Omron", "EIP tag path error for %q: %v", tagName, err)
-			tv.Error = fmt.Errorf("invalid tag path: %w", err)
-			results[i] = tv
-			continue
-		}
-
-		logging.DebugLog("Omron", "Reading EIP tag %q", tagName)
-
-		reqData := binary.LittleEndian.AppendUint16(nil, 1) // Element count
-		req := cip.Request{
-			Service: svcReadTag,
-			Path:    path,
-			Data:    reqData,
-		}
-
-		respData, err := c.sendCIPRequest(req)
-		if err != nil {
-			logging.DebugLog("Omron", "EIP read error for %q: %v", tagName, err)
-			tv.Error = err
-			results[i] = tv
-			continue
-		}
-
-		// Parse response - first 2 bytes are data type
-		if len(respData) < 2 {
-			logging.DebugLog("Omron", "EIP response too short for %q: %d bytes", tagName, len(respData))
-			tv.Error = fmt.Errorf("response too short")
-			results[i] = tv
-			continue
-		}
-
-		tv.DataType = binary.LittleEndian.Uint16(respData[0:2])
-		if len(respData) > 2 {
-			tv.Bytes = respData[2:]
-		}
-		logging.DebugLog("Omron", "EIP read %q: type=0x%04X (%s) %d bytes",
-			tagName, tv.DataType, TypeName(tv.DataType), len(tv.Bytes))
-		results[i] = tv
-	}
-
-	return results, nil
-}
-
 // sendCIPRequest sends a CIP request via EIP.
 // Uses connected messaging (SendUnitData) when a Forward Open connection exists,
 // otherwise falls back to unconnected messaging (SendRRData).
@@ -1340,56 +1191,6 @@ func (c *Client) AllTags() ([]TagInfo, error) {
 	return c.allTagsEIPFallback()
 }
 
-// parseSymbolInstance parses a Symbol Object instance response.
-func (c *Client) parseSymbolInstance(data []byte, instance uint32) TagInfo {
-	tag := TagInfo{Instance: instance}
-
-	if len(data) < 8 {
-		return tag
-	}
-
-	// Skip CIP response header
-	offset := 0
-	if data[0]&0x80 != 0 {
-		extStatusSize := int(data[3]) * 2
-		offset = 4 + extStatusSize
-	}
-
-	if offset >= len(data) {
-		return tag
-	}
-
-	remaining := data[offset:]
-
-	// Name (length + chars)
-	if len(remaining) > 2 {
-		nameLen := int(remaining[0])
-		if nameLen > 0 && nameLen+1 <= len(remaining) {
-			tag.Name = string(remaining[1 : 1+nameLen])
-			remaining = remaining[1+nameLen:]
-		}
-	}
-
-	// Type code
-	if len(remaining) >= 2 {
-		tag.TypeCode = binary.LittleEndian.Uint16(remaining[0:2])
-		remaining = remaining[2:]
-	}
-
-	// Dimensions
-	if len(remaining) >= 4 {
-		dimCount := binary.LittleEndian.Uint32(remaining[0:4])
-		remaining = remaining[4:]
-		for i := uint32(0); i < dimCount && len(remaining) >= 4; i++ {
-			dim := binary.LittleEndian.Uint32(remaining[0:4])
-			tag.Dimensions = append(tag.Dimensions, dim)
-			remaining = remaining[4:]
-		}
-	}
-
-	return tag
-}
-
 // ReadCPUStatus reads the CPU status (FINS only).
 func (c *Client) ReadCPUStatus() (*CPUStatus, error) {
 	c.mu.Lock()
@@ -1412,20 +1213,6 @@ func (c *Client) ReadCycleTime() (*CycleTime, error) {
 	}
 
 	return c.fins.readCycleTime()
-}
-
-// isConnectionError checks if an error indicates a connection problem.
-func isConnectionError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := strings.ToLower(err.Error())
-	return strings.Contains(errStr, "timeout") ||
-		strings.Contains(errStr, "connection") ||
-		strings.Contains(errStr, "refused") ||
-		strings.Contains(errStr, "unreachable") ||
-		strings.Contains(errStr, "closed") ||
-		strings.Contains(errStr, "reset")
 }
 
 // isEIPConnectionError checks if an error indicates a dead EIP/CIP connection.

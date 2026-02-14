@@ -23,14 +23,6 @@ type DiscoveredDevice struct {
 	Connected      bool   // True if successfully identified
 }
 
-// String returns a human-readable summary of the device.
-func (d *DiscoveredDevice) String() string {
-	if d.AmsNetId != "" {
-		return fmt.Sprintf("Beckhoff TwinCAT at %s:%d (AMS: %s)", d.IP, d.Port, d.AmsNetId)
-	}
-	return fmt.Sprintf("Beckhoff TwinCAT at %s:%d", d.IP, d.Port)
-}
-
 // DiscoverBroadcast performs UDP broadcast discovery for TwinCAT devices.
 // This finds devices and retrieves their AMS Net ID without requiring a route.
 func DiscoverBroadcast(broadcastAddrs []string, timeout time.Duration) []DiscoveredDevice {

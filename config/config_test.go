@@ -125,66 +125,6 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
-func TestDefaultMQTTConfig(t *testing.T) {
-	mqtt := DefaultMQTTConfig("test")
-
-	if mqtt.Name != "test" {
-		t.Errorf("expected name 'test', got %s", mqtt.Name)
-	}
-	if mqtt.Broker != "localhost" {
-		t.Errorf("expected broker 'localhost', got %s", mqtt.Broker)
-	}
-	if mqtt.Port != 1883 {
-		t.Errorf("expected port 1883, got %d", mqtt.Port)
-	}
-	// Selector is empty by default (namespace handles base path)
-	if mqtt.Selector != "" {
-		t.Errorf("expected selector '', got %s", mqtt.Selector)
-	}
-}
-
-func TestDefaultValkeyConfig(t *testing.T) {
-	valkey := DefaultValkeyConfig("test")
-
-	if valkey.Name != "test" {
-		t.Errorf("expected name 'test', got %s", valkey.Name)
-	}
-	if valkey.Address != "localhost:6379" {
-		t.Errorf("expected address 'localhost:6379', got %s", valkey.Address)
-	}
-	if !valkey.PublishChanges {
-		t.Error("expected PublishChanges to be true")
-	}
-}
-
-func TestDefaultKafkaConfig(t *testing.T) {
-	kafka := DefaultKafkaConfig("test")
-
-	if kafka.Name != "test" {
-		t.Errorf("expected name 'test', got %s", kafka.Name)
-	}
-	if len(kafka.Brokers) != 1 || kafka.Brokers[0] != "localhost:9092" {
-		t.Errorf("expected brokers ['localhost:9092'], got %v", kafka.Brokers)
-	}
-	if kafka.RequiredAcks != -1 {
-		t.Errorf("expected RequiredAcks -1, got %d", kafka.RequiredAcks)
-	}
-}
-
-func TestDefaultTriggerConfig(t *testing.T) {
-	trigger := DefaultTriggerConfig("test")
-
-	if trigger.Name != "test" {
-		t.Errorf("expected name 'test', got %s", trigger.Name)
-	}
-	if trigger.Condition.Operator != "==" {
-		t.Errorf("expected operator '==', got %s", trigger.Condition.Operator)
-	}
-	if trigger.DebounceMS != 100 {
-		t.Errorf("expected DebounceMS 100, got %d", trigger.DebounceMS)
-	}
-}
-
 func TestLoadAndSave(t *testing.T) {
 	tmpDir := t.TempDir()
 

@@ -113,23 +113,3 @@ func ValidateAddress(addr string) error {
 	return err
 }
 
-// IsSymbolicAddress returns true if the address looks like a CIP symbolic tag.
-// CIP tags start with a letter and can contain letters, numbers, and underscores.
-func IsSymbolicAddress(addr string) bool {
-	if len(addr) == 0 {
-		return false
-	}
-	// If it matches FINS patterns, it's not symbolic
-	if wordAddrPattern.MatchString(strings.ToUpper(addr)) {
-		return false
-	}
-	if bitAddrPattern.MatchString(strings.ToUpper(addr)) {
-		return false
-	}
-	// Check for valid CIP tag name (starts with letter or underscore)
-	first := addr[0]
-	if (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_' {
-		return true
-	}
-	return false
-}

@@ -68,8 +68,7 @@ type App struct {
 
 	// Daemon mode support
 	daemonMode       bool
-	onDisconnect     func() // Called when user requests disconnect in daemon mode
-	onShutdownDaemon func() // Called when daemon needs to shutdown
+	onDisconnect func() // Called when user requests disconnect in daemon mode
 
 	// Multi-listener IDs for shared backend mode
 	changeListenerID      plcman.ListenerID
@@ -106,42 +105,6 @@ func NewApp(cfg *config.Config, eng *engine.Engine, webServer WebServer) *App {
 		pushMgr:    eng.GetPushMgr(),
 		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
-	}
-
-	a.setupUI()
-	return a
-}
-
-// NewAppWithScreen creates a TUI application that uses the provided tcell.Screen.
-// This is used for daemon mode where the TUI runs on a PTY.
-func NewAppWithScreen(cfg *config.Config, eng *engine.Engine, webServer WebServer, screen tcell.Screen) *App {
-	// Auto-detect ASCII mode based on locale, then allow config override
-	AutoDetectAndEnableASCIIMode()
-
-	// Apply UI settings from config (can override auto-detection)
-	if cfg.UI.Theme != "" {
-		SetTheme(cfg.UI.Theme)
-	}
-	if cfg.UI.ASCIIMode {
-		EnableASCIIMode()
-	}
-
-	a := &App{
-		app:        tview.NewApplication().SetScreen(screen),
-		config:     cfg,
-
-		engine:     eng,
-		manager:    eng.GetPLCMan(),
-		webServer:  webServer,
-		mqttMgr:    eng.GetMQTTMgr(),
-		valkeyMgr:  eng.GetValkeyMgr(),
-		kafkaMgr:   eng.GetKafkaMgr(),
-		triggerMgr: eng.GetTriggerMgr(),
-		packMgr:    eng.GetPackMgr(),
-		pushMgr:    eng.GetPushMgr(),
-		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
-		stopChan:   make(chan struct{}),
-		daemonMode: true,
 	}
 
 	a.setupUI()
@@ -283,19 +246,9 @@ func (a *App) unregisterListeners() {
 	}
 }
 
-// SetDaemonMode sets whether the app is running in daemon mode.
-func (a *App) SetDaemonMode(daemon bool) {
-	a.daemonMode = daemon
-}
-
 // SetOnDisconnect sets a callback for when the user requests disconnect in daemon mode.
 func (a *App) SetOnDisconnect(fn func()) {
 	a.onDisconnect = fn
-}
-
-// SetOnShutdownDaemon sets a callback for when the daemon needs to shutdown.
-func (a *App) SetOnShutdownDaemon(fn func()) {
-	a.onShutdownDaemon = fn
 }
 
 func (a *App) setupUI() {
@@ -983,30 +936,6 @@ func (a *App) Shutdown() {
 	case <-done:
 	case <-time.After(1 * time.Second):
 	}
-}
-
-// Stop halts the TUI application.
-func (a *App) Stop() {
-	a.app.Stop()
-}
-
-// ForceDraw forces an immediate draw of the application.
-func (a *App) ForceDraw() {
-	a.app.ForceDraw()
-}
-
-// ShutdownDaemon performs a full daemon shutdown.
-// This is called when SIGTERM/SIGINT is received in daemon mode.
-func (a *App) ShutdownDaemon() {
-	if a.onShutdownDaemon != nil {
-		a.onShutdownDaemon()
-	}
-	a.Shutdown()
-}
-
-// IsDaemonMode returns whether the app is running in daemon mode.
-func (a *App) IsDaemonMode() bool {
-	return a.daemonMode
 }
 
 // QueueUpdateDraw queues a function to run on the UI thread.

@@ -19,11 +19,6 @@ const (
 	SymbolTypeSystem uint16 = 0x1000
 )
 
-// IsStructType returns true if the type code indicates a structure/UDT.
-func IsStructType(typeCode uint16) bool {
-	return (typeCode & SymbolTypeStruct) != 0
-}
-
 // IsArrayType returns true if the type code indicates an array.
 func IsArrayType(typeCode uint16) bool {
 	return (typeCode & SymbolTypeArrayMask) != 0

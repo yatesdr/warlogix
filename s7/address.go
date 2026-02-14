@@ -50,46 +50,6 @@ type Address struct {
 	Count    int    // Number of elements (1 for scalar, >1 for array)
 }
 
-// String returns the address as a formatted string.
-func (a Address) String() string {
-	switch a.Area {
-	case AreaDB:
-		typeSuffix := getTypeSuffix(a.DataType, a.BitNum)
-		if a.BitNum >= 0 {
-			return fmt.Sprintf("DB%d.DB%s%d.%d", a.DBNumber, typeSuffix, a.Offset, a.BitNum)
-		}
-		return fmt.Sprintf("DB%d.DB%s%d", a.DBNumber, typeSuffix, a.Offset)
-	case AreaI, AreaQ, AreaM:
-		typeSuffix := getTypeSuffix(a.DataType, a.BitNum)
-		if a.BitNum >= 0 {
-			return fmt.Sprintf("%s%s%d.%d", a.Area, typeSuffix, a.Offset, a.BitNum)
-		}
-		return fmt.Sprintf("%s%s%d", a.Area, typeSuffix, a.Offset)
-	case AreaT, AreaC:
-		return fmt.Sprintf("%s%d", a.Area, a.Offset)
-	default:
-		return "?"
-	}
-}
-
-func getTypeSuffix(dataType uint16, bitNum int) string {
-	if bitNum >= 0 {
-		return "X"
-	}
-	switch dataType {
-	case TypeByte, TypeSInt:
-		return "B"
-	case TypeWord, TypeInt:
-		return "W"
-	case TypeDWord, TypeDInt, TypeReal:
-		return "D"
-	case TypeLInt, TypeULInt, TypeLReal:
-		return "L" // S7-1500 64-bit
-	default:
-		return "B"
-	}
-}
-
 // Regular expressions for parsing S7 addresses
 var (
 	// DB addresses: DB1.DBX0.0 (bit), DB1.DBB0 (byte), DB1.DBW0 (word), DB1.DBD0 (dword)
@@ -296,30 +256,6 @@ func parseTCAddress(m []string) (*Address, error) {
 		Size:     2,
 		Count:    1, // Scalar by default
 	}, nil
-}
-
-// ParseAddressWithType parses an address and overrides the data type.
-// This allows specifying INT vs WORD for the same address.
-func ParseAddressWithType(addr string, typeName string) (*Address, error) {
-	a, err := ParseAddress(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Override type if specified
-	if typeName != "" {
-		typeCode, ok := TypeCodeFromName(typeName)
-		if !ok {
-			return nil, fmt.Errorf("unknown type: %s", typeName)
-		}
-		a.DataType = typeCode
-		a.Size = TypeSize(typeCode)
-		if a.Size == 0 {
-			a.Size = 1 // Default for unknown
-		}
-	}
-
-	return a, nil
 }
 
 // ValidateAddress checks if an address string is valid.

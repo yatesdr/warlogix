@@ -134,13 +134,6 @@ func StoreLog(format string, args ...interface{}) {
 	}
 }
 
-// StoreLogError logs an error message to the global debug store.
-func StoreLogError(format string, args ...interface{}) {
-	if globalDebugStore != nil {
-		globalDebugStore.Log("ERROR", format, args...)
-	}
-}
-
 // StoreLogSSH logs an SSH message to the global debug store.
 func StoreLogSSH(format string, args ...interface{}) {
 	if globalDebugStore != nil {
@@ -148,30 +141,3 @@ func StoreLogSSH(format string, args ...interface{}) {
 	}
 }
 
-// StoreLogMQTT logs an MQTT message to the global debug store.
-func StoreLogMQTT(format string, args ...interface{}) {
-	if globalDebugStore != nil {
-		globalDebugStore.Log("MQTT", format, args...)
-	}
-}
-
-// StoreLogValkey logs a Valkey message to the global debug store.
-func StoreLogValkey(format string, args ...interface{}) {
-	if globalDebugStore != nil {
-		globalDebugStore.Log("VALKEY", format, args...)
-	}
-}
-
-// StoreLogKafka logs a Kafka message to the global debug store.
-func StoreLogKafka(format string, args ...interface{}) {
-	if globalDebugStore != nil {
-		globalDebugStore.Log("KAFKA", format, args...)
-	}
-}
-
-// StoreLogLogix logs a Logix message to the global debug store.
-func StoreLogLogix(format string, args ...interface{}) {
-	if globalDebugStore != nil {
-		globalDebugStore.Log("LOGIX", format, args...)
-	}
-}

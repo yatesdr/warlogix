@@ -149,31 +149,11 @@ func (t *Theme) updateStatusIndicators() {
 	}
 }
 
-// NewThemeWithFieldColors creates a theme with explicit field colors.
-func NewThemeWithFieldColors(name string, primary, secondary, accent, text, textDim, err, success, warning, border, bg, hotkey, actionText, fieldBg, fieldText, dropdownBg, dropdownSel tcell.Color) *Theme {
-	t := NewTheme(name, primary, secondary, accent, text, textDim, err, success, warning, border, bg, hotkey, actionText)
-	t.FieldBackground = fieldBg
-	t.FieldText = fieldText
-	t.DropdownBackground = dropdownBg
-	t.DropdownSelected = dropdownSel
-	return t
-}
-
 // Helper methods for common formatting patterns
 
 // Label formats a label with its value: "Label: value"
 func (t *Theme) Label(label, value string) string {
 	return t.TagAccent + label + ":" + t.TagReset + " " + value
-}
-
-// Shortcut formats a keyboard shortcut: "a" in accent color
-func (t *Theme) Shortcut(key string) string {
-	return t.TagAccent + key + t.TagReset
-}
-
-// ShortcutLabel formats a shortcut with its action: "a add"
-func (t *Theme) ShortcutLabel(key, action string) string {
-	return t.TagHotkey + key + t.TagActionText + action + t.TagReset
 }
 
 // ErrorText formats error text
@@ -680,16 +660,6 @@ func ApplyFormTheme(form *tview.Form) {
 	form.SetButtonActivatedStyle(tcell.StyleDefault.Foreground(th.SelectedText).Background(th.Accent))
 }
 
-// ApplyListTheme applies the current theme colors to a List.
-// Call this in RefreshTheme() for each list.
-func ApplyListTheme(list *tview.List) {
-	th := CurrentTheme
-	list.SetMainTextColor(th.Text)
-	list.SetSecondaryTextColor(th.TextDim)
-	list.SetSelectedTextColor(th.SelectedText)
-	list.SetSelectedBackgroundColor(th.Accent)
-}
-
 // ApplyModalTheme applies the current theme to a modal dialog.
 func ApplyModalTheme(modal *tview.Modal) {
 	th := CurrentTheme
@@ -845,31 +815,6 @@ func EnableASCIIMode() {
 	CurrentTheme.updateStatusIndicators()
 }
 
-// DisableASCIIMode restores tview's default Unicode box-drawing characters.
-func DisableASCIIMode() {
-	ASCIIModeEnabled = false
-	// Restore tview's default Unicode borders
-	tview.Borders.Horizontal = '─'
-	tview.Borders.Vertical = '│'
-	tview.Borders.TopLeft = '┌'
-	tview.Borders.TopRight = '┐'
-	tview.Borders.BottomLeft = '└'
-	tview.Borders.BottomRight = '┘'
-	tview.Borders.LeftT = '├'
-	tview.Borders.RightT = '┤'
-	tview.Borders.TopT = '┬'
-	tview.Borders.BottomT = '┴'
-	tview.Borders.Cross = '┼'
-	tview.Borders.HorizontalFocus = '━'
-	tview.Borders.VerticalFocus = '┃'
-	tview.Borders.TopLeftFocus = '┏'
-	tview.Borders.TopRightFocus = '┓'
-	tview.Borders.BottomLeftFocus = '┗'
-	tview.Borders.BottomRightFocus = '┛'
-	// Update status indicators in current theme
-	CurrentTheme.updateStatusIndicators()
-}
-
 // Tree characters (Unicode defaults - use GetTree* functions for ASCII-aware versions)
 const (
 	TreeBranch     = "├── "
@@ -885,38 +830,6 @@ const (
 	CheckboxChecked   = "☑"
 	CheckboxUnchecked = "☐"
 )
-
-// GetTreeBranch returns the appropriate tree branch character for the current mode.
-func GetTreeBranch() string {
-	if ASCIIModeEnabled {
-		return "+-- "
-	}
-	return TreeBranch
-}
-
-// GetTreeLastBranch returns the appropriate last tree branch character for the current mode.
-func GetTreeLastBranch() string {
-	if ASCIIModeEnabled {
-		return "`-- "
-	}
-	return TreeLastBranch
-}
-
-// GetTreeVertical returns the appropriate tree vertical character for the current mode.
-func GetTreeVertical() string {
-	if ASCIIModeEnabled {
-		return "|   "
-	}
-	return TreeVertical
-}
-
-// GetTreeExpanded returns the appropriate expanded indicator for the current mode.
-func GetTreeExpanded() string {
-	if ASCIIModeEnabled {
-		return "v "
-	}
-	return TreeExpanded
-}
 
 // GetTreeCollapsed returns the appropriate collapsed indicator for the current mode.
 func GetTreeCollapsed() string {

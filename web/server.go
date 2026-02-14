@@ -51,6 +51,9 @@ type Server struct {
 	running  bool
 	mu       sync.RWMutex
 
+	// Cleanup function for web UI resources (e.g. SSE event hub)
+	uiCleanup func()
+
 	// Unsecured deadline timer
 	deadlineTimer *time.Timer
 	deadlineMu    sync.Mutex
@@ -90,7 +93,9 @@ func (s *Server) setupRoutes() {
 
 	// Mount Web UI at root
 	if s.config.UI.Enabled {
-		r.Mount("/", www.NewRouter(&s.config.UI, s.managers, s.engine, s))
+		uiRouter, cleanup := www.NewRouter(&s.config.UI, s.managers, s.engine, s)
+		s.uiCleanup = cleanup
+		r.Mount("/", uiRouter)
 	}
 
 	s.router = r
@@ -159,6 +164,12 @@ func (s *Server) Stop() error {
 
 	if !s.running || s.server == nil {
 		return nil
+	}
+
+	// Stop SSE event hub and other UI resources
+	if s.uiCleanup != nil {
+		s.uiCleanup()
+		s.uiCleanup = nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

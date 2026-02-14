@@ -85,37 +85,3 @@ func TestParseAddress(t *testing.T) {
 	}
 }
 
-func TestAddressString(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"DB1.DBX0.0", "DB1.DBX0.0"},
-		{"DB1.DBB0", "DB1.DBB0"},
-		{"DB1.DBW2", "DB1.DBW2"},
-		{"DB1.DBD4", "DB1.DBD4"},
-		{"M0.0", "MX0.0"},
-		{"MB0", "MB0"},
-		{"MW2", "MW2"},
-		{"MD4", "MD4"},
-		{"I0.0", "IX0.0"},
-		{"IB0", "IB0"},
-		{"Q0.0", "QX0.0"},
-		{"QB0", "QB0"},
-		{"T0", "T0"},
-		{"C0", "C0"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			addr, err := ParseAddress(tt.input)
-			if err != nil {
-				t.Fatalf("ParseAddress(%q) error: %v", tt.input, err)
-			}
-			got := addr.String()
-			if got != tt.want {
-				t.Errorf("Address.String() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}

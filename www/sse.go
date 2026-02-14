@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -689,72 +688,3 @@ func pushStatusString(s push.Status) string {
 	}
 }
 
-// getRepublisherTagData returns tag data for SSE updates.
-func (h *Handlers) getRepublisherTagData(plcName, tagName string) *RepublisherTag {
-	manager := h.managers.GetPLCMan()
-	plc := manager.GetPLC(plcName)
-	if plc == nil {
-		return nil
-	}
-
-	cfg := h.managers.GetConfig()
-	plcCfg := cfg.FindPLC(plcName)
-	if plcCfg == nil {
-		return nil
-	}
-
-	// Build config lookup for this tag and child tags map
-	configMap := make(map[string]*struct {
-		Alias         string
-		Enabled       bool
-		Writable      bool
-		IgnoreChanges []string
-	})
-	childTagsMap := make(map[string]map[string]PublishedChild)
-
-	for i := range plcCfg.Tags {
-		sel := &plcCfg.Tags[i]
-		configMap[sel.Name] = &struct {
-			Alias         string
-			Enabled       bool
-			Writable      bool
-			IgnoreChanges []string
-		}{
-			Alias:         sel.Alias,
-			Enabled:       sel.Enabled,
-			Writable:      sel.Writable,
-			IgnoreChanges: sel.IgnoreChanges,
-		}
-
-		// Check if this is a child tag
-		if idx := strings.Index(sel.Name, "."); idx > 0 {
-			parentName := sel.Name[:idx]
-			childPath := sel.Name[idx+1:]
-			if childTagsMap[parentName] == nil {
-				childTagsMap[parentName] = make(map[string]PublishedChild)
-			}
-			childTagsMap[parentName][childPath] = PublishedChild{
-				Enabled:  sel.Enabled,
-				Writable: sel.Writable,
-			}
-		}
-	}
-
-	// Get tag info
-	tags := plc.GetTags()
-	values := plc.GetValues()
-	var lastChanged map[string]time.Time // not tracked yet
-
-	for _, tag := range tags {
-		if tag.Name == tagName {
-			lastPollStr := ""
-			if !plc.LastPoll.IsZero() {
-				lastPollStr = plc.LastPoll.Format("2006-01-02 15:04:05")
-			}
-			rt := h.buildRepublisherTag(tag.Name, tag.TypeName, configMap, childTagsMap, values, lastChanged, lastPollStr, plcCfg.IsAddressBased(), !plcCfg.SupportsDiscovery())
-			return &rt
-		}
-	}
-
-	return nil
-}

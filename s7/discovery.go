@@ -17,11 +17,6 @@ type DiscoveredDevice struct {
 	Connected   bool   // True if successfully connected and identified
 }
 
-// String returns a human-readable summary of the device.
-func (d *DiscoveredDevice) String() string {
-	return fmt.Sprintf("S7 PLC at %s:%d (Rack %d, Slot %d)", d.IP, d.Port, d.Rack, d.Slot)
-}
-
 // Discover scans a list of IP addresses for S7 PLCs by attempting to connect
 // to TCP port 102 and perform COTP/S7 handshake.
 //

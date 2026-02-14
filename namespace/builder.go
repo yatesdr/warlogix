@@ -2,8 +2,6 @@
 // with consistent namespace prefixing across all services (MQTT, Valkey, Kafka).
 package namespace
 
-import "strings"
-
 // Builder constructs namespace-prefixed topics and keys.
 type Builder struct {
 	namespace string
@@ -156,16 +154,3 @@ func (b *Builder) kafkaBase() string {
 	return b.namespace
 }
 
-// sanitizeKafkaTopic removes or replaces characters not allowed in Kafka topic names.
-// Kafka allows: a-z, A-Z, 0-9, ., _, -
-func sanitizeKafkaTopic(s string) string {
-	var result strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
-			result.WriteRune(r)
-		} else {
-			result.WriteRune('-')
-		}
-	}
-	return result.String()
-}

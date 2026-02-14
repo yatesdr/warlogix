@@ -74,7 +74,6 @@ func TestFileLogger_Log(t *testing.T) {
 
 	t.Run("writes formatted message with timestamp", func(t *testing.T) {
 		logger.Log("test message %d", 42)
-		logger.Sync()
 
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -116,8 +115,7 @@ func TestFileLogger_LogWithPrefix(t *testing.T) {
 	}
 	defer logger.Close()
 
-	logger.LogWithPrefix("MQTT:", "connected to %s", "broker.local")
-	logger.Sync()
+	logger.Log("connected to %s", "broker.local")
 
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -125,8 +123,8 @@ func TestFileLogger_LogWithPrefix(t *testing.T) {
 	}
 
 	str := string(content)
-	if !strings.Contains(str, "MQTT: connected to broker.local") {
-		t.Errorf("expected prefixed message, got: %s", str)
+	if !strings.Contains(str, "connected to broker.local") {
+		t.Errorf("expected message, got: %s", str)
 	}
 }
 
@@ -150,28 +148,6 @@ func TestFileLogger_Close(t *testing.T) {
 	}
 }
 
-func TestFileLogger_Sync(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "test.log")
-
-	logger, err := NewFileLogger(path)
-	if err != nil {
-		t.Fatalf("NewFileLogger failed: %v", err)
-	}
-
-	// Sync should work
-	if err := logger.Sync(); err != nil {
-		t.Errorf("Sync failed: %v", err)
-	}
-
-	logger.Close()
-
-	// Sync after close should be safe
-	if err := logger.Sync(); err != nil {
-		t.Errorf("Sync after close failed: %v", err)
-	}
-}
-
 func TestFileLogger_Concurrent(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "test.log")
@@ -192,7 +168,6 @@ func TestFileLogger_Concurrent(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	logger.Sync()
 
 	// Verify file has content (exact count may vary due to timing)
 	content, err := os.ReadFile(path)

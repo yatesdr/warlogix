@@ -150,22 +150,3 @@ type MultiServiceError struct {
 	Msg    string
 }
 
-func (e MultiServiceError) Error() string {
-	return fmt.Sprintf("service %d: status 0x%02X: %s", e.Index, e.Status, e.Msg)
-}
-
-// CheckMultiServiceErrors checks all responses for errors.
-// Returns nil if all succeeded, or a slice of errors for failed services.
-func CheckMultiServiceErrors(responses []MultiServiceResponse) []error {
-	var errs []error
-	for i, resp := range responses {
-		if resp.Status != 0x00 && resp.Status != 0x06 { // 0x06 = partial transfer (OK for reads)
-			errs = append(errs, MultiServiceError{
-				Index:  i,
-				Status: resp.Status,
-				Msg:    fmt.Sprintf("CIP error 0x%02X", resp.Status),
-			})
-		}
-	}
-	return errs
-}

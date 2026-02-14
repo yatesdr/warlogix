@@ -130,38 +130,3 @@ func ParseEipCommonPacket(raw []byte) (*EipCommonPacket, error) {
 	return &EipCommonPacket{Items: cp_items}, nil
 }
 
-func CpfIdentityPacket() *EipCommonPacket {
-
-	return &EipCommonPacket{
-		Items: []EipCommonPacketItem{
-			{TypeId: CpfAddressNullId, Length: 0, Data: nil},
-			{TypeId: CpfUnconnectedMessageId, Length: 8,
-				Data: []byte{
-					0x0E, 0x03, 0x20, 0x01, 0x24, 0x01, 0x30, 0x03,
-				}}},
-	}
-}
-
-func CpfProductNamePacket() *EipCommonPacket {
-	cip := []byte{
-		0x0E,       // Get_Attribute_Single
-		0x03,       // Path size (3 words)
-		0x20, 0x01, // Class 0x01
-		0x24, 0x01, // Instance 0x01
-		0x30, 0x07, // Attribute 0x07 (Product Name)
-	}
-
-	cp := EipCommonPacket{
-		Items: []EipCommonPacketItem{
-			{TypeId: 0, Length: 0, Data: nil},
-			{
-				TypeId: CpfUnconnectedMessageId,
-				Length: uint16(len(cip)),
-				Data:   cip,
-			},
-		},
-	}
-
-	return &cp
-
-}

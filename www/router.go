@@ -83,8 +83,8 @@ func newHandlers(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine,
 	return h
 }
 
-// NewRouter creates the web UI router.
-func NewRouter(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, ws WebServer) chi.Router {
+// NewRouter creates the web UI router and returns a stop function for cleanup.
+func NewRouter(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, ws WebServer) (chi.Router, func()) {
 	h := newHandlers(cfg, managers, eng, ws)
 
 	r := chi.NewRouter()
@@ -243,7 +243,7 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, w
 		})
 	})
 
-	return r
+	return r, func() { h.eventHub.Stop() }
 }
 
 // authMiddleware checks if the user is authenticated and enforces password change and namespace setup.

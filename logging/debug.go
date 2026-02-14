@@ -59,19 +59,6 @@ func NewDebugLogger(path string) (*DebugLogger, error) {
 	return logger, nil
 }
 
-// NewDebugLoggerWithFilter creates a debug logger with protocol filtering.
-// The filter string can be a single protocol (e.g., "omron") or comma-separated
-// list (e.g., "omron,ads,s7"). Empty string means log all protocols.
-func NewDebugLoggerWithFilter(path, filter string) (*DebugLogger, error) {
-	logger, err := NewDebugLogger(path)
-	if err != nil {
-		return nil, err
-	}
-
-	logger.SetFilter(filter)
-	return logger, nil
-}
-
 // SetFilter sets the protocol filter for logging.
 // The filter can be a single protocol or comma-separated list.
 // Empty string means log all protocols.
@@ -131,26 +118,6 @@ func (l *DebugLogger) SetFilter(filter string) {
 	}
 }
 
-// GetFilter returns the current filter as a comma-separated string.
-func (l *DebugLogger) GetFilter() string {
-	if l == nil {
-		return ""
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if len(l.filters) == 0 {
-		return ""
-	}
-
-	filterList := make([]string, 0, len(l.filters))
-	for p := range l.filters {
-		filterList = append(filterList, p)
-	}
-	return strings.Join(filterList, ",")
-}
-
 // shouldLog returns true if the protocol should be logged based on current filter.
 // Must be called with l.mu held.
 func (l *DebugLogger) shouldLog(protocol string) bool {
@@ -173,11 +140,6 @@ func (l *DebugLogger) shouldLog(protocol string) bool {
 	return false
 }
 
-// KnownProtocols returns the list of known protocol names for filtering.
-func KnownProtocols() []string {
-	return knownProtocols
-}
-
 // SetGlobalDebugLogger sets the global debug logger instance.
 func SetGlobalDebugLogger(logger *DebugLogger) {
 	globalDebugMu.Lock()
@@ -190,13 +152,6 @@ func GetGlobalDebugLogger() *DebugLogger {
 	globalDebugMu.RLock()
 	defer globalDebugMu.RUnlock()
 	return globalDebugLogger
-}
-
-// IsDebugEnabled returns true if debug logging is enabled.
-func IsDebugEnabled() bool {
-	globalDebugMu.RLock()
-	defer globalDebugMu.RUnlock()
-	return globalDebugLogger != nil
 }
 
 // Log writes a formatted message with timestamp and protocol prefix.
@@ -280,11 +235,6 @@ func (l *DebugLogger) LogError(protocol, context string, err error) {
 	l.Log(protocol, "ERROR in %s: %v", context, err)
 }
 
-// LogTimeout logs a timeout event.
-func (l *DebugLogger) LogTimeout(protocol, operation string) {
-	l.Log(protocol, "TIMEOUT during %s", operation)
-}
-
 // Close closes the debug log file.
 func (l *DebugLogger) Close() error {
 	if l == nil {
@@ -305,22 +255,6 @@ func (l *DebugLogger) Close() error {
 	fmt.Fprintf(l.file, "%s [DEBUG] Debug logging ended\n", timestamp)
 
 	return l.file.Close()
-}
-
-// Sync flushes any buffered data to the file.
-func (l *DebugLogger) Sync() error {
-	if l == nil {
-		return nil
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.closed {
-		return nil
-	}
-
-	return l.file.Sync()
 }
 
 // hexDump returns a hex dump of the data in a readable format.
@@ -434,9 +368,3 @@ func DebugError(protocol, context string, err error) {
 	}
 }
 
-// DebugTimeout logs a timeout if debug logging is enabled.
-func DebugTimeout(protocol, operation string) {
-	if logger := GetGlobalDebugLogger(); logger != nil {
-		logger.LogTimeout(protocol, operation)
-	}
-}

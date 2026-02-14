@@ -47,21 +47,6 @@ type Config struct {
 	WriteMaxAge     time.Duration `yaml:"write_max_age,omitempty"`    // Max age of write requests to process
 }
 
-// DefaultConfig returns a Kafka configuration with sensible defaults.
-func DefaultConfig(name string) Config {
-	return Config{
-		Name:             name,
-		Enabled:          false,
-		Brokers:          []string{"localhost:9092"},
-		RequiredAcks:     -1, // All replicas must acknowledge
-		MaxRetries:       3,
-		RetryBackoff:     100 * time.Millisecond,
-		AutoCreateTopics: true,
-		EnableWriteback:  false,
-		WriteMaxAge:      2 * time.Second,
-	}
-}
-
 // GetTLSConfig returns a TLS configuration if TLS is enabled.
 func (c *Config) GetTLSConfig() *tls.Config {
 	if !c.UseTLS {

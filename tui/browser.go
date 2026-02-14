@@ -1397,28 +1397,6 @@ func (t *BrowserTab) ReloadConfigState() {
 	t.updateStatus()
 }
 
-// selectTagByName finds and selects a tag node by its name.
-func (t *BrowserTab) selectTagByName(tagName string) {
-	var findNode func(node *tview.TreeNode) *tview.TreeNode
-	findNode = func(node *tview.TreeNode) *tview.TreeNode {
-		if ref := node.GetReference(); ref != nil {
-			if tagInfo, ok := ref.(*driver.TagInfo); ok && tagInfo.Name == tagName {
-				return node
-			}
-		}
-		for _, child := range node.GetChildren() {
-			if found := findNode(child); found != nil {
-				return found
-			}
-		}
-		return nil
-	}
-
-	if found := findNode(t.treeRoot); found != nil {
-		t.tree.SetCurrentNode(found)
-	}
-}
-
 // Refresh updates the PLC dropdown and reloads tags.
 func (t *BrowserTab) Refresh() {
 	// Update PLC dropdown
@@ -2427,69 +2405,6 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 	t.app.showFormModal(pageName, form, 50, 14, func() {
 		t.app.closeModal(pageName)
 	})
-}
-
-// expandUDTMembers adds child nodes for UDT members to the given parent node.
-// Returns the number of members added (including nested members that match filter).
-func (t *BrowserTab) expandUDTMembers(parentNode *tview.TreeNode, basePath string, typeCode uint16, client *logix.Client, maxDepth int) int {
-	if maxDepth <= 0 || client == nil {
-		return 0
-	}
-
-	// Get template for this UDT
-	tmpl, err := client.GetTemplate(typeCode)
-	if err != nil {
-		DebugLog("expandUDTMembers: failed to get template for %s (0x%04X): %v", basePath, typeCode, err)
-		return 0
-	}
-
-	addedCount := 0
-
-	for _, member := range tmpl.Members {
-		if member.Hidden || member.Name == "" {
-			continue
-		}
-
-		memberPath := basePath + "." + member.Name
-		memberMatches := t.matchesFilter(memberPath)
-
-		// Create a synthetic TagInfo for this member, including array dimensions
-		dims := make([]uint32, len(member.ArrayDims))
-		for i, d := range member.ArrayDims {
-			dims[i] = uint32(d)
-		}
-		memberInfo := &driver.TagInfo{
-			Name:       memberPath,
-			TypeCode:   member.Type,
-			Dimensions: dims,
-		}
-
-		enabled := t.enabledTags[memberPath]
-		writable := t.writableTags[memberPath]
-		memberNode := t.createTagNode(memberInfo, enabled, writable)
-
-		// Check if this member is also a nested UDT
-		if logix.IsStructure(member.Type) {
-			// Recursively expand nested UDT
-			nestedCount := t.expandUDTMembers(memberNode, memberPath, member.Type, client, maxDepth-1)
-			if memberMatches || nestedCount > 0 {
-				parentNode.AddChild(memberNode)
-				t.tagNodes[memberPath] = memberNode
-				addedCount++
-			}
-		} else if memberMatches {
-			parentNode.AddChild(memberNode)
-			t.tagNodes[memberPath] = memberNode
-			addedCount++
-		}
-	}
-
-	// Collapse UDT nodes by default (user can expand them)
-	if addedCount > 0 {
-		parentNode.SetExpanded(false)
-	}
-
-	return addedCount
 }
 
 // deleteManualTag deletes a manual tag after confirmation.

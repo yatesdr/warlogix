@@ -42,11 +42,6 @@ func EPath() *PathBuilder {
 	return &PathBuilder{padded: true}
 }
 
-// A packed Epath builder (no padding included).  This is rarely used but occasionally useful.
-func EPathPacked() *PathBuilder {
-	return &PathBuilder{padded: false}
-}
-
 func (b *PathBuilder) add(p EPath_t, err error) *PathBuilder {
 	if b.err != nil {
 		return b
@@ -59,16 +54,8 @@ func (b *PathBuilder) add(p EPath_t, err error) *PathBuilder {
 	return b
 }
 
-func (b *PathBuilder) Port(port uint16, link []byte) *PathBuilder {
-	return b.add(portSegment(port, link))
-}
-
 func (b *PathBuilder) Class(id byte) *PathBuilder {
 	return b.add(logicalSegment(CipLogicalTypeClassId, CipLogicalFormat8bit, []byte{id}, b.padded))
-}
-
-func (b *PathBuilder) Class16(id uint16) *PathBuilder {
-	return b.add(logicalSegment(CipLogicalTypeClassId, CipLogicalFormat16bit, binary.LittleEndian.AppendUint16(nil, id), b.padded))
 }
 
 func (b *PathBuilder) Instance(id byte) *PathBuilder {
@@ -85,18 +72,6 @@ func (b *PathBuilder) Instance32(id uint32) *PathBuilder {
 
 func (b *PathBuilder) Attribute(id byte) *PathBuilder {
 	return b.add(logicalSegment(CipLogicalTypeAttributeId, CipLogicalFormat8bit, []byte{id}, b.padded))
-}
-
-func (b *PathBuilder) Attribute16(id uint16) *PathBuilder {
-	return b.add(logicalSegment(CipLogicalTypeAttributeId, CipLogicalFormat16bit, binary.LittleEndian.AppendUint16(nil, id), b.padded))
-}
-
-func (b *PathBuilder) Member(id byte) *PathBuilder {
-	return b.add(logicalSegment(CipLogicalTypeMemberId, CipLogicalFormat8bit, []byte{id}, b.padded))
-}
-
-func (b *PathBuilder) Member16(id uint16) *PathBuilder {
-	return b.add(logicalSegment(CipLogicalTypeMemberId, CipLogicalFormat16bit, binary.LittleEndian.AppendUint16(nil, id), b.padded))
 }
 
 func (b *PathBuilder) Symbol(tag string) *PathBuilder {
@@ -116,10 +91,6 @@ func (b *PathBuilder) Symbol(tag string) *PathBuilder {
 		}
 	}
 	return b
-}
-
-func (b *PathBuilder) Symbol31(tag string) *PathBuilder {
-	return b.add(symbolicSegmentAscii([]byte(tag)))
 }
 
 func (b *PathBuilder) Build() (EPath_t, error) {
@@ -143,47 +114,6 @@ func (p *EPath_t) WordLen() byte {
 
 // EPath is an encoded path used in CIP communications.
 type EPath_t []byte
-
-// Encode a Port Segment, returns a packed Epath (unpadded).
-func portSegment(PortNumber uint16, LinkAddress []byte) (EPath_t, error) {
-
-	if len(LinkAddress) > 255 {
-		return nil, fmt.Errorf("PortSegment: Link address too long.  max 255, got %d", len(LinkAddress))
-	}
-
-	segmentType := byte(CipPortSegment)
-	oversizeLinkAddr := len(LinkAddress) > 1
-	oversizePort := PortNumber >= 15
-
-	var out = make([]byte, 1)
-
-	// Build byte 1
-	out[0] = out[0] | (segmentType&0b111)<<5
-	if oversizeLinkAddr {
-		out[0] = out[0] | 0b00010000
-	}
-	if oversizePort {
-		out[0] = out[0] | 0b1111 // Set oversized port flag.
-	} else {
-		out[0] = out[0] | (0b1111 & byte(PortNumber)) // port fits in 4 bits
-	}
-
-	// Next byte is optional oversized link address size.
-	if oversizeLinkAddr {
-		b := byte(len(LinkAddress))
-		out = append(out, b)
-	}
-
-	// Next 2 bytes are optional extended port identifier.
-	if oversizePort {
-		out = append(out, byte(PortNumber), byte(PortNumber>>8))
-	}
-
-	// Next n bytes are the encoded Link Address
-	out = append(out, LinkAddress...)
-
-	return append(EPath_t{}, out...), nil
-}
 
 // Encode a Logical Segment, returns a packed or unpacked Epath.   The padding requirements for a Logical Segment include inter-byte
 // padding for some formats, so **padding must be specified at time of creation**.   Padding applies to 16- and 32-bit logical formats
@@ -314,23 +244,6 @@ func memberSegment(index uint32) (EPath_t, error) {
 		// 32-bit member (with pad byte for alignment)
 		return EPath_t{0x2A, 0x00, byte(index), byte(index >> 8), byte(index >> 16), byte(index >> 24)}, nil
 	}
-}
-
-func symbolicSegmentAscii(symbol []byte) (EPath_t, error) {
-
-	if len(symbol) > 31 {
-		return nil, fmt.Errorf("SymbolicSegmentAscii: Symbol is too long, maximum 31 bytes.  Did you want to use SymbolicSegmentAsciiExt?")
-	}
-	if len(symbol) == 0 {
-		return nil, fmt.Errorf("SymbolicSegmentAscii: Symbol length is zero - cannot encode epath.")
-	}
-	out := []byte{0}
-	out[0] |= byte(CipSymbolicSegment) << 5
-	out[0] |= (byte(len(symbol)) & 0b0001_1111)
-	out = append(out, symbol...)
-
-	return EPath_t(out), nil
-
 }
 
 func symbolicSegmentAsciiExt(symbol []byte) (EPath_t, error) {

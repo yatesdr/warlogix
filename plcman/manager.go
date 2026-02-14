@@ -994,27 +994,6 @@ func (w *PLCWorker) resolveManualTagTypes() {
 	w.manager.markStatusDirty()
 }
 
-// isLikelyConnectionError checks if an error message suggests a connection problem.
-// This is used to trigger reconnection attempts when the client's internal detection
-// might not have caught the error (e.g., protocol-level errors vs TCP errors).
-func isLikelyConnectionError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := strings.ToLower(err.Error())
-	// Common connection-related error patterns
-	return strings.Contains(errStr, "connection") ||
-		strings.Contains(errStr, "broken pipe") ||
-		strings.Contains(errStr, "reset by peer") ||
-		strings.Contains(errStr, "eof") ||
-		strings.Contains(errStr, "timeout") ||
-		strings.Contains(errStr, "refused") ||
-		strings.Contains(errStr, "closed") ||
-		strings.Contains(errStr, "not connected") ||
-		strings.Contains(errStr, "nil client") ||
-		strings.Contains(errStr, "dial")
-}
-
 // ListenerID is a unique identifier for a registered listener.
 type ListenerID string
 

@@ -112,20 +112,6 @@ func IsArray(typeCode uint16) bool {
 	return (typeCode & TypeArrayFlag) != 0
 }
 
-// IsStruct returns true if the type code represents a structure/UDT.
-func IsStruct(typeCode uint16) bool {
-	return (BaseType(typeCode) & TypeStructFlag) == TypeStructFlag
-}
-
-// StructID returns the structure ID from a structure type code.
-// Returns 0 if the type is not a structure.
-func StructID(typeCode uint16) uint16 {
-	if !IsStruct(typeCode) {
-		return 0
-	}
-	return BaseType(typeCode) &^ TypeStructFlag
-}
-
 // MakeArrayType returns the array version of a base type.
 func MakeArrayType(baseType uint16) uint16 {
 	return baseType | TypeArrayFlag

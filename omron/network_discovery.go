@@ -19,11 +19,6 @@ type NetworkDeviceInfo struct {
 	Connected   bool   // True if successfully connected and identified
 }
 
-// String returns a human-readable summary of the device.
-func (d *NetworkDeviceInfo) String() string {
-	return fmt.Sprintf("Omron PLC at %s:%d (%s, Node %d)", d.IP, d.Port, d.Protocol, d.Node)
-}
-
 // NetworkDiscover scans a list of IP addresses for Omron PLCs by attempting
 // to connect via FINS (UDP port 9600) and EIP (TCP port 44818).
 //
@@ -226,92 +221,6 @@ func probeFINSTCP(ip net.IP, timeout time.Duration) *NetworkDeviceInfo {
 		Node:        serverNode,
 		ProductName: "Omron PLC (FINS/TCP)",
 		Protocol:    "FINS/TCP",
-		Connected:   true,
-	}
-}
-
-// probeOmronEIP attempts to connect via EIP (for NJ/NX series).
-func probeOmronEIP(ip net.IP, timeout time.Duration) *NetworkDeviceInfo {
-	addr := fmt.Sprintf("%s:44818", ip.String())
-
-	conn, err := net.DialTimeout("tcp", addr, timeout)
-	if err != nil {
-		return nil
-	}
-	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(timeout))
-
-	// Send ListIdentity request over TCP
-	// Encapsulation header: Command(2) Length(2) Session(4) Status(4) Context(8) Options(4)
-	listIdentity := []byte{
-		0x63, 0x00, // Command: ListIdentity
-		0x00, 0x00, // Length: 0
-		0x00, 0x00, 0x00, 0x00, // Session handle
-		0x00, 0x00, 0x00, 0x00, // Status
-		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Context
-		0x00, 0x00, 0x00, 0x00, // Options
-	}
-
-	if _, err := conn.Write(listIdentity); err != nil {
-		return nil
-	}
-
-	// Read response header
-	header := make([]byte, 24)
-	if _, err := conn.Read(header); err != nil {
-		return nil
-	}
-
-	// Check command
-	cmd := uint16(header[0]) | uint16(header[1])<<8
-	if cmd != 0x63 {
-		return nil
-	}
-
-	// Read payload
-	length := uint16(header[2]) | uint16(header[3])<<8
-	if length == 0 || length > 500 {
-		// No devices or too large
-		return nil
-	}
-
-	payload := make([]byte, length)
-	if _, err := conn.Read(payload); err != nil {
-		return nil
-	}
-
-	// Parse identity (simplified - just check if we got valid data)
-	if len(payload) < 2 {
-		return nil
-	}
-
-	itemCount := uint16(payload[0]) | uint16(payload[1])<<8
-	if itemCount == 0 {
-		return nil
-	}
-
-	// We got a response - it's an Omron EIP device (NJ/NX series)
-	productName := "Omron NJ/NX Series (EIP)"
-
-	// Try to parse product name from identity
-	if len(payload) > 40 {
-		// Skip to product name field
-		nameOffset := 38
-		if nameOffset < len(payload) {
-			nameLen := int(payload[nameOffset])
-			if nameOffset+1+nameLen <= len(payload) {
-				productName = string(payload[nameOffset+1 : nameOffset+1+nameLen])
-			}
-		}
-	}
-
-	return &NetworkDeviceInfo{
-		IP:          ip,
-		Port:        44818,
-		Node:        0,
-		ProductName: productName,
-		Protocol:    "EIP",
 		Connected:   true,
 	}
 }

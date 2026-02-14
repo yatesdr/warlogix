@@ -31,14 +31,6 @@ type Connection struct {
 	seq uint32 // Atomic sequence counter (low 16 bits used)
 }
 
-// NewConnection creates a connection with the given IDs.
-func NewConnection(otConnID, toConnID uint32) *Connection {
-	return &Connection{
-		OTConnID: otConnID,
-		TOConnID: toConnID,
-	}
-}
-
 // NextSequence returns the next sequence number for connected messaging.
 func (c *Connection) NextSequence() uint16 {
 	return uint16(atomic.AddUint32(&c.seq, 1))
@@ -297,23 +289,3 @@ func BuildForwardCloseRequest(conn *Connection, connectionPath []byte) ([]byte, 
 	return reqData, nil
 }
 
-// ParseForwardCloseResponse parses a Forward Close response.
-// Returns nil on success, error on failure.
-func ParseForwardCloseResponse(data []byte) error {
-	if len(data) < 4 {
-		return fmt.Errorf("Forward Close response too short: %d bytes", len(data))
-	}
-
-	replyService := data[0]
-	status := data[2]
-
-	if replyService != (SvcForwardClose | 0x80) {
-		return fmt.Errorf("unexpected reply service: 0x%02X", replyService)
-	}
-
-	if status != 0x00 {
-		return fmt.Errorf("Forward Close failed with status: 0x%02X", status)
-	}
-
-	return nil
-}

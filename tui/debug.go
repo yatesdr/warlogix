@@ -148,12 +148,6 @@ func (t *DebugTab) LogError(format string, args ...interface{}) {
 	t.Log(th.TagError+"ERROR:"+th.TagReset+" "+format, args...)
 }
 
-// LogInfo adds an info message to the debug log.
-func (t *DebugTab) LogInfo(format string, args ...interface{}) {
-	th := CurrentTheme
-	t.Log(th.TagPrimary+"INFO:"+th.TagReset+" "+format, args...)
-}
-
 // LogMQTT adds an MQTT-related message to the debug log.
 func (t *DebugTab) LogMQTT(format string, args ...interface{}) {
 	th := CurrentTheme
@@ -241,19 +235,6 @@ func DebugLogValkey(format string, args ...interface{}) {
 	}
 }
 
-// LogKafka adds a Kafka-related message to the debug log.
-func (t *DebugTab) LogKafka(format string, args ...interface{}) {
-	th := CurrentTheme
-	t.Log(th.TagAccent+"KAFKA:"+th.TagReset+" "+format, args...)
-}
-
-// DebugLogKafka logs a Kafka message to the debug tab if it exists.
-func DebugLogKafka(format string, args ...interface{}) {
-	if debugLogger != nil {
-		debugLogger.LogKafka(format, args...)
-	}
-}
-
 // LogSSH adds an SSH-related message to the debug log.
 func (t *DebugTab) LogSSH(format string, args ...interface{}) {
 	th := CurrentTheme
@@ -264,19 +245,6 @@ func (t *DebugTab) LogSSH(format string, args ...interface{}) {
 func DebugLogSSH(format string, args ...interface{}) {
 	if debugLogger != nil {
 		debugLogger.LogSSH(format, args...)
-	}
-}
-
-// LogLogix adds a Logix-related message to the debug log.
-func (t *DebugTab) LogLogix(format string, args ...interface{}) {
-	th := CurrentTheme
-	t.Log(th.TagSecondary+"Logix:"+th.TagReset+" "+format, args...)
-}
-
-// DebugLogLogix logs a Logix message to the debug tab if it exists.
-func DebugLogLogix(format string, args ...interface{}) {
-	if debugLogger != nil {
-		debugLogger.LogLogix(format, args...)
 	}
 }
 

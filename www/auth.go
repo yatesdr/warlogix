@@ -104,7 +104,3 @@ func isAdmin(role string) bool {
 	return role == config.RoleAdmin
 }
 
-// isViewer returns true if the role is viewer.
-func isViewer(role string) bool {
-	return role == config.RoleViewer
-}
