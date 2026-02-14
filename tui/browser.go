@@ -12,6 +12,7 @@ import (
 	"warlink/ads"
 	"warlink/config"
 	"warlink/driver"
+	"warlink/engine"
 	"warlink/logix"
 	"warlink/omron"
 	"warlink/plcman"
@@ -450,7 +451,7 @@ func (t *BrowserTab) toggleNodeSelection(node *tview.TreeNode) {
 
 	// If tag was just enabled, force publish its current value immediately
 	if enabled && !wasEnabled && t.selectedPLC != "" {
-		go t.app.ForcePublishTag(t.selectedPLC, tagName)
+		go t.app.engine.ForcePublishTag(t.selectedPLC, tagName)
 	}
 
 	// Update status
@@ -505,31 +506,20 @@ func (t *BrowserTab) autoPopulateIgnoreList(tagName string, typeCode uint16) {
 		return
 	}
 
-	// Add volatile members to the ignore list in config
-	t.app.config.Lock()
-	cfg := t.app.config.FindPLC(t.selectedPLC)
-	if cfg == nil {
-		t.app.config.Unlock()
+	// Add volatile members to the ignore list via engine
+	if err := t.app.engine.UpdateTag(t.selectedPLC, tagName, engine.TagUpdateRequest{
+		AddIgnore: volatileMembers,
+	}); err != nil {
 		return
 	}
 
-	for i := range cfg.Tags {
-		if cfg.Tags[i].Name == tagName {
-			// Add each volatile member to ignore list
-			for _, memberName := range volatileMembers {
-				cfg.Tags[i].AddIgnoreMember(memberName)
-				// Update local tracking
-				if t.ignoredMembers[tagName] == nil {
-					t.ignoredMembers[tagName] = make(map[string]bool)
-				}
-				t.ignoredMembers[tagName][memberName] = true
-			}
-			break
+	// Update local tracking
+	for _, memberName := range volatileMembers {
+		if t.ignoredMembers[tagName] == nil {
+			t.ignoredMembers[tagName] = make(map[string]bool)
 		}
+		t.ignoredMembers[tagName][memberName] = true
 	}
-
-	// Save config (unlocks internally)
-	t.app.config.UnlockAndSave(t.app.configPath)
 
 	// Notify user
 	if len(volatileMembers) == 1 {
@@ -590,35 +580,22 @@ func (t *BrowserTab) toggleNodeIgnore(node *tview.TreeNode) {
 		return
 	}
 
-	t.app.config.Lock()
-	cfg := t.app.config.FindPLC(t.selectedPLC)
-	if cfg == nil {
-		t.app.config.Unlock()
-		return
+	// Check current ignore state from local tracking
+	wasIgnored := false
+	if t.ignoredMembers[parentTag] != nil {
+		wasIgnored = t.ignoredMembers[parentTag][memberName]
 	}
 
-	// Find the tag selection for the parent tag
-	var tagSel *config.TagSelection
-	for i := range cfg.Tags {
-		if cfg.Tags[i].Name == parentTag {
-			tagSel = &cfg.Tags[i]
-			break
-		}
+	// Toggle via engine
+	var req engine.TagUpdateRequest
+	if wasIgnored {
+		req.RemoveIgnore = []string{memberName}
+	} else {
+		req.AddIgnore = []string{memberName}
 	}
-
-	if tagSel == nil {
-		t.app.config.Unlock()
-		// Parent tag not in config - the UDT hasn't been enabled yet
+	if err := t.app.engine.UpdateTag(t.selectedPLC, parentTag, req); err != nil {
 		t.app.setStatus("Enable the parent tag first to configure ignore list")
 		return
-	}
-
-	// Toggle ignore status
-	wasIgnored := tagSel.ShouldIgnoreMember(memberName)
-	if wasIgnored {
-		tagSel.RemoveIgnoreMember(memberName)
-	} else {
-		tagSel.AddIgnoreMember(memberName)
 	}
 
 	// Update local tracking
@@ -626,9 +603,6 @@ func (t *BrowserTab) toggleNodeIgnore(node *tview.TreeNode) {
 		t.ignoredMembers[parentTag] = make(map[string]bool)
 	}
 	t.ignoredMembers[parentTag][memberName] = !wasIgnored
-
-	// Save config (unlocks internally)
-	t.app.config.UnlockAndSave(t.app.configPath)
 
 	// Update node text
 	enabled := t.enabledTags[tagPath]
@@ -775,33 +749,10 @@ func (t *BrowserTab) updateNodeText(node *tview.TreeNode, tag *driver.TagInfo, e
 }
 
 func (t *BrowserTab) updateConfigTag(tagName string, enabled, writable bool) {
-	t.app.config.Lock()
-	plc := t.app.config.FindPLC(t.selectedPLC)
-	if plc == nil {
-		t.app.config.Unlock()
-		return
-	}
-
-	// Find or create tag selection
-	found := false
-	for i := range plc.Tags {
-		if plc.Tags[i].Name == tagName {
-			plc.Tags[i].Enabled = enabled
-			plc.Tags[i].Writable = writable
-			found = true
-			break
-		}
-	}
-
-	if !found && (enabled || writable) {
-		plc.Tags = append(plc.Tags, config.TagSelection{
-			Name:     tagName,
-			Enabled:  enabled,
-			Writable: writable,
-		})
-	}
-
-	t.app.config.UnlockAndSave(t.app.configPath)
+	t.app.engine.UpdateTag(t.selectedPLC, tagName, engine.TagUpdateRequest{
+		Enabled:  &enabled,
+		Writable: &writable,
+	})
 }
 
 func (t *BrowserTab) showWriteDialog(node *tview.TreeNode) {
@@ -2162,14 +2113,17 @@ func (t *BrowserTab) showServicesDialog(node *tview.TreeNode) {
 	})
 
 	form.AddButton("Save", func() {
-		// Update config with inverted values
-		t.app.config.Lock()
-		sel.NoREST = !restEnabled
-		sel.NoMQTT = !mqttEnabled
-		sel.NoKafka = !kafkaEnabled
-		sel.NoValkey = !valkeyEnabled
-
-		t.app.config.UnlockAndSave(t.app.configPath)
+		// Update config with inverted values via engine
+		noREST := !restEnabled
+		noMQTT := !mqttEnabled
+		noKafka := !kafkaEnabled
+		noValkey := !valkeyEnabled
+		t.app.engine.UpdateTag(t.selectedPLC, tagName, engine.TagUpdateRequest{
+			NoREST:   &noREST,
+			NoMQTT:   &noMQTT,
+			NoKafka:  &noKafka,
+			NoValkey: &noValkey,
+		})
 		t.app.pages.RemovePage(pageName)
 		t.app.app.SetFocus(t.tree)
 
@@ -2299,33 +2253,15 @@ func (t *BrowserTab) showAddTagDialog() {
 			}
 		}
 
-		// Check for duplicate
-		t.app.config.Lock()
-		cfg := t.app.config.FindPLC(t.selectedPLC)
-		if cfg != nil {
-			for _, tag := range cfg.Tags {
-				if tag.Name == tagName {
-					t.app.config.Unlock()
-					t.app.showErrorWithFocus("Error", "Tag already exists: "+tagName, form)
-					return
-				}
-			}
-
-			// Add the tag
-			cfg.Tags = append(cfg.Tags, config.TagSelection{
-				Name:     tagName,
-				DataType: typeOptions[typeIdx],
-				Alias:    alias,
-				Enabled:  true,
-				Writable: writable,
-			})
-
-			t.app.config.UnlockAndSave(t.app.configPath)
-
-			// Refresh manual tags in manager
-			t.app.manager.RefreshManualTags(t.selectedPLC)
-		} else {
-			t.app.config.Unlock()
+		_, err := t.app.engine.CreateOrUpdateTag(t.selectedPLC, tagName, engine.TagCreateOrUpdateRequest{
+			DataType: typeOptions[typeIdx],
+			Alias:    alias,
+			Enabled:  true,
+			Writable: writable,
+		})
+		if err != nil {
+			t.app.showErrorWithFocus("Error", err.Error(), form)
+			return
 		}
 
 		t.app.closeModal(pageName)
@@ -2363,11 +2299,9 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 	}
 
 	var tagSel *config.TagSelection
-	var tagIdx int
 	for i := range cfg.Tags {
 		if cfg.Tags[i].Name == tagInfo.Name {
 			tagSel = &cfg.Tags[i]
-			tagIdx = i
 			break
 		}
 	}
@@ -2470,17 +2404,16 @@ func (t *BrowserTab) showEditTagDialog(node *tview.TreeNode) {
 			}
 		}
 
-		// Update the tag
-		t.app.config.Lock()
-		cfg.Tags[tagIdx].Name = tagName
-		cfg.Tags[tagIdx].DataType = typeOptions[typeIdx]
-		cfg.Tags[tagIdx].Alias = alias
-		cfg.Tags[tagIdx].Writable = writable
-
-		t.app.config.UnlockAndSave(t.app.configPath)
-
-		// Refresh manual tags in manager
-		t.app.manager.RefreshManualTags(t.selectedPLC)
+		// Update the tag via engine
+		if _, err := t.app.engine.CreateOrUpdateTag(t.selectedPLC, tagName, engine.TagCreateOrUpdateRequest{
+			DataType: typeOptions[typeIdx],
+			Alias:    alias,
+			Enabled:  true,
+			Writable: writable,
+		}); err != nil {
+			t.app.showErrorWithFocus("Error", err.Error(), form)
+			return
+		}
 
 		t.app.closeModal(pageName)
 		t.loadTags()
@@ -2574,24 +2507,10 @@ func (t *BrowserTab) deleteManualTag(node *tview.TreeNode) {
 	tagName := tagInfo.Name
 
 	t.app.showConfirm("Delete Tag", fmt.Sprintf("Delete tag %s?", tagName), func() {
-		t.app.config.Lock()
-		cfg := t.app.config.FindPLC(t.selectedPLC)
-		if cfg != nil {
-			// Remove from config
-			for i, tag := range cfg.Tags {
-				if tag.Name == tagName {
-					cfg.Tags = append(cfg.Tags[:i], cfg.Tags[i+1:]...)
-					break
-				}
-			}
-			t.app.config.UnlockAndSave(t.app.configPath)
-
-			// Refresh manual tags in manager
-			t.app.manager.RefreshManualTags(t.selectedPLC)
-		} else {
-			t.app.config.Unlock()
+		if err := t.app.engine.DeleteTag(t.selectedPLC, tagName); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
-
 		t.loadTags()
 		t.app.setStatus(fmt.Sprintf("Deleted tag: %s", tagName))
 	})

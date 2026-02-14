@@ -191,8 +191,8 @@ kcat -b localhost:9092 -t warlink1 -C -o end -q | pv -l > /dev/null
 
 | Symptom | Likely Cause | Solution |
 |---------|--------------|----------|
-| SSH connection refused | Wrong port or daemon not running | Check port (-p flag) and process |
-| "Permission denied" | Wrong password or key | Verify --ssh-password or --ssh-keys |
+| SSH connection refused | Wrong port or daemon not running | Check port (--ssh-port flag) and process |
+| "Permission denied" | Wrong password or key | Verify --ssh-pass or --ssh-keys |
 | Terminal garbled | Client terminal size mismatch | Resize terminal or reconnect |
 | Config changes lost | External edit while daemon running | Stop daemon before editing config |
 | Daemon exits on disconnect | Not running as daemon | Use `-d` flag, not foreground mode |

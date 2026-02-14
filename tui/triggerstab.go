@@ -10,6 +10,7 @@ import (
 	"github.com/rivo/tview"
 
 	"warlink/config"
+	"warlink/engine"
 	"warlink/trigger"
 )
 
@@ -447,7 +448,7 @@ func (t *TriggersTab) showAddDialog() {
 			}
 		}
 
-		cfg := config.TriggerConfig{
+		if err := t.app.engine.CreateTrigger(engine.TriggerCreateRequest{
 			Name:       name,
 			Enabled:    true,
 			PLC:        plcNames[plcIdx],
@@ -458,23 +459,15 @@ func (t *TriggersTab) showAddDialog() {
 			},
 			AckTag:       ackTag,
 			DebounceMS:   100,
-			Tags:         []string{}, // Data tags/packs added separately
-			MQTTBroker:   "all",      // Publish to all MQTT brokers by default
+			Tags:         []string{},
+			MQTTBroker:   "all",
 			KafkaCluster: kafkaCluster,
 			Selector:     selector,
 			Metadata:     make(map[string]string),
-		}
-
-		t.app.LockConfig()
-		t.app.config.AddTrigger(cfg)
-		t.app.UnlockAndSaveConfig()
-
-		if err := t.app.triggerMgr.AddTrigger(&cfg); err != nil {
-			t.app.showError("Error", fmt.Sprintf("Failed to add trigger: %v", err))
+		}); err != nil {
+			t.app.showError("Error", fmt.Sprintf("Failed to create trigger: %v", err))
 			return
 		}
-
-		t.app.triggerMgr.StartTrigger(name)
 
 		t.app.closeModal(pageName)
 		t.Refresh()
@@ -679,8 +672,7 @@ func (t *TriggersTab) showEditDialog() {
 			}
 		}
 
-		updated := config.TriggerConfig{
-			Name:       newName,
+		if err := t.app.engine.UpdateTrigger(originalName, engine.TriggerUpdateRequest{
 			Enabled:    cfg.Enabled,
 			PLC:        plcNames[newPlcIdx],
 			TriggerTag: triggerTag,
@@ -690,25 +682,14 @@ func (t *TriggersTab) showEditDialog() {
 			},
 			AckTag:       ackTag,
 			DebounceMS:   cfg.DebounceMS,
-			Tags:         cfg.Tags, // Keep existing data tags/packs
+			Tags:         cfg.Tags,
 			MQTTBroker:   mqttBroker,
 			KafkaCluster: kafkaCluster,
 			Selector:     selector,
 			Metadata:     cfg.Metadata,
-		}
-
-		t.app.LockConfig()
-		t.app.config.UpdateTrigger(originalName, updated)
-		t.app.UnlockAndSaveConfig()
-
-		t.app.triggerMgr.RemoveTrigger(originalName)
-		if err := t.app.triggerMgr.AddTrigger(&updated); err != nil {
+		}); err != nil {
 			t.app.showError("Error", fmt.Sprintf("Failed to update trigger: %v", err))
 			return
-		}
-
-		if updated.Enabled {
-			t.app.triggerMgr.StartTrigger(newName)
 		}
 
 		t.app.closeModal(pageName)
@@ -755,19 +736,19 @@ func (t *TriggersTab) showAddDataTagDialog() {
 		ExcludeTags:  excludeTags,
 		ExcludePacks: excludePacks,
 		OnSelectTag: func(plc, tag string) {
-			t.app.LockConfig()
-			cfg.Tags = append(cfg.Tags, tag)
-			t.app.UnlockAndSaveConfig()
-			t.app.triggerMgr.UpdateTrigger(cfg)
+			if err := t.app.engine.AddTriggerTag(name, tag); err != nil {
+				t.app.showError("Error", err.Error())
+				return
+			}
 			t.updateDataTagsList()
 			t.app.setStatus(fmt.Sprintf("Added: %s", tag))
 			t.app.app.SetFocus(t.dataTable)
 		},
 		OnSelectPack: func(packName string) {
-			t.app.LockConfig()
-			cfg.Tags = append(cfg.Tags, "pack:"+packName)
-			t.app.UnlockAndSaveConfig()
-			t.app.triggerMgr.UpdateTrigger(cfg)
+			if err := t.app.engine.AddTriggerTag(name, "pack:"+packName); err != nil {
+				t.app.showError("Error", err.Error())
+				return
+			}
 			t.updateDataTagsList()
 			t.app.setStatus(fmt.Sprintf("Added pack: %s", packName))
 			t.app.app.SetFocus(t.dataTable)
@@ -798,14 +779,10 @@ func (t *TriggersTab) confirmRemoveDataTag() {
 	}
 
 	t.app.showConfirm("Remove Tag", fmt.Sprintf("Remove %s?", displayName), func() {
-		// Remove from config
-		t.app.LockConfig()
-		cfg.Tags = append(cfg.Tags[:idx], cfg.Tags[idx+1:]...)
-		t.app.UnlockAndSaveConfig()
-
-		// Update trigger manager
-		t.app.triggerMgr.UpdateTrigger(cfg)
-
+		if err := t.app.engine.RemoveTriggerTag(name, idx); err != nil {
+			t.app.showError("Error", err.Error())
+			return
+		}
 		t.updateDataTagsList()
 		t.app.setStatus(fmt.Sprintf("Removed: %s", displayName))
 	})
@@ -818,11 +795,10 @@ func (t *TriggersTab) confirmRemoveTrigger() {
 	}
 
 	t.app.showConfirm("Remove Trigger", fmt.Sprintf("Remove %s?", name), func() {
-		t.app.triggerMgr.StopTrigger(name)
-		t.app.triggerMgr.RemoveTrigger(name)
-		t.app.LockConfig()
-		t.app.config.RemoveTrigger(name)
-		t.app.UnlockAndSaveConfig()
+		if err := t.app.engine.DeleteTrigger(name); err != nil {
+			t.app.showError("Error", err.Error())
+			return
+		}
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Removed trigger: %s", name))
 	})
@@ -840,22 +816,11 @@ func (t *TriggersTab) toggleSelected() {
 	}
 
 	if cfg.Enabled {
-		// Stop the trigger
-		t.app.LockConfig()
-		cfg.Enabled = false
-		t.app.UnlockAndSaveConfig()
-		if err := t.app.triggerMgr.StopTrigger(name); err != nil {
-			t.app.setStatus(fmt.Sprintf("Failed to stop: %v", err))
-			return
-		}
+		t.app.engine.StopTrigger(name)
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Stopped trigger: %s", name))
 	} else {
-		// Start the trigger
-		t.app.LockConfig()
-		cfg.Enabled = true
-		t.app.UnlockAndSaveConfig()
-		if err := t.app.triggerMgr.StartTrigger(name); err != nil {
+		if err := t.app.engine.StartTrigger(name); err != nil {
 			t.app.setStatus(fmt.Sprintf("Failed to start: %v", err))
 			return
 		}
@@ -875,7 +840,7 @@ func (t *TriggersTab) testSelected() {
 	// Run completely in background - fire and forget
 	// Results will appear in the Debug tab log
 	go func() {
-		err := t.app.triggerMgr.TestFireTrigger(name)
+		err := t.app.engine.TestFireTrigger(name)
 
 		// Schedule UI update for later (don't block on it)
 		go func() {

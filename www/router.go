@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"warlink/config"
+	"warlink/engine"
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
@@ -41,6 +42,7 @@ type WebServer interface {
 type Handlers struct {
 	cfg       *config.WebUIConfig
 	managers  Managers
+	engine    *engine.Engine
 	webServer WebServer
 	sessions  *sessionStore
 	tmpl      *template.Template
@@ -48,10 +50,11 @@ type Handlers struct {
 }
 
 // newHandlers creates a new handlers instance.
-func newHandlers(cfg *config.WebUIConfig, managers Managers, ws WebServer) *Handlers {
+func newHandlers(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, ws WebServer) *Handlers {
 	h := &Handlers{
 		cfg:       cfg,
 		managers:  managers,
+		engine:    eng,
 		webServer: ws,
 		sessions:  newSessionStore(cfg.SessionSecret),
 		eventHub:  newEventHub(),
@@ -81,8 +84,8 @@ func newHandlers(cfg *config.WebUIConfig, managers Managers, ws WebServer) *Hand
 }
 
 // NewRouter creates the web UI router.
-func NewRouter(cfg *config.WebUIConfig, managers Managers, ws WebServer) chi.Router {
-	h := newHandlers(cfg, managers, ws)
+func NewRouter(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, ws WebServer) chi.Router {
+	h := newHandlers(cfg, managers, eng, ws)
 
 	r := chi.NewRouter()
 

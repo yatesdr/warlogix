@@ -1620,20 +1620,47 @@ func (c *Client) GetTemplateByID(templateID uint16) (*Template, error) {
 }
 
 // GetMemberTypes returns a map of member name → type name for a structure type.
-// For nested structures, the type name is "STRUCT(<templateID>)".
+// Keys use dot-path notation for nested struct members (e.g., "First_Name.LEN").
+// This allows the Web UI to display correct types at all nesting levels.
 func (c *Client) GetMemberTypes(typeCode uint16) map[string]string {
-	tmpl, err := c.GetTemplate(typeCode)
-	if err != nil {
+	types := make(map[string]string)
+	visited := make(map[uint16]bool)
+	c.getMemberTypesRecursive(typeCode, "", types, visited)
+	if len(types) == 0 {
 		return nil
 	}
-	types := make(map[string]string)
+	return types
+}
+
+// getMemberTypesRecursive populates types with dot-path keys for all members,
+// recursing into nested structures. visited prevents infinite recursion on
+// self-referencing UDTs.
+func (c *Client) getMemberTypesRecursive(typeCode uint16, prefix string, types map[string]string, visited map[uint16]bool) {
+	if visited[typeCode] {
+		return
+	}
+	visited[typeCode] = true
+
+	tmpl, err := c.GetTemplate(typeCode)
+	if err != nil {
+		return
+	}
+
 	for _, member := range tmpl.Members {
 		if member.Hidden || member.Name == "" {
 			continue
 		}
-		types[member.Name] = TypeName(member.Type)
+		key := member.Name
+		if prefix != "" {
+			key = prefix + "." + member.Name
+		}
+		types[key] = TypeName(member.Type)
+
+		// Recurse into non-array structure members
+		if member.IsStructure() && !member.IsArray() {
+			c.getMemberTypesRecursive(member.Type, key, types, visited)
+		}
 	}
-	return types
 }
 
 // ClearTemplateCache clears all cached templates, forcing re-fetch on next access.

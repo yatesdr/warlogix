@@ -358,11 +358,14 @@ function buildTagChildren(obj, parentPath, ignoreList, publishedChildren, member
     for (var i = 0; i < keys.length; i++) {
         var key = keys[i];
         var value = obj[key];
-        // Use PLC member type if available, array element type for arrays, fall back to JS type inference
-        var valueType = (memberTypes && memberTypes[key]) ? memberTypes[key] :
+        // Build full dot-path for memberTypes lookup (nested structs use paths like "First_Name.LEN")
+        var fullKey = parentPath ? parentPath + '.' + key : String(key);
+        // Use PLC member type if available (try full path first, then bare key), array element type for arrays, fall back to JS type inference
+        var valueType = (memberTypes && memberTypes[fullKey]) ? memberTypes[fullKey] :
+            (memberTypes && memberTypes[key]) ? memberTypes[key] :
             (isArray && arrayElementType) ? arrayElementType : getValueType(value);
         var displayKey = isArray ? '[' + key + ']' : key;
-        var childPath = parentPath ? parentPath + '.' + key : String(key);
+        var childPath = fullKey;
         var ignored = isIgnored(childPath, ignoreList);
         var published = isPublished(childPath, publishedChildren);
         var writable = isWritable(childPath, publishedChildren);
@@ -377,6 +380,23 @@ function buildTagChildren(obj, parentPath, ignoreList, publishedChildren, member
         }
         if (ignored) {
             indicators += '<span class="indicator indicator-ignore" title="Ignored">I</span>';
+        }
+
+        // Primitive arrays (e.g., SINT[], DINT[]) - show inline instead of expandable
+        if (Array.isArray(value) && valueType && valueType.endsWith('[]') &&
+            value.length > 0 && typeof value[0] !== 'object') {
+            html += '<div class="tag-child-row' + (ignored ? ' ignored' : '') + (published ? ' published' : '') + '" ' +
+                'onclick="handleChildClick(event, this)" ' +
+                'data-key="' + escapeAttr(String(key)) + '" ' +
+                'data-path="' + escapeAttr(childPath) + '" ' +
+                'data-type="' + escapeAttr(valueType) + '" ' +
+                'data-json="' + escapeAttr(JSON.stringify(value)) + '">' +
+                indicators +
+                '<span class="child-key">' + escapeHtml(displayKey) + '</span>' +
+                '<span class="child-type">(' + valueType + ')</span>' +
+                '<span class="child-value">' + formatArrayInline(value) + '</span>' +
+                '</div>';
+            continue;
         }
 
         if (typeof value === 'object' && value !== null) {
@@ -448,10 +468,12 @@ function toggleChildExpand(event, expandEl) {
                 // Get published children from parent row or tag item
                 publishedChildren = JSON.parse(row.dataset.publishedChildren || tagItem.dataset.publishedChildren || '{}');
             } catch (e) {}
+            var memberTypes = null;
+            try { memberTypes = JSON.parse(tagItem.dataset.memberTypes || 'null'); } catch(e) {}
             try {
                 var parsed = JSON.parse(json);
                 if (typeof parsed === 'object' && parsed !== null) {
-                    childrenContainer.innerHTML = buildTagChildren(parsed, path, ignoreList, publishedChildren, null, row.dataset.type);
+                    childrenContainer.innerHTML = buildTagChildren(parsed, path, ignoreList, publishedChildren, memberTypes, row.dataset.type);
                 }
             } catch (e) {}
         }
@@ -534,6 +556,20 @@ function formatChildValue(value) {
     return String(value);
 }
 
+function formatArrayInline(arr) {
+    var maxShow = 8;
+    var parts = [];
+    var limit = Math.min(arr.length, maxShow);
+    for (var i = 0; i < limit; i++) {
+        parts.push(String(arr[i]));
+    }
+    var result = '[' + parts.join(', ');
+    if (arr.length > maxShow) {
+        result += ', ... +' + (arr.length - maxShow) + ' more';
+    }
+    return result + '] (' + arr.length + ' items)';
+}
+
 function saveExpandState() {
     var expanded = {};
     document.querySelectorAll('.tag-item.has-children:not(.collapsed)').forEach(function(item) {
@@ -611,8 +647,7 @@ function expandChildPath(tagItem, targetPath, ignoreList, publishedChildren) {
             try {
                 var parsed = JSON.parse(json);
                 if (typeof parsed === 'object' && parsed !== null) {
-                    // Only pass root memberTypes for the first level; deeper levels use parentType
-                    var mt = (i === 0) ? memberTypes : null;
+                    var mt = memberTypes;
                     childContainer.innerHTML = buildTagChildren(parsed, currentPath, ignoreList, publishedChildren, mt, row.dataset.type);
                 }
             } catch (e) {
@@ -1213,20 +1248,31 @@ function buildValueTree(obj, parentPath, memberTypes) {
     for (var i = 0; i < keys.length; i++) {
         var key = keys[i];
         var value = obj[key];
-        var valueType = (memberTypes && memberTypes[key]) ? memberTypes[key] : getValueType(value);
-        var nodePath = parentPath ? parentPath + '.' + key : key;
+        var fullKey = parentPath ? parentPath + '.' + key : key;
+        var valueType = (memberTypes && memberTypes[fullKey]) ? memberTypes[fullKey] :
+            (memberTypes && memberTypes[key]) ? memberTypes[key] : getValueType(value);
+        var nodePath = fullKey;
 
         if (typeof value === 'object' && value !== null) {
             if (Array.isArray(value)) {
-                // Array - derive element type by stripping [] from this member's type
-                var arrElType = (valueType && valueType.endsWith('[]')) ? valueType.slice(0, -2) : null;
-                html += '<div class="tree-node expandable collapsed" data-node-path="' + escapeAttr(nodePath) + '" onclick="toggleTreeNode(event, this)">' +
-                    '<span class="tree-expand">&#9660;</span>' +
-                    '<span class="tree-key">' + escapeHtml(key) + '</span>' +
-                    '<span class="tree-type">(' + valueType + ')</span>' +
-                    '<span class="tree-summary">[' + value.length + ' items]</span>' +
-                    '</div>' +
-                    '<div class="tree-children" style="display:none">' + buildArrayTree(value, nodePath, arrElType) + '</div>';
+                // Primitive arrays with known type - show inline
+                if (valueType && valueType.endsWith('[]') && value.length > 0 && typeof value[0] !== 'object') {
+                    html += '<div class="tree-node">' +
+                        '<span class="tree-key">' + escapeHtml(key) + '</span>' +
+                        '<span class="tree-type">(' + valueType + ')</span>' +
+                        '<span class="tree-value">' + formatArrayInline(value) + '</span>' +
+                        '</div>';
+                } else {
+                    // Array - derive element type by stripping [] from this member's type
+                    var arrElType = (valueType && valueType.endsWith('[]')) ? valueType.slice(0, -2) : null;
+                    html += '<div class="tree-node expandable collapsed" data-node-path="' + escapeAttr(nodePath) + '" onclick="toggleTreeNode(event, this)">' +
+                        '<span class="tree-expand">&#9660;</span>' +
+                        '<span class="tree-key">' + escapeHtml(key) + '</span>' +
+                        '<span class="tree-type">(' + valueType + ')</span>' +
+                        '<span class="tree-summary">[' + value.length + ' items]</span>' +
+                        '</div>' +
+                        '<div class="tree-children" style="display:none">' + buildArrayTree(value, nodePath, arrElType) + '</div>';
+                }
             } else {
                 // Nested object
                 var fieldCount = Object.keys(value).length;
@@ -1236,7 +1282,7 @@ function buildValueTree(obj, parentPath, memberTypes) {
                     '<span class="tree-type">(' + valueType + ')</span>' +
                     '<span class="tree-summary">[' + fieldCount + ' fields]</span>' +
                     '</div>' +
-                    '<div class="tree-children" style="display:none">' + buildValueTree(value, nodePath) + '</div>';
+                    '<div class="tree-children" style="display:none">' + buildValueTree(value, nodePath, memberTypes) + '</div>';
             }
         } else {
             // Primitive value
@@ -1709,7 +1755,7 @@ function restoreState() {
                                 try {
                                     var parsed = JSON.parse(json);
                                     if (typeof parsed === 'object' && parsed !== null) {
-                                        var mt = (i === 0) ? memberTypes : null;
+                                        var mt = memberTypes;
                                         childContainer.innerHTML = buildTagChildren(parsed, currentPath, ignoreList, publishedChildren, mt, parentRow.dataset.type);
                                     }
                                 } catch (e) {}

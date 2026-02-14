@@ -13,6 +13,7 @@ import (
 
 	"warlink/config"
 	"warlink/driver"
+	"warlink/engine"
 	"warlink/logging"
 	"warlink/plcman"
 )
@@ -135,25 +136,9 @@ func (t *PLCsTab) onSelect(row, col int) {
 		return
 	}
 	if plc.GetStatus() == plcman.StatusConnected {
-		// Disable auto-connect and disconnect in background
-		t.app.LockConfig()
-		if cfg := t.app.config.FindPLC(name); cfg != nil {
-			cfg.Enabled = false
-			t.app.UnlockAndSaveConfig()
-		} else {
-			t.app.UnlockConfig()
-		}
-		go t.app.manager.Disconnect(name)
+		go t.app.engine.DisconnectPLC(name)
 	} else {
-		// Enable auto-connect and connect in background
-		t.app.LockConfig()
-		if cfg := t.app.config.FindPLC(name); cfg != nil {
-			cfg.Enabled = true
-			t.app.UnlockAndSaveConfig()
-		} else {
-			t.app.UnlockConfig()
-		}
-		go t.app.manager.Connect(name)
+		go t.app.engine.ConnectPLC(name)
 	}
 }
 
@@ -1089,7 +1074,7 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			discoverTags = &f
 		}
 
-		cfg := config.PLCConfig{
+		if err := t.app.engine.CreatePLC(engine.PLCCreateRequest{
 			Name:               state.name,
 			Address:            state.address,
 			Slot:               byte(slot),
@@ -1102,19 +1087,13 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			Timeout:            timeout,
 			AmsNetId:           state.amsNetId,
 			AmsPort:            uint16(amsPort),
-			// Omron FINS settings
-			FinsNode:    byte(finsNode),
-			FinsNetwork: byte(finsNetwork),
-			FinsUnit:    byte(finsUnit),
+			FinsNode:           byte(finsNode),
+			FinsNetwork:        byte(finsNetwork),
+			FinsUnit:           byte(finsUnit),
+		}); err != nil {
+			t.app.showError("Error", fmt.Sprintf("Failed to create PLC: %v", err))
+			return
 		}
-
-		t.app.LockConfig()
-		t.app.config.AddPLC(cfg)
-		t.app.UnlockAndSaveConfig()
-		if addedCfg := t.app.config.FindPLC(state.name); addedCfg != nil {
-			t.app.manager.AddPLC(addedCfg)
-		}
-		t.app.UpdateMQTTPLCNames()
 
 		t.app.closeModal(pageName)
 		t.Refresh()
@@ -1429,8 +1408,7 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 			discoverTags = &f
 		}
 
-		updated := config.PLCConfig{
-			Name:               state.name,
+		if err := t.app.engine.UpdatePLC(state.originalName, engine.PLCUpdateRequest{
 			Address:            state.address,
 			Slot:               byte(slot),
 			Family:             family,
@@ -1440,38 +1418,24 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 			HealthCheckEnabled: &healthCheck,
 			PollRate:           pollRate,
 			Timeout:            timeout,
-			Tags:               state.tags,
 			AmsNetId:           state.amsNetId,
 			AmsPort:            uint16(amsPort),
-			// Omron FINS settings
-			FinsNode:    byte(finsNode),
-			FinsNetwork: byte(finsNetwork),
-			FinsUnit:    byte(finsUnit),
+			FinsNode:           byte(finsNode),
+			FinsNetwork:        byte(finsNetwork),
+			FinsUnit:           byte(finsUnit),
+		}); err != nil {
+			t.app.showError("Error", fmt.Sprintf("Failed to update PLC: %v", err))
+			return
 		}
-
-		t.app.LockConfig()
-		t.app.config.UpdatePLC(state.originalName, updated)
-		t.app.UnlockAndSaveConfig()
 
 		// Close dialog first
 		t.app.closeModal(pageName)
 		t.app.setStatus(fmt.Sprintf("Updating PLC: %s...", state.name))
 
-		// Update manager in background to avoid blocking UI
-		originalName := state.originalName
+		// Reconnect in background to apply changes
 		newName := state.name
 		go func() {
-			t.app.manager.Disconnect(originalName)
-			t.app.manager.RemovePLC(originalName)
-			if updatedCfg := t.app.config.FindPLC(newName); updatedCfg != nil {
-				t.app.manager.AddPLC(updatedCfg)
-				if originalName != newName {
-					t.app.UpdateMQTTPLCNames()
-				}
-				if updatedCfg.Enabled {
-					t.app.manager.Connect(newName)
-				}
-			}
+			t.app.engine.ReconnectPLC(newName)
 			t.app.QueueUpdateDraw(func() {
 				t.Refresh()
 				t.app.setStatus(fmt.Sprintf("Updated PLC: %s", newName))
@@ -1555,16 +1519,16 @@ func (t *PLCsTab) removeSelected() {
 	}
 
 	t.app.showConfirm("Remove PLC", fmt.Sprintf("Remove %s?", name), func() {
-		t.app.LockConfig()
-		t.app.config.RemovePLC(name)
-		t.app.UnlockAndSaveConfig()
-		t.app.UpdateMQTTPLCNames()
 		t.app.setStatus(fmt.Sprintf("Removing PLC: %s...", name))
 
-		// Update manager in background to avoid blocking UI
 		go func() {
-			t.app.manager.Disconnect(name)
-			t.app.manager.RemovePLC(name)
+			t.app.engine.DisconnectPLC(name)
+			if err := t.app.engine.DeletePLC(name); err != nil {
+				t.app.QueueUpdateDraw(func() {
+					t.app.showError("Error", err.Error())
+				})
+				return
+			}
 			t.app.QueueUpdateDraw(func() {
 				t.Refresh()
 				t.app.setStatus(fmt.Sprintf("Removed PLC: %s", name))
@@ -1579,23 +1543,8 @@ func (t *PLCsTab) connectSelected() {
 		return
 	}
 
-	plc := t.app.manager.GetPLC(name)
-	if plc == nil {
-		return
-	}
 	t.app.setStatus(fmt.Sprintf("Connecting to %s...", name))
-
-	// Enable auto-connect so it stays connected
-	t.app.LockConfig()
-	if cfg := t.app.config.FindPLC(name); cfg != nil {
-		cfg.Enabled = true
-		t.app.UnlockAndSaveConfig()
-	} else {
-		t.app.UnlockConfig()
-	}
-
-	// Connect runs in background - manager will log success/failure
-	t.app.manager.Connect(name)
+	go t.app.engine.ConnectPLC(name)
 }
 
 func (t *PLCsTab) disconnectSelected() {
@@ -1605,17 +1554,8 @@ func (t *PLCsTab) disconnectSelected() {
 	}
 	t.app.setStatus(fmt.Sprintf("Disconnecting from %s...", name))
 
-	// Disable auto-connect to prevent auto-reconnect
-	t.app.LockConfig()
-	if cfg := t.app.config.FindPLC(name); cfg != nil {
-		cfg.Enabled = false
-		t.app.UnlockAndSaveConfig()
-	} else {
-		t.app.UnlockConfig()
-	}
-
 	go func() {
-		t.app.manager.Disconnect(name)
+		t.app.engine.DisconnectPLC(name)
 		t.app.QueueUpdateDraw(func() {
 			t.Refresh()
 			t.app.setStatus(fmt.Sprintf("Disconnected from %s", name))

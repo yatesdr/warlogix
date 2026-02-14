@@ -106,7 +106,7 @@ func TestLoginRedirectsToChangePassword(t *testing.T) {
 	}
 
 	managers := &testManagers{cfg: cfg, configPath: "/tmp/test.yaml", plcMan: plcman.NewManager(time.Second)}
-	router := NewRouter(&cfg.Web.UI, managers, nil)
+	router := NewRouter(&cfg.Web.UI, managers, nil, nil)
 	server := httptest.NewServer(router)
 	defer server.Close()
 

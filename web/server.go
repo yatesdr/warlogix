@@ -15,6 +15,7 @@ import (
 
 	"warlink/api"
 	"warlink/config"
+	"warlink/engine"
 	"warlink/logging"
 	"warlink/kafka"
 	"warlink/mqtt"
@@ -44,6 +45,7 @@ type Managers interface {
 type Server struct {
 	config   *config.WebConfig
 	managers Managers
+	engine   *engine.Engine
 	server   *http.Server
 	router   chi.Router
 	running  bool
@@ -60,6 +62,12 @@ func NewServer(cfg *config.WebConfig, managers Managers) *Server {
 		config:   cfg,
 		managers: managers,
 	}
+
+	// If managers is an *engine.Engine, capture it for mutation operations.
+	if eng, ok := managers.(*engine.Engine); ok {
+		s.engine = eng
+	}
+
 	s.setupRoutes()
 	return s
 }
@@ -82,7 +90,7 @@ func (s *Server) setupRoutes() {
 
 	// Mount Web UI at root
 	if s.config.UI.Enabled {
-		r.Mount("/", www.NewRouter(&s.config.UI, s.managers, s))
+		r.Mount("/", www.NewRouter(&s.config.UI, s.managers, s.engine, s))
 	}
 
 	s.router = r

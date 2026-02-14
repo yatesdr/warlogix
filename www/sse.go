@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"warlink/engine"
 	"warlink/kafka"
 	"warlink/logging"
 	"warlink/plcman"
@@ -194,8 +195,8 @@ func (h *EventHub) Broadcast(event SSEEvent) {
 	}
 }
 
-// BroadcastEntityChange broadcasts an entity CRUD change to all clients.
-func (h *EventHub) BroadcastEntityChange(entityType, action, name string) {
+// broadcastEntityChange broadcasts an entity CRUD change to all clients.
+func (h *EventHub) broadcastEntityChange(entityType, action, name string) {
 	h.Broadcast(SSEEvent{
 		Type: "entity-change",
 		Data: EntityChangeUpdate{
@@ -206,9 +207,9 @@ func (h *EventHub) BroadcastEntityChange(entityType, action, name string) {
 	})
 }
 
-// BroadcastConfigChange broadcasts a tag configuration change to all clients.
+// broadcastConfigChange broadcasts a tag configuration change to all clients.
 // This is a lightweight update that doesn't trigger a full tree refresh.
-func (h *EventHub) BroadcastConfigChange(plcName, tagName string, enabled, writable bool, ignores []string) {
+func (h *EventHub) broadcastConfigChange(plcName, tagName string, enabled, writable bool, ignores []string) {
 	h.Broadcast(SSEEvent{
 		Type: "config-change",
 		Data: ConfigUpdate{
@@ -295,14 +296,7 @@ func (h *Handlers) handleSSERepublisher(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// tagConfigSnapshot stores the last known tag config state for diffing.
-type tagConfigSnapshot struct {
-	Enabled  bool
-	Writable bool
-	Ignores  string // JSON-encoded ignores for comparison
-}
-
-// setupEventListeners registers listeners with plcman and config to broadcast events.
+// setupEventListeners registers listeners with plcman and engine EventBus to broadcast events.
 func (h *Handlers) setupEventListeners() {
 	plcMan := h.managers.GetPLCMan()
 	cfg := h.managers.GetConfig()
@@ -372,54 +366,109 @@ func (h *Handlers) setupEventListeners() {
 		}
 	})
 
-	// Listen for config changes with diff-only broadcasting
-	var lastTagConfigs sync.Map // map[string]tagConfigSnapshot, key = "plc:tag"
+	// Subscribe to Engine EventBus for CRUD and config events.
+	// This replaces manual broadcastEntityChange/broadcastConfigChange calls in handlers.
+	if h.engine != nil {
+	h.engine.Events.Subscribe(func(evt engine.Event) {
+		switch evt.Type {
+		// PLC CRUD
+		case engine.EventPLCCreated:
+			h.eventHub.broadcastEntityChange("plc", "add", evt.Payload.(engine.PLCEvent).Name)
+		case engine.EventPLCUpdated:
+			h.eventHub.broadcastEntityChange("plc", "update", evt.Payload.(engine.PLCEvent).Name)
+		case engine.EventPLCDeleted:
+			h.eventHub.broadcastEntityChange("plc", "remove", evt.Payload.(engine.PLCEvent).Name)
 
-	// Pre-populate snapshot with current config to avoid flooding on first change
-	for _, plcCfg := range cfg.PLCs {
-		for _, tag := range plcCfg.Tags {
-			key := plcCfg.Name + ":" + tag.Name
-			ignoresJSON, _ := json.Marshal(tag.IgnoreChanges)
-			lastTagConfigs.Store(key, tagConfigSnapshot{
-				Enabled:  tag.Enabled,
-				Writable: tag.Writable,
-				Ignores:  string(ignoresJSON),
-			})
-		}
-	}
-
-	cfg.AddOnChangeListener(func() {
-		for _, plcCfg := range cfg.PLCs {
-			for _, tag := range plcCfg.Tags {
-				key := plcCfg.Name + ":" + tag.Name
-				ignoresJSON, _ := json.Marshal(tag.IgnoreChanges)
-				current := tagConfigSnapshot{
-					Enabled:  tag.Enabled,
-					Writable: tag.Writable,
-					Ignores:  string(ignoresJSON),
-				}
-
-				if prev, ok := lastTagConfigs.Load(key); ok {
-					prevSnap := prev.(tagConfigSnapshot)
-					if prevSnap == current {
-						continue // No change, skip broadcast
+		// Tag config changes
+		case engine.EventTagUpdated:
+			te := evt.Payload.(engine.TagEvent)
+			// Look up current tag config for the SSE payload
+			plcCfg := cfg.FindPLC(te.PLCName)
+			if plcCfg != nil {
+				for _, tag := range plcCfg.Tags {
+					if tag.Name == te.TagName {
+						h.eventHub.broadcastConfigChange(te.PLCName, te.TagName, tag.Enabled, tag.Writable, tag.IgnoreChanges)
+						break
 					}
 				}
-				lastTagConfigs.Store(key, current)
-
-				h.eventHub.Broadcast(SSEEvent{
-					Type: "config-change",
-					Data: ConfigUpdate{
-						PLC:      plcCfg.Name,
-						Tag:      tag.Name,
-						Enabled:  tag.Enabled,
-						Writable: tag.Writable,
-						Ignores:  tag.IgnoreChanges,
-					},
-				})
 			}
+		case engine.EventTagCreated:
+			te := evt.Payload.(engine.TagEvent)
+			// Child tags (dotted paths) only need config-change (no tree refresh).
+			// New root tags need entity-change to trigger tree refresh.
+			if engine.IsChildTag(te.TagName) {
+				plcCfg := cfg.FindPLC(te.PLCName)
+				if plcCfg != nil {
+					for _, tag := range plcCfg.Tags {
+						if tag.Name == te.TagName {
+							h.eventHub.broadcastConfigChange(te.PLCName, te.TagName, tag.Enabled, tag.Writable, tag.IgnoreChanges)
+							break
+						}
+					}
+				}
+			} else {
+				h.eventHub.broadcastEntityChange("plc", "update", te.PLCName)
+			}
+		case engine.EventTagDeleted:
+			te := evt.Payload.(engine.TagEvent)
+			h.eventHub.broadcastEntityChange("plc", "update", te.PLCName)
+
+		// MQTT CRUD
+		case engine.EventMQTTCreated:
+			h.eventHub.broadcastEntityChange("mqtt", "add", evt.Payload.(engine.ServiceEvent).Name)
+		case engine.EventMQTTUpdated:
+			h.eventHub.broadcastEntityChange("mqtt", "update", evt.Payload.(engine.ServiceEvent).Name)
+		case engine.EventMQTTDeleted:
+			h.eventHub.broadcastEntityChange("mqtt", "remove", evt.Payload.(engine.ServiceEvent).Name)
+
+		// Valkey CRUD
+		case engine.EventValkeyCreated:
+			h.eventHub.broadcastEntityChange("valkey", "add", evt.Payload.(engine.ServiceEvent).Name)
+		case engine.EventValkeyUpdated:
+			h.eventHub.broadcastEntityChange("valkey", "update", evt.Payload.(engine.ServiceEvent).Name)
+		case engine.EventValkeyDeleted:
+			h.eventHub.broadcastEntityChange("valkey", "remove", evt.Payload.(engine.ServiceEvent).Name)
+
+		// Kafka CRUD
+		case engine.EventKafkaCreated:
+			h.eventHub.broadcastEntityChange("kafka", "add", evt.Payload.(engine.ServiceEvent).Name)
+		case engine.EventKafkaUpdated:
+			h.eventHub.broadcastEntityChange("kafka", "update", evt.Payload.(engine.ServiceEvent).Name)
+		case engine.EventKafkaDeleted:
+			h.eventHub.broadcastEntityChange("kafka", "remove", evt.Payload.(engine.ServiceEvent).Name)
+
+		// TagPack CRUD
+		case engine.EventTagPackCreated:
+			h.eventHub.broadcastEntityChange("tagpack", "add", evt.Payload.(engine.TagPackEvent).Name)
+		case engine.EventTagPackUpdated, engine.EventTagPackToggled:
+			h.eventHub.broadcastEntityChange("tagpack", "update", evt.Payload.(engine.TagPackEvent).Name)
+		case engine.EventTagPackDeleted:
+			h.eventHub.broadcastEntityChange("tagpack", "remove", evt.Payload.(engine.TagPackEvent).Name)
+		case engine.EventTagPackServiceToggled:
+			h.eventHub.broadcastEntityChange("tagpack", "update", evt.Payload.(engine.TagPackServiceEvent).Name)
+		case engine.EventTagPackMemberAdded, engine.EventTagPackMemberRemoved, engine.EventTagPackMemberIgnoreToggled:
+			h.eventHub.broadcastEntityChange("tagpack", "update", evt.Payload.(engine.TagPackMemberEvent).PackName)
+
+		// Trigger CRUD
+		case engine.EventTriggerCreated:
+			h.eventHub.broadcastEntityChange("trigger", "add", evt.Payload.(engine.TriggerEvent).Name)
+		case engine.EventTriggerUpdated, engine.EventTriggerStarted, engine.EventTriggerStopped, engine.EventTriggerTestFired:
+			h.eventHub.broadcastEntityChange("trigger", "update", evt.Payload.(engine.TriggerEvent).Name)
+		case engine.EventTriggerDeleted:
+			h.eventHub.broadcastEntityChange("trigger", "remove", evt.Payload.(engine.TriggerEvent).Name)
+		case engine.EventTriggerTagAdded, engine.EventTriggerTagRemoved:
+			h.eventHub.broadcastEntityChange("trigger", "update", evt.Payload.(engine.TriggerTagEvent).TriggerName)
+
+		// Push CRUD
+		case engine.EventPushCreated:
+			h.eventHub.broadcastEntityChange("push", "add", evt.Payload.(engine.PushEvent).Name)
+		case engine.EventPushUpdated:
+			h.eventHub.broadcastEntityChange("push", "update", evt.Payload.(engine.PushEvent).Name)
+		case engine.EventPushDeleted:
+			h.eventHub.broadcastEntityChange("push", "remove", evt.Payload.(engine.PushEvent).Name)
 		}
 	})
+	}
 
 	// Subscribe to debug log messages
 	if store := tui.GetDebugStore(); store != nil {

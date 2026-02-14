@@ -10,14 +10,8 @@ import (
 	"github.com/gdamore/tcell/v2/terminfo"
 	gossh "golang.org/x/crypto/ssh"
 	"warlink/config"
-	"warlink/kafka"
-	"warlink/mqtt"
-	"warlink/plcman"
-	"warlink/push"
-	"warlink/tagpack"
-	"warlink/trigger"
+	"warlink/engine"
 	"warlink/tui"
-	"warlink/valkey"
 )
 
 // SharedManagers holds all the shared backend managers for daemon mode.
@@ -26,14 +20,8 @@ import (
 type SharedManagers struct {
 	Config     *config.Config
 	ConfigPath string
-	PLCMan     *plcman.Manager
+	Engine     *engine.Engine
 	WebServer  tui.WebServer
-	MQTTMgr    *mqtt.Manager
-	ValkeyMgr  *valkey.Manager
-	KafkaMgr   *kafka.Manager
-	TriggerMgr *trigger.Manager
-	PushMgr    *push.Manager
-	PackMgr    *tagpack.Manager
 }
 
 // GetConfig returns the shared config.
@@ -42,29 +30,11 @@ func (m *SharedManagers) GetConfig() *config.Config { return m.Config }
 // GetConfigPath returns the config file path.
 func (m *SharedManagers) GetConfigPath() string { return m.ConfigPath }
 
-// GetPLCMan returns the shared PLC manager.
-func (m *SharedManagers) GetPLCMan() *plcman.Manager { return m.PLCMan }
+// GetEngine returns the shared engine.
+func (m *SharedManagers) GetEngine() *engine.Engine { return m.Engine }
 
 // GetWebServer returns the shared web server.
 func (m *SharedManagers) GetWebServer() tui.WebServer { return m.WebServer }
-
-// GetMQTTMgr returns the shared MQTT manager.
-func (m *SharedManagers) GetMQTTMgr() *mqtt.Manager { return m.MQTTMgr }
-
-// GetValkeyMgr returns the shared Valkey manager.
-func (m *SharedManagers) GetValkeyMgr() *valkey.Manager { return m.ValkeyMgr }
-
-// GetKafkaMgr returns the shared Kafka manager.
-func (m *SharedManagers) GetKafkaMgr() *kafka.Manager { return m.KafkaMgr }
-
-// GetTriggerMgr returns the shared trigger manager.
-func (m *SharedManagers) GetTriggerMgr() *trigger.Manager { return m.TriggerMgr }
-
-// GetPushMgr returns the shared push manager.
-func (m *SharedManagers) GetPushMgr() *push.Manager { return m.PushMgr }
-
-// GetPackMgr returns the shared TagPack manager.
-func (m *SharedManagers) GetPackMgr() *tagpack.Manager { return m.PackMgr }
 
 // Session represents an active SSH session.
 type Session struct {

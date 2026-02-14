@@ -9,6 +9,7 @@ import (
 	"github.com/rivo/tview"
 
 	"warlink/config"
+	"warlink/engine"
 	"warlink/kafka"
 )
 
@@ -302,49 +303,27 @@ func (t *KafkaTab) showAddDialog() {
 		}
 
 		saslMechs := []string{"", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}
-		autoCreatePtr := autoCreateTopics
-		cfg := config.KafkaConfig{
+		brokerList := strings.Split(brokers, ",")
+		for i := range brokerList {
+			brokerList[i] = strings.TrimSpace(brokerList[i])
+		}
+
+		if err := t.app.engine.CreateKafka(engine.KafkaCreateRequest{
 			Name:             name,
-			Enabled:          autoConnect,
-			Brokers:          strings.Split(brokers, ","),
+			Brokers:          brokerList,
 			UseTLS:           useTLS,
 			SASLMechanism:    saslMechs[saslIdx],
 			Username:         username,
 			Password:         password,
+			Selector:         selector,
+			PublishChanges:   true,
+			AutoCreateTopics: autoCreateTopics,
+			Enabled:          autoConnect,
 			RequiredAcks:     -1,
 			MaxRetries:       3,
-			PublishChanges:   true, // Always enabled, per-tag control available
-			Selector:         selector,
-			AutoCreateTopics: &autoCreatePtr,
-		}
-
-		// Trim whitespace from brokers
-		for i := range cfg.Brokers {
-			cfg.Brokers[i] = strings.TrimSpace(cfg.Brokers[i])
-		}
-
-		t.app.LockConfig()
-		t.app.config.AddKafka(cfg)
-		t.app.UnlockAndSaveConfig()
-
-		// Add to manager
-		t.app.kafkaMgr.AddCluster(&kafka.Config{
-			Name:             cfg.Name,
-			Enabled:          cfg.Enabled,
-			Brokers:          cfg.Brokers,
-			UseTLS:           cfg.UseTLS,
-			SASLMechanism:    kafka.SASLMechanism(cfg.SASLMechanism),
-			Username:         cfg.Username,
-			Password:         cfg.Password,
-			RequiredAcks:     cfg.RequiredAcks,
-			MaxRetries:       cfg.MaxRetries,
-			PublishChanges:   cfg.PublishChanges,
-			Selector:         cfg.Selector,
-			AutoCreateTopics: autoCreateTopics,
-		}, t.app.config.Namespace)
-
-		if autoConnect {
-			go t.app.kafkaMgr.Connect(name)
+		}); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
 
 		t.app.closeModal(pageName)
@@ -420,50 +399,26 @@ func (t *KafkaTab) showEditDialog() {
 		}
 
 		saslMechs := []string{"", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512"}
-		autoCreatePtr := autoCreateTopics
-		updated := config.KafkaConfig{
-			Name:             newName,
-			Enabled:          autoConnect,
-			Brokers:          strings.Split(brokers, ","),
+		brokerList := strings.Split(brokers, ",")
+		for i := range brokerList {
+			brokerList[i] = strings.TrimSpace(brokerList[i])
+		}
+
+		if err := t.app.engine.UpdateKafka(originalName, engine.KafkaUpdateRequest{
+			Brokers:          brokerList,
 			UseTLS:           useTLS,
 			SASLMechanism:    saslMechs[newSaslIdx],
 			Username:         username,
 			Password:         password,
+			Selector:         selector,
+			PublishChanges:   true,
+			AutoCreateTopics: autoCreateTopics,
+			Enabled:          autoConnect,
 			RequiredAcks:     cfg.RequiredAcks,
 			MaxRetries:       cfg.MaxRetries,
-			PublishChanges:   true, // Always enabled, per-tag control available
-			Selector:         selector,
-			AutoCreateTopics: &autoCreatePtr,
-		}
-
-		// Trim whitespace from brokers
-		for i := range updated.Brokers {
-			updated.Brokers[i] = strings.TrimSpace(updated.Brokers[i])
-		}
-
-		t.app.LockConfig()
-		t.app.config.UpdateKafka(originalName, updated)
-		t.app.UnlockAndSaveConfig()
-
-		// Update manager
-		t.app.kafkaMgr.RemoveCluster(originalName)
-		t.app.kafkaMgr.AddCluster(&kafka.Config{
-			Name:             updated.Name,
-			Enabled:          updated.Enabled,
-			Brokers:          updated.Brokers,
-			UseTLS:           updated.UseTLS,
-			SASLMechanism:    kafka.SASLMechanism(updated.SASLMechanism),
-			Username:         updated.Username,
-			Password:         updated.Password,
-			RequiredAcks:     updated.RequiredAcks,
-			MaxRetries:       updated.MaxRetries,
-			PublishChanges:   updated.PublishChanges,
-			Selector:         updated.Selector,
-			AutoCreateTopics: autoCreateTopics,
-		}, t.app.config.Namespace)
-
-		if autoConnect {
-			go t.app.kafkaMgr.Connect(newName)
+		}); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
 
 		t.app.closeModal(pageName)
@@ -487,11 +442,7 @@ func (t *KafkaTab) removeSelected() {
 	}
 
 	t.app.showConfirm("Remove Kafka Cluster", fmt.Sprintf("Remove %s?", name), func() {
-		t.app.kafkaMgr.Disconnect(name)
-		t.app.kafkaMgr.RemoveCluster(name)
-		t.app.LockConfig()
-		t.app.config.RemoveKafka(name)
-		t.app.UnlockAndSaveConfig()
+		t.app.engine.DeleteKafka(name)
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Removed Kafka cluster: %s", name))
 	})
@@ -503,29 +454,16 @@ func (t *KafkaTab) connectSelected() {
 		return
 	}
 
-	cfg := t.app.config.FindKafka(name)
-	if cfg == nil {
-		return
-	}
-
-	t.app.LockConfig()
-	cfg.Enabled = true
-	t.app.UnlockAndSaveConfig()
-
 	t.app.setStatus(fmt.Sprintf("Connecting to %s...", name))
 	go func() {
-		err := t.app.kafkaMgr.Connect(name)
+		err := t.app.engine.ConnectKafka(name)
 		t.app.QueueUpdateDraw(func() {
 			if err != nil {
 				t.app.setStatus(fmt.Sprintf("Kafka connection failed: %v", err))
 				DebugLogError("Kafka %s connection failed: %v", name, err)
 			} else {
 				t.app.setStatus(fmt.Sprintf("Connected to Kafka: %s", name))
-				DebugLog("Kafka %s connected", name)
-				// Force publish all values if PublishChanges is enabled
-				if cfg.PublishChanges {
-					go t.app.ForcePublishAllValuesToKafka()
-				}
+				go t.app.engine.ForcePublishAllToKafka()
 			}
 			t.Refresh()
 		})
@@ -538,16 +476,7 @@ func (t *KafkaTab) disconnectSelected() {
 		return
 	}
 
-	t.app.LockConfig()
-	cfg := t.app.config.FindKafka(name)
-	if cfg != nil {
-		cfg.Enabled = false
-		t.app.UnlockAndSaveConfig()
-	} else {
-		t.app.UnlockConfig()
-	}
-
-	t.app.kafkaMgr.Disconnect(name)
+	t.app.engine.DisconnectKafka(name)
 	t.Refresh()
 	t.app.setStatus(fmt.Sprintf("Disconnected from Kafka: %s", name))
 }

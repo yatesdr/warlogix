@@ -6,7 +6,7 @@ Daemon mode runs WarLink as a background service with SSH access, allowing remot
 
 ```bash
 # Start daemon with password authentication
-./warlink -d --ssh-password "your-password"
+./warlink -d --ssh-pass "your-password"
 
 # Connect from any SSH client
 ssh -p 2222 localhost
@@ -16,11 +16,15 @@ ssh -p 2222 localhost
 
 | Flag | Description |
 |------|-------------|
-| `-d` | Enable daemon mode |
-| `-p <port>` | SSH port (default: 2222) |
-| `--ssh-password <pw>` | Password for SSH authentication |
+| `-d` / `--no-tui` | Enable headless mode (no local TUI) |
+| `--ssh-port <port>` | SSH listen port (default: 2222) |
+| `--ssh-pass <pw>` | Password for SSH authentication |
 | `--ssh-keys <path>` | Path to authorized_keys file or directory |
 | `--namespace <name>` | Set namespace (required if not already configured) |
+| `--admin-user <user>` | Create/update admin user for web UI (saved to config) |
+| `--admin-pass <pass>` | Password for admin user (saved to config) |
+| `-p <port>` | HTTP listen port (overrides config) |
+| `--host <addr>` | HTTP bind address (overrides config) |
 
 ## Authentication
 
@@ -29,7 +33,7 @@ Daemon mode requires at least one authentication method. You can use password au
 ### Password Authentication
 
 ```bash
-./warlink -d --ssh-password "secret123"
+./warlink -d --ssh-pass "secret123"
 ```
 
 Any SSH client can connect using this password.
@@ -96,7 +100,7 @@ ssh -p 2222 -i ~/.ssh/id_ed25519 localhost
 ### Combined Authentication
 
 ```bash
-./warlink -d --ssh-password "backup" --ssh-keys ~/.ssh/authorized_keys
+./warlink -d --ssh-pass "backup" --ssh-keys ~/.ssh/authorized_keys
 ```
 
 Clients can authenticate with either method.
@@ -107,13 +111,13 @@ Daemon mode requires a namespace to be configured. The namespace identifies this
 
 ```bash
 # Set namespace when starting daemon
-./warlink -d --namespace "factory1" --ssh-password "secret"
+./warlink -d --namespace "factory1" --ssh-pass "secret"
 
 # Or configure namespace first in local mode, then start daemon
 ./warlink --namespace "factory1"
 # (configure PLCs, brokers, etc.)
 # Then start daemon mode
-./warlink -d --ssh-password "secret"
+./warlink -d --ssh-pass "secret"
 ```
 
 ## Connecting
@@ -188,7 +192,7 @@ Shutdown sequence:
 ### Using nohup
 
 ```bash
-nohup ./warlink -d --ssh-password "secret" > /var/log/warlink.log 2>&1 &
+nohup ./warlink -d --ssh-pass "secret" > /var/log/warlink.log 2>&1 &
 ```
 
 ### Using systemd (Ubuntu / Debian / Rocky Linux)
@@ -231,10 +235,10 @@ Group=warlink
 WorkingDirectory=/opt/warlink
 
 # Basic setup with password auth
-ExecStart=/usr/local/bin/warlink -d -p 2222 --ssh-password "changeme" --config /opt/warlink/.warlink/config.yaml
+ExecStart=/usr/local/bin/warlink -d --ssh-port 2222 --ssh-pass "changeme" --config /opt/warlink/.warlink/config.yaml
 
 # Or use key-based auth (recommended)
-#ExecStart=/usr/local/bin/warlink -d -p 2222 --ssh-keys /opt/warlink/.warlink/authorized_keys --config /opt/warlink/.warlink/config.yaml
+#ExecStart=/usr/local/bin/warlink -d --ssh-port 2222 --ssh-keys /opt/warlink/.warlink/authorized_keys --config /opt/warlink/.warlink/config.yaml
 
 # Restart policy
 Restart=on-failure
@@ -376,7 +380,7 @@ name="warlink"
 description="WarLink PLC Gateway"
 
 command="/usr/local/bin/warlink"
-command_args="-d -p 2222 --ssh-keys /opt/warlink/.warlink/authorized_keys --config /opt/warlink/.warlink/config.yaml"
+command_args="-d --ssh-port 2222 --ssh-keys /opt/warlink/.warlink/authorized_keys --config /opt/warlink/.warlink/config.yaml"
 command_user="warlink:warlink"
 command_background="yes"
 pidfile="/run/${RC_SVCNAME}.pid"
@@ -421,7 +425,7 @@ echo "ssh-ed25519 AAAA... your-email@example.com" >> /opt/warlink/.warlink/autho
 For password auth, modify the init script's `command_args`:
 
 ```bash
-command_args="-d -p 2222 --ssh-password 'your-password' --config /opt/warlink/.warlink/config.yaml"
+command_args="-d --ssh-port 2222 --ssh-pass 'your-password' --config /opt/warlink/.warlink/config.yaml"
 ```
 
 #### 6. Initialize configuration
@@ -498,7 +502,7 @@ WORKDIR /opt/warlink
 EXPOSE 2222 8080
 
 ENTRYPOINT ["/usr/local/bin/warlink"]
-CMD ["-d", "-p", "2222", "--ssh-password", "changeme"]
+CMD ["-d", "--ssh-port", "2222", "--ssh-pass", "changeme"]
 ```
 
 Build with a static binary:
@@ -514,7 +518,7 @@ docker build -t warlink:alpine .
 FROM debian:bookworm-slim
 COPY warlink /usr/local/bin/
 EXPOSE 2222 8080
-CMD ["warlink", "-d", "--ssh-password", "secret"]
+CMD ["warlink", "-d", "--ssh-pass", "secret"]
 ```
 
 ```bash
@@ -527,13 +531,13 @@ Daemon mode supports the same logging options as local mode:
 
 ```bash
 # Log to file
-./warlink -d --ssh-password "secret" --log /var/log/warlink.log
+./warlink -d --ssh-pass "secret" --log /var/log/warlink.log
 
 # Enable protocol debugging
-./warlink -d --ssh-password "secret" --log-debug
+./warlink -d --ssh-pass "secret" --log-debug
 
 # Debug specific protocols
-./warlink -d --ssh-password "secret" --log-debug=mqtt,kafka
+./warlink -d --ssh-pass "secret" --log-debug=mqtt,kafka
 ```
 
 **Warning:** Debug logging (`--log-debug`) generates extremely verbose output including protocol-level hex dumps. Log files can grow to gigabytes within hours on active systems. Use debug logging only for troubleshooting specific issues, not in typical deployments. Always specify a protocol filter (e.g., `--log-debug=s7`) rather than logging all protocols when possible.
@@ -545,7 +549,7 @@ Daemon mode supports the same logging options as local mode:
 WarLink uses a single configuration file, by default at `~/.warlink/config.yaml`. Use `--config` to specify an alternate location:
 
 ```bash
-./warlink -d --config /etc/warlink/config.yaml --ssh-password "secret"
+./warlink -d --config /etc/warlink/config.yaml --ssh-pass "secret"
 ```
 
 ### When Configuration is Loaded
@@ -577,7 +581,7 @@ sudo systemctl restart warlink
 
 # Or stop and start manually
 kill <pid>
-./warlink -d --ssh-password "secret"
+./warlink -d --ssh-pass "secret"
 ```
 
 ### Configuration Deployment Workflow
@@ -679,7 +683,7 @@ After=network.target
 Type=simple
 User=warlink
 WorkingDirectory=/opt/warlink
-ExecStart=/usr/local/bin/warlink -d -p {{ warlink_ssh_port }} --ssh-keys /opt/warlink/.warlink/authorized_keys --config /opt/warlink/.warlink/config.yaml
+ExecStart=/usr/local/bin/warlink -d --ssh-port {{ warlink_ssh_port }} --ssh-keys /opt/warlink/.warlink/authorized_keys --config /opt/warlink/.warlink/config.yaml
 Restart=on-failure
 RestartSec=10
 
@@ -773,11 +777,12 @@ cp ~/.warlink/config.yaml.bak ~/.warlink/config.yaml
 In daemon mode, WarLink automatically:
 
 1. Connects to PLCs marked as auto-connect
-2. Starts the REST API if enabled
+2. Starts the web server (REST API and browser UI) if enabled
 3. Connects to MQTT brokers marked as auto-connect
 4. Connects to Valkey servers marked as auto-connect
 5. Connects to Kafka clusters marked as auto-connect
 6. Arms triggers marked as enabled
+7. Arms push targets marked as enabled
 
 This means a properly configured WarLink can start publishing data immediately on boot without any manual intervention.
 

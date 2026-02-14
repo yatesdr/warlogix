@@ -24,12 +24,12 @@ This document describes WarLink's internal architecture and data flow.
 │  │                    Publish Engine                                    │    │
 │  │       ┌─────────────────┼─────────────────┐                         │    │
 │  │       │                 │                 │                         │    │
-│  │  ┌────▼────┐      ┌─────▼─────┐     ┌────▼────┐                    │    │
-│  │  │ TagPack │      │  Trigger  │     │  REST   │                    │    │
-│  │  │ Manager │      │  Manager  │     │  API    │                    │    │
-│  │  └────┬────┘      └─────┬─────┘     └────┬────┘                    │    │
-│  │       │                 │                │                          │    │
-│  └───────┼─────────────────┼────────────────┼──────────────────────────┘    │
+│  │  ┌────▼────┐ ┌─────▼─────┐ ┌────▼────┐ ┌────▼────┐                │    │
+│  │  │ TagPack │ │  Trigger  │ │  Push   │ │  REST   │                │    │
+│  │  │ Manager │ │  Manager  │ │ Manager │ │  API    │                │    │
+│  │  └────┬────┘ └─────┬─────┘ └────┬────┘ └────┬────┘                │    │
+│  │       │            │            │           │                      │    │
+│  └───────┼────────────┼────────────┼───────────┼─────────────────────┘    │
 │          │                 │                │                                │
 │  ┌───────┼─────────────────┼────────────────┼──────────────────────────┐    │
 │  │       │           Service Publishers     │                          │    │
@@ -352,6 +352,10 @@ Main Goroutine
     │   ├── Trigger2 Monitor Loop
     │   └── Trigger3 Monitor Loop
     │
+    ├── Push Manager
+    │   ├── Push1 Monitor Loop (goroutine per push)
+    │   └── Push2 Monitor Loop
+    │
     ├── MQTT Publishers
     │   ├── Broker1 Client (goroutine per broker)
     │   └── Broker2 Client
@@ -364,7 +368,7 @@ Main Goroutine
     │   ├── Server1 Client
     │   └── Server1 Writeback Loop (if enabled)
     │
-    ├── REST API Server (goroutine pool)
+    ├── Web Server (REST API + Browser UI + SSE)
     │
     └── Health Publisher (periodic timer)
 ```

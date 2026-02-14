@@ -8,7 +8,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlink/config"
+	"warlink/engine"
 )
 
 // ValkeyTab handles the Valkey configuration tab.
@@ -211,43 +211,25 @@ func (t *ValkeyTab) showAddDialog() {
 		db, _ := strconv.Atoi(dbStr)
 		ttl, _ := strconv.Atoi(ttlStr)
 
-		cfg := config.ValkeyConfig{
+		if err := t.app.engine.CreateValkey(engine.ValkeyCreateRequest{
 			Name:            name,
-			Enabled:         autoConnect,
 			Address:         address,
 			Password:        password,
 			Database:        db,
-			Selector:         selector,
-			UseTLS:          useTLS,
+			Selector:        selector,
 			KeyTTL:          secondsToDuration(ttl),
+			UseTLS:          useTLS,
 			PublishChanges:  publishChanges,
 			EnableWriteback: enableWriteback,
+			Enabled:         autoConnect,
+		}); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
-
-		t.app.LockConfig()
-		t.app.config.AddValkey(cfg)
-		t.app.UnlockAndSaveConfig()
-
-		// Add to manager
-		pub := t.app.valkeyMgr.Add(&t.app.config.Valkey[len(t.app.config.Valkey)-1], t.app.config.Namespace)
 
 		t.app.closeModal(pageName)
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Added Valkey server: %s", name))
-
-		if autoConnect {
-			go func() {
-				err := pub.Start()
-				t.app.QueueUpdateDraw(func() {
-					if err != nil {
-						t.app.setStatus(fmt.Sprintf("Valkey %s connect failed: %v", name, err))
-					} else {
-						t.app.setStatus(fmt.Sprintf("Valkey connected to %s", pub.Address()))
-					}
-					t.Refresh()
-				})
-			}()
-		}
 	})
 
 	form.AddButton("Cancel", func() {
@@ -311,49 +293,34 @@ func (t *ValkeyTab) showEditDialog() {
 		db, _ := strconv.Atoi(dbStr)
 		ttl, _ := strconv.Atoi(ttlStr)
 
-		updated := config.ValkeyConfig{
-			Name:            name,
-			Enabled:         autoConnect,
-			Address:         address,
-			Password:        password,
-			Database:        db,
-			Selector:         selector,
-			UseTLS:          useTLS,
-			KeyTTL:          secondsToDuration(ttl),
-			PublishChanges:  publishChanges,
-			EnableWriteback: enableWriteback,
-		}
-
-		t.app.LockConfig()
-		t.app.config.UpdateValkey(originalName, updated)
-		t.app.UnlockAndSaveConfig()
-
 		// Close dialog immediately
 		t.app.closeModal(pageName)
 		t.app.setStatus(fmt.Sprintf("Updating Valkey server: %s...", name))
 		DebugLogValkey("Valkey server %s updated (address: %s, selector: %s)", name, address, selector)
 
-		// Update manager in background to avoid blocking UI
+		// Update in background to avoid blocking UI
 		go func() {
-			t.app.valkeyMgr.Remove(originalName)
-			newPub := t.app.valkeyMgr.Add(t.app.config.FindValkey(name), t.app.config.Namespace)
-
-			if autoConnect {
-				err := newPub.Start()
+			if err := t.app.engine.UpdateValkey(originalName, engine.ValkeyUpdateRequest{
+				Address:         address,
+				Password:        password,
+				Database:        db,
+				Selector:        selector,
+				KeyTTL:          secondsToDuration(ttl),
+				UseTLS:          useTLS,
+				PublishChanges:  publishChanges,
+				EnableWriteback: enableWriteback,
+				Enabled:         autoConnect,
+			}); err != nil {
 				t.app.QueueUpdateDraw(func() {
-					if err != nil {
-						t.app.setStatus(fmt.Sprintf("Valkey %s reconnect failed: %v", name, err))
-					} else {
-						t.app.setStatus(fmt.Sprintf("Valkey reconnected to %s", newPub.Address()))
-					}
-					t.Refresh()
+					t.app.showError("Error", err.Error())
 				})
-			} else {
-				t.app.QueueUpdateDraw(func() {
-					t.Refresh()
-					t.app.setStatus(fmt.Sprintf("Updated Valkey server: %s", name))
-				})
+				return
 			}
+
+			t.app.QueueUpdateDraw(func() {
+				t.Refresh()
+				t.app.setStatus(fmt.Sprintf("Updated Valkey server: %s", name))
+			})
 		}()
 	})
 
@@ -381,14 +348,9 @@ func (t *ValkeyTab) removeSelected() {
 	name := pub.Config().Name
 
 	t.app.showConfirm("Remove Valkey Server", fmt.Sprintf("Remove %s?", name), func() {
-		// Run removal in background to avoid blocking UI (Stop() may block)
 		go func() {
-			t.app.valkeyMgr.Remove(name)
-
+			t.app.engine.DeleteValkey(name)
 			t.app.QueueUpdateDraw(func() {
-				t.app.LockConfig()
-				t.app.config.RemoveValkey(name)
-				t.app.UnlockAndSaveConfig()
 				t.Refresh()
 				t.app.setStatus(fmt.Sprintf("Removed Valkey server: %s", name))
 			})
@@ -418,18 +380,11 @@ func (t *ValkeyTab) connectSelected() {
 
 	go func() {
 		pubName := pub.Config().Name
-		err := pub.Start()
+		err := t.app.engine.StartValkey(pubName)
 		t.app.QueueUpdateDraw(func() {
 			if err != nil {
 				t.app.setStatus(fmt.Sprintf("Valkey connect failed: %v", err))
 			} else {
-				t.app.LockConfig()
-				if cfg := t.app.config.FindValkey(pubName); cfg != nil {
-					cfg.Enabled = true
-					t.app.UnlockAndSaveConfig()
-				} else {
-					t.app.UnlockConfig()
-				}
 				t.app.setStatus(fmt.Sprintf("Valkey connected to %s", pub.Address()))
 			}
 			t.Refresh()
@@ -457,18 +412,9 @@ func (t *ValkeyTab) disconnectSelected() {
 	pubName := pub.Config().Name
 	t.app.setStatus(fmt.Sprintf("Disconnecting from %s...", pubName))
 
-	// Run disconnect in background to avoid blocking UI
 	go func() {
-		pub.Stop()
-
+		t.app.engine.StopValkey(pubName)
 		t.app.QueueUpdateDraw(func() {
-			t.app.LockConfig()
-			if cfg := t.app.config.FindValkey(pubName); cfg != nil {
-				cfg.Enabled = false
-				t.app.UnlockAndSaveConfig()
-			} else {
-				t.app.UnlockConfig()
-			}
 			t.Refresh()
 			t.app.setStatus(fmt.Sprintf("Valkey disconnected from %s", pubName))
 		})

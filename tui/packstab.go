@@ -8,6 +8,7 @@ import (
 	"github.com/rivo/tview"
 
 	"warlink/config"
+	"warlink/engine"
 	"warlink/kafka"
 )
 
@@ -433,27 +434,16 @@ func (t *PacksTab) showCreateDialog() {
 			return
 		}
 
-		if t.app.config.FindTagPack(name) != nil {
-			t.app.showError("Error", "A pack with this name already exists")
-			return
-		}
-
-		cfg := config.TagPackConfig{
+		if err := t.app.engine.CreateTagPack(engine.TagPackCreateRequest{
 			Name:          name,
 			Enabled:       true,
 			MQTTEnabled:   mqttEnabled,
 			KafkaEnabled:  kafkaEnabled,
 			ValkeyEnabled: valkeyEnabled,
 			Members:       []config.TagPackMember{},
-		}
-
-		t.app.LockConfig()
-		t.app.config.AddTagPack(cfg)
-		t.app.UnlockAndSaveConfig()
-
-		// Reload pack manager
-		if t.app.packMgr != nil {
-			t.app.packMgr.Reload()
+		}); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
 
 		t.app.closeModal(pageName)
@@ -489,25 +479,13 @@ func (t *PacksTab) showAddTagDialog() {
 	}
 
 	t.app.ShowTagPicker("Add Tag to "+name, excluded, func(plc, tag string) {
-		// Check for duplicate (should be filtered by picker, but double-check)
-		for _, existing := range cfg.Members {
-			if existing.PLC == plc && existing.Tag == tag {
-				t.app.setStatus("Tag already in pack")
-				return
-			}
-		}
-
-		// Add member (changes trigger publish by default, IgnoreChanges=false)
-		t.app.LockConfig()
-		cfg.Members = append(cfg.Members, config.TagPackMember{
+		if err := t.app.engine.AddTagPackMember(name, config.TagPackMember{
 			PLC:           plc,
 			Tag:           tag,
 			IgnoreChanges: false,
-		})
-		t.app.UnlockAndSaveConfig()
-
-		if t.app.packMgr != nil {
-			t.app.packMgr.Reload()
+		}); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
 
 		t.updateMemberList()
@@ -537,13 +515,9 @@ func (t *PacksTab) removeSelectedMember() {
 	member := cfg.Members[idx]
 
 	t.app.showConfirm("Remove Tag", fmt.Sprintf("Remove %s:%s from pack?", member.PLC, member.Tag), func() {
-		// Remove member
-		t.app.LockConfig()
-		cfg.Members = append(cfg.Members[:idx], cfg.Members[idx+1:]...)
-		t.app.UnlockAndSaveConfig()
-
-		if t.app.packMgr != nil {
-			t.app.packMgr.Reload()
+		if err := t.app.engine.RemoveTagPackMember(name, idx); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
 
 		t.updateMemberList()
@@ -569,16 +543,14 @@ func (t *PacksTab) toggleMemberIgnore() {
 		return
 	}
 
-	t.app.LockConfig()
-	cfg.Members[idx].IgnoreChanges = !cfg.Members[idx].IgnoreChanges
-	t.app.UnlockAndSaveConfig()
-
-	if t.app.packMgr != nil {
-		t.app.packMgr.Reload()
+	ignoreChanges, err := t.app.engine.ToggleTagPackMemberIgnore(name, idx)
+	if err != nil {
+		t.app.showError("Error", err.Error())
+		return
 	}
 
 	t.updateMemberList()
-	if cfg.Members[idx].IgnoreChanges {
+	if ignoreChanges {
 		t.app.setStatus(fmt.Sprintf("Changes to %s:%s will be ignored", cfg.Members[idx].PLC, cfg.Members[idx].Tag))
 	} else {
 		t.app.setStatus(fmt.Sprintf("Changes to %s:%s will trigger publish", cfg.Members[idx].PLC, cfg.Members[idx].Tag))
@@ -592,14 +564,10 @@ func (t *PacksTab) removeSelected() {
 	}
 
 	t.app.showConfirm("Remove Pack", fmt.Sprintf("Remove pack '%s'?", name), func() {
-		t.app.LockConfig()
-		t.app.config.RemoveTagPack(name)
-		t.app.UnlockAndSaveConfig()
-
-		if t.app.packMgr != nil {
-			t.app.packMgr.Reload()
+		if err := t.app.engine.DeleteTagPack(name); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
-
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Removed pack: %s", name))
 	})
@@ -616,23 +584,15 @@ func (t *PacksTab) toggleEnabled() {
 		return
 	}
 
-	wasEnabled := cfg.Enabled
-	t.app.LockConfig()
-	cfg.Enabled = !cfg.Enabled
-	t.app.UnlockAndSaveConfig()
-
-	if t.app.packMgr != nil {
-		t.app.packMgr.Reload()
-
-		// If pack was just enabled, publish immediately for testing/validation
-		if cfg.Enabled && !wasEnabled {
-			t.app.packMgr.PublishPackImmediate(name)
-		}
+	enabled, err := t.app.engine.ToggleTagPack(name)
+	if err != nil {
+		t.app.showError("Error", err.Error())
+		return
 	}
 
 	t.Refresh()
 	status := "disabled"
-	if cfg.Enabled {
+	if enabled {
 		status = "enabled (published)"
 	}
 	t.app.setStatus(fmt.Sprintf("Pack %s %s", name, status))
@@ -671,21 +631,15 @@ func (t *PacksTab) showEditDialog() {
 			return
 		}
 
-		if newName != name && t.app.config.FindTagPack(newName) != nil {
-			t.app.showError("Error", "A pack with this name already exists")
+		if err := t.app.engine.UpdateTagPack(name, engine.TagPackUpdateRequest{
+			Enabled:       cfg.Enabled,
+			MQTTEnabled:   mqttEnabled,
+			KafkaEnabled:  kafkaEnabled,
+			ValkeyEnabled: valkeyEnabled,
+			Members:       cfg.Members,
+		}); err != nil {
+			t.app.showError("Error", err.Error())
 			return
-		}
-
-		t.app.LockConfig()
-		cfg.Name = newName
-		cfg.MQTTEnabled = mqttEnabled
-		cfg.KafkaEnabled = kafkaEnabled
-		cfg.ValkeyEnabled = valkeyEnabled
-
-		t.app.UnlockAndSaveConfig()
-
-		if t.app.packMgr != nil {
-			t.app.packMgr.Reload()
 		}
 
 		t.app.closeModal(pageName)

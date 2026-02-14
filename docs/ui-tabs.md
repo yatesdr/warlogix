@@ -10,6 +10,7 @@ WarLink uses a tabbed terminal interface (TUI) for managing PLCs, tags, and data
 | `B` | Jump to Repu**B**lisher tab |
 | `T` | Jump to **T**agPacks tab |
 | `G` | Jump to Tri**G**gers tab |
+| `U` | Jump to P**U**sh tab |
 | `E` | Jump to R**E**ST tab |
 | `M` | Jump to **M**QTT tab |
 | `V` | Jump to **V**alkey tab |
@@ -120,7 +121,9 @@ The Republisher tab displays available tags from connected PLCs. Use it to selec
 
 For discovery-based PLCs (Logix, Beckhoff, Omron EIP):
 - **Controller** - Controller-scoped tags
-- **[Program Name]** - Program-scoped tags
+- **[Program Name]** - Program-scoped tags (Logix only)
+
+> **Note:** Omron EIP discovers tag names and types automatically, but UDT/structure members are not unpacked — structures appear as `STRUCT_XX` types. Logix and Beckhoff fully support UDT member discovery and expansion.
 
 For manual PLCs (S7, Omron FINS):
 - **Manual Tags** - Configured tags
@@ -349,6 +352,69 @@ Press `T` to manually test fire a trigger. This:
 - Publishes to configured MQTT brokers and Kafka clusters
 - Does **not** enter cooldown state (trigger remains armed)
 - Works even when the trigger is disabled
+
+---
+
+## Push Tab
+
+The Push tab configures HTTP webhook pushes that fire when PLC tag conditions are met. Push targets monitor one or more PLC tag conditions and send an HTTP request (GET, POST, PUT, or PATCH) to an external URL when a rising edge is detected. This is useful for sending notifications, triggering external workflows, or pushing data to third-party APIs.
+
+### Display Columns
+
+| Column | Description |
+|--------|-------------|
+| Status | Green if armed, yellow if firing, orange if cooldown, red if error, gray if disabled |
+| Name | Push identifier |
+| Conditions | Number of conditions monitored |
+| URL | Target HTTP endpoint |
+| Method | HTTP method (GET, POST, PUT, PATCH) |
+| Sends | Total fire count since startup |
+| Status | Current state text |
+
+### Keyboard Shortcuts
+
+**Push list (left pane):**
+
+| Key | Action |
+|-----|--------|
+| `a` | **Add** new push |
+| `x` | **Remove** selected push (with confirmation) |
+| `e` | **Edit** selected push |
+| `Space` | Toggle push enabled/disabled |
+| `F` | **Test fire** push manually |
+| `Tab` | Switch focus to conditions list |
+
+### Creating a Push
+
+1. Press `a` to open the Add dialog
+2. Configure:
+   - **Name** - Unique identifier
+   - **URL** - Target HTTP endpoint
+   - **Method** - HTTP method (POST, GET, PUT, PATCH)
+   - **Content-Type** - Request content type (default: application/json)
+   - **Body** - Request body template with `#PLCName.tagName` references for live values
+   - **Auth** - Authentication: None, Bearer, Basic, JWT, or Custom Header
+   - **Cooldown** - Minimum interval between sends
+   - **Conditions** - One or more PLC tag conditions (OR logic: any condition fires the push)
+
+### Body Templates
+
+The body field supports `#PLCName.tagName` references that are replaced with live tag values when the push fires:
+
+```json
+{"temperature": #MainPLC.Temperature, "counter": #MainPLC.Counter}
+```
+
+### Push States
+
+| State | Description |
+|-------|-------------|
+| Disabled | Push is not running |
+| Armed | Monitoring conditions for rising edge |
+| Firing | Sending HTTP request |
+| Waiting Clear | Sent, waiting for conditions to go false |
+| Cooldown | Conditions cleared, waiting minimum interval |
+| Error | HTTP request failed (transitions to Waiting Clear) |
 
 ---
 

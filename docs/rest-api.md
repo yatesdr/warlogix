@@ -6,12 +6,24 @@ The REST API exposes PLC data over HTTP for integration with other systems and d
 
 ## Configuration
 
+The REST API is part of the consolidated web server. Configure it under the `web:` key:
+
 ```yaml
-rest:
+web:
   enabled: true
   port: 8080
   host: 0.0.0.0    # Bind to all interfaces
+  api:
+    enabled: true   # Enable REST API endpoints
 ```
+
+The API can also be enabled from the command line:
+
+```bash
+./warlink --admin-user admin --admin-pass yourpassword
+```
+
+Use `--no-api` to disable the REST API while keeping the web UI, or `--no-webui` to disable the browser UI while keeping the API.
 
 ## Endpoints
 

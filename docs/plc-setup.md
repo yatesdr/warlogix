@@ -10,7 +10,7 @@ This guide covers PLC-specific configuration, capabilities, and troubleshooting 
 | **Siemens** | S7-300/400/1200/1500 | Manual | S7comm | Yes (PDU) |
 | **Beckhoff** | TwinCAT 2/3 | Automatic | ADS | Yes (SumUp) |
 | **Omron FINS** | CS1, CJ1/2, CP1, CV | Manual | FINS/TCP, FINS/UDP | Yes (Multi-read) |
-| **Omron EIP** | NJ, NX1/102/502/702 | Automatic | EtherNet/IP (CIP) | Yes (MSP) |
+| **Omron EIP** | NJ, NX1/102/502/702 | Automatic (no UDT members) | EtherNet/IP (CIP) | Yes (MSP) |
 
 ---
 
@@ -341,7 +341,7 @@ WarLink implements several FINS optimizations:
 
 ### Overview
 
-Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Protocol), providing symbolic tag addressing and automatic tag discovery—similar to Allen-Bradley Logix PLCs. WarLink implements high-performance batching and connected messaging for optimal throughput.
+Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Protocol), providing symbolic tag addressing and automatic tag discovery. WarLink discovers tag names, data types, and array dimensions automatically, but does not currently unpack UDT/structure members — structures appear as opaque `STRUCT_XX` types. High-performance batching and connected messaging are implemented for optimal throughput.
 
 **Supported PLC Series:**
 | Series | Models | Features |
@@ -382,7 +382,7 @@ Omron NJ and NX series PLCs support EtherNet/IP with CIP (Common Industrial Prot
 | Feature | FINS (CS/CJ/CP) | EIP (NJ/NX) |
 |---------|-----------------|-------------|
 | **Tag Addressing** | Memory addresses (DM100, CIO50) | Symbolic names (ProductCount) |
-| **Tag Discovery** | Manual configuration | Automatic discovery |
+| **Tag Discovery** | Manual configuration | Automatic (tags and types, but not UDT members) |
 | **Data Types** | Explicit `data_type` required | Embedded in tag metadata |
 | **Port** | TCP/UDP 9600 | TCP 44818 |
 | **Byte Order** | Big-endian | Little-endian |

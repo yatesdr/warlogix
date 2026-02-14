@@ -152,6 +152,23 @@ triggers:
       line: Line1
       station: Assembly
 
+pushes:
+  - name: AlarmWebhook
+    enabled: true
+    conditions:
+      - plc: MainPLC
+        tag: Program:MainProgram.AlarmActive
+        operator: "=="
+        value: true
+    url: https://api.example.com/alarm
+    method: POST
+    content_type: application/json
+    body: '{"alarm": true, "temp": #MainPLC.Temperature}'
+    auth:
+      type: bearer
+      token: "your-api-token"
+    cooldown_min: 15m
+
 poll_rate: 1s                         # Global default poll rate
 
 ui:
@@ -199,7 +216,7 @@ ui:
 
 **Notes:**
 - Use `protocol: eip` for NJ/NX series PLCs for best performance
-- EIP uses symbolic tag names and supports automatic tag discovery
+- EIP uses symbolic tag names and supports automatic tag discovery (tags and types are discovered, but UDT/structure members are not unpacked)
 - FINS fields (`fins_port`, `fins_node`, etc.) are ignored when using EIP
 - EIP uses TCP port 44818 (standard EtherNet/IP port)
 
@@ -320,11 +337,10 @@ The `web:` key configures the built-in web server that hosts both the REST API a
 | `password_hash` | string | Yes | Bcrypt-hashed password |
 | `role` | string | Yes | `admin` or `viewer` |
 
-Users are typically managed through the web UI itself or via the `-web-admin-user` and `-web-admin-pass` command-line flags. You do not need to generate bcrypt hashes manually.
+Users are typically managed through the web UI itself or via the `--admin-user` and `--admin-pass` command-line flags. You do not need to generate bcrypt hashes manually.
 
 See the [Web UI Guide](web-ui.md) for details on using the browser interface.
 
-> **Backward compatibility:** The old `rest:` configuration key is still recognized. If `rest:` is present and `web:` is not enabled, WarLink will start a legacy REST-only server using the `rest:` settings. Migrate to `web:` when convenient — it provides the same REST API plus the browser UI.
 
 ## MQTT Configuration
 
@@ -462,6 +478,75 @@ triggers:
       line: Line1
       station: Assembly
 ```
+
+## Push Configuration
+
+Push targets monitor PLC tag conditions and send HTTP requests to external endpoints when conditions are met.
+
+```yaml
+pushes:
+  - name: NotifyAPI
+    enabled: true
+    conditions:
+      - plc: MainPLC
+        tag: Program:MainProgram.AlarmActive
+        operator: "=="
+        value: true
+    url: https://api.example.com/webhook
+    method: POST
+    content_type: application/json
+    body: '{"alarm": true, "temp": #MainPLC.Temperature}'
+    auth:
+      type: bearer
+      token: "your-api-token"
+    cooldown_min: 15m
+    timeout: 30s
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique identifier |
+| `enabled` | bool | No | Enable this push (default: false) |
+| `conditions` | list | Yes | One or more conditions (OR logic — any condition triggers the push) |
+| `url` | string | Yes | Target HTTP endpoint |
+| `method` | string | No | HTTP method: GET, POST, PUT, PATCH (default: POST) |
+| `content_type` | string | No | Request Content-Type (default: application/json) |
+| `headers` | map | No | Custom HTTP headers |
+| `body` | string | No | Request body template with `#PLCName.tagName` references |
+| `auth` | object | No | Authentication configuration |
+| `cooldown_min` | duration | No | Minimum interval between sends |
+| `cooldown_per_condition` | bool | No | Track cooldown per condition instead of globally (default: false) |
+| `timeout` | duration | No | HTTP request timeout (default: 30s) |
+
+### Push Condition Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `plc` | string | Yes | PLC name |
+| `tag` | string | Yes | Tag to monitor |
+| `operator` | string | Yes | Comparison: `==`, `!=`, `>`, `<`, `>=`, `<=` |
+| `value` | any | Yes | Value to compare against |
+
+### Push Authentication
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Auth type: `bearer`, `basic`, `jwt`, `custom_header` |
+| `token` | string | Token for bearer/jwt auth |
+| `username` | string | Username for basic auth |
+| `password` | string | Password for basic auth |
+| `header_name` | string | Header name for custom_header auth |
+| `header_value` | string | Header value for custom_header auth |
+
+### Body Templates
+
+Use `#PLCName.tagName` references in the body to include live tag values:
+
+```json
+{"temperature": #MainPLC.Temperature, "count": #MainPLC.Counter}
+```
+
+References are resolved at send time. If a tag cannot be read, the reference is left as-is.
 
 ## UI Configuration
 

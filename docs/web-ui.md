@@ -8,10 +8,10 @@ WarLink includes a browser-based management interface as an alternative to the T
 
 ### Quick Start from the Command Line
 
-The fastest way to enable the web UI is with the `--web-admin-user` and `--web-admin-pass` flags. This creates an admin account, enables the web server, and saves the configuration:
+The fastest way to enable the web UI is with the `--admin-user` and `--admin-pass` flags. This creates an admin account, enables the web server, and saves the configuration:
 
 ```bash
-./warlink --web-admin-user admin --web-admin-pass yourpassword
+./warlink --admin-user admin --admin-pass yourpassword
 ```
 
 The web UI will be available at `http://localhost:8080` and you can log in with the credentials you provided.
@@ -19,7 +19,7 @@ The web UI will be available at `http://localhost:8080` and you can log in with 
 You can also override the port and bind address:
 
 ```bash
-./warlink --web-admin-user admin --web-admin-pass yourpassword --web-port 9090 --web-host 127.0.0.1
+./warlink --admin-user admin --admin-pass yourpassword -p 9090 --host 127.0.0.1
 ```
 
 ### Other Ways to Enable
@@ -31,19 +31,23 @@ Once started, the web UI is available at `http://<host>:8080` by default (port a
 
 ### Daemon Mode
 
-The web UI works in daemon mode as well. Once enabled in the configuration (or via the `--web-admin-user` flag), it starts automatically alongside the SSH server:
+The web UI works in daemon mode as well. Once enabled in the configuration (or via the `--admin-user` flag), it starts automatically alongside the SSH server:
 
 ```bash
-./warlink -d -p 2222 --ssh-password secret --web-admin-user admin --web-admin-pass yourpassword
+./warlink -d --ssh-pass secret --admin-user admin --admin-pass yourpassword
 ```
 
 This gives you both SSH access to the TUI and browser access to the web UI simultaneously.
 
 See [Configuration Reference](configuration.md) for full details on the `web:` configuration key.
 
+## First-Run Setup
+
+When the web UI is first enabled with no users configured, you are redirected to a setup page to create an initial admin account. After creating the admin account, you are prompted to configure a namespace for this WarLink instance if one is not already set.
+
 ## Logging In
 
-When the web UI is first enabled with no users configured, WarLink prompts you to create an initial admin account. After that, all access requires authentication through the login page.
+After initial setup, all access requires authentication through the login page.
 
 ### Roles
 
@@ -55,6 +59,10 @@ When the web UI is first enabled with no users configured, WarLink prompts you t
 Admins can create additional users and assign roles from the Users page.
 
 ## Pages
+
+### Dashboard
+
+The dashboard is the landing page after login. It provides an at-a-glance overview of the system status.
 
 ### PLCs
 
@@ -138,6 +146,15 @@ Configure event-driven data capture triggers. From this page you can:
 > ![Triggers page](screenshots/web-triggers.png)
 > *Screenshot: Trigger configuration with condition settings and capture tag list*
 
+### Push
+
+Configure HTTP webhook pushes that fire when PLC tag conditions are met. From this page you can:
+
+- View configured push targets with their status (Armed, Firing, Cooldown, Error)
+- Add, edit, or delete push configurations
+- Start or stop individual pushes
+- Test fire a push manually to verify endpoint connectivity
+
 ### REST API
 
 View the status of the built-in REST API, including whether it is currently enabled and serving requests.
@@ -162,6 +179,14 @@ Manage web UI user accounts (admin only). From this page you can:
 
 > ![Users page](screenshots/web-users.png)
 > *Screenshot: User management page showing accounts and role assignments*
+
+### Change Password
+
+Users can change their own password from this page. Admins can also force a password change on other users — when flagged, the user is redirected to the change password page on their next login.
+
+## Dark Mode
+
+The web UI supports dark mode. Use the theme toggle in the navigation header to switch between light and dark themes. The preference is stored in your browser.
 
 ## Real-Time Updates
 

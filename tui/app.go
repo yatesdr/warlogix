@@ -8,6 +8,7 @@ import (
 	"github.com/rivo/tview"
 
 	"warlink/config"
+	"warlink/engine"
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
@@ -48,6 +49,7 @@ type App struct {
 	pushTab     *PushTab
 	debugTab    *DebugTab
 
+	engine  *engine.Engine
 	packMgr *tagpack.Manager
 	pushMgr *push.Manager
 
@@ -57,8 +59,7 @@ type App struct {
 	valkeyMgr  *valkey.Manager
 	kafkaMgr   *kafka.Manager
 	triggerMgr *trigger.Manager
-	config     *config.Config
-	configPath string
+	config *config.Config
 
 	currentTab int
 	tabNames   []string
@@ -78,7 +79,7 @@ type App struct {
 }
 
 // NewApp creates a new TUI application.
-func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, webServer WebServer, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager) *App {
+func NewApp(cfg *config.Config, eng *engine.Engine, webServer WebServer) *App {
 	// Auto-detect ASCII mode based on locale, then allow config override
 	AutoDetectAndEnableASCIIMode()
 
@@ -93,13 +94,16 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, webS
 	a := &App{
 		app:        tview.NewApplication(),
 		config:     cfg,
-		configPath: configPath,
-		manager:    manager,
+
+		engine:     eng,
+		manager:    eng.GetPLCMan(),
 		webServer:  webServer,
-		mqttMgr:    mqttMgr,
-		valkeyMgr:  valkeyMgr,
-		kafkaMgr:   kafkaMgr,
-		triggerMgr: triggerMgr,
+		mqttMgr:    eng.GetMQTTMgr(),
+		valkeyMgr:  eng.GetValkeyMgr(),
+		kafkaMgr:   eng.GetKafkaMgr(),
+		triggerMgr: eng.GetTriggerMgr(),
+		packMgr:    eng.GetPackMgr(),
+		pushMgr:    eng.GetPushMgr(),
 		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 	}
@@ -110,7 +114,7 @@ func NewApp(cfg *config.Config, configPath string, manager *plcman.Manager, webS
 
 // NewAppWithScreen creates a TUI application that uses the provided tcell.Screen.
 // This is used for daemon mode where the TUI runs on a PTY.
-func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Manager, webServer WebServer, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, triggerMgr *trigger.Manager, screen tcell.Screen) *App {
+func NewAppWithScreen(cfg *config.Config, eng *engine.Engine, webServer WebServer, screen tcell.Screen) *App {
 	// Auto-detect ASCII mode based on locale, then allow config override
 	AutoDetectAndEnableASCIIMode()
 
@@ -125,13 +129,16 @@ func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Man
 	a := &App{
 		app:        tview.NewApplication().SetScreen(screen),
 		config:     cfg,
-		configPath: configPath,
-		manager:    manager,
+
+		engine:     eng,
+		manager:    eng.GetPLCMan(),
 		webServer:  webServer,
-		mqttMgr:    mqttMgr,
-		valkeyMgr:  valkeyMgr,
-		kafkaMgr:   kafkaMgr,
-		triggerMgr: triggerMgr,
+		mqttMgr:    eng.GetMQTTMgr(),
+		valkeyMgr:  eng.GetValkeyMgr(),
+		kafkaMgr:   eng.GetKafkaMgr(),
+		triggerMgr: eng.GetTriggerMgr(),
+		packMgr:    eng.GetPackMgr(),
+		pushMgr:    eng.GetPushMgr(),
 		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 		daemonMode: true,
@@ -142,19 +149,11 @@ func NewAppWithScreen(cfg *config.Config, configPath string, manager *plcman.Man
 }
 
 
-// SharedManagers is imported from ssh package to avoid circular dependency.
-// This interface allows the TUI to accept shared managers from the SSH server.
+// SharedManagers holds references needed for SSH shared backend mode.
 type SharedManagers interface {
 	GetConfig() *config.Config
-	GetConfigPath() string
-	GetPLCMan() *plcman.Manager
+	GetEngine() *engine.Engine
 	GetWebServer() WebServer
-	GetMQTTMgr() *mqtt.Manager
-	GetValkeyMgr() *valkey.Manager
-	GetKafkaMgr() *kafka.Manager
-	GetTriggerMgr() *trigger.Manager
-	GetPushMgr() *push.Manager
-	GetPackMgr() *tagpack.Manager
 }
 
 // NewAppWithSharedBackend creates a TUI application that uses shared backend managers.
@@ -163,6 +162,7 @@ type SharedManagers interface {
 // The screen parameter should be a tcell.Screen created from an SSHChannelTty.
 func NewAppWithSharedBackend(screen tcell.Screen, managers SharedManagers) (*App, error) {
 	cfg := managers.GetConfig()
+	eng := managers.GetEngine()
 
 	// Auto-detect ASCII mode based on locale, then allow config override
 	AutoDetectAndEnableASCIIMode()
@@ -178,15 +178,16 @@ func NewAppWithSharedBackend(screen tcell.Screen, managers SharedManagers) (*App
 	a := &App{
 		app:        tview.NewApplication().SetScreen(screen),
 		config:     cfg,
-		configPath: managers.GetConfigPath(),
-		manager:    managers.GetPLCMan(),
+
+		engine:     eng,
+		manager:    eng.GetPLCMan(),
 		webServer:  managers.GetWebServer(),
-		mqttMgr:    managers.GetMQTTMgr(),
-		valkeyMgr:  managers.GetValkeyMgr(),
-		kafkaMgr:   managers.GetKafkaMgr(),
-		triggerMgr: managers.GetTriggerMgr(),
-		pushMgr:    managers.GetPushMgr(),
-		packMgr:    managers.GetPackMgr(),
+		mqttMgr:    eng.GetMQTTMgr(),
+		valkeyMgr:  eng.GetValkeyMgr(),
+		kafkaMgr:   eng.GetKafkaMgr(),
+		triggerMgr: eng.GetTriggerMgr(),
+		packMgr:    eng.GetPackMgr(),
+		pushMgr:    eng.GetPushMgr(),
 		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 		daemonMode: true,
@@ -437,9 +438,7 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		// Refresh all tabs to apply new theme colors
 		a.refreshAllThemes()
 		// Save theme preference to config
-		a.LockConfig()
-		a.config.UI.Theme = themeName
-		a.UnlockAndSaveConfig()
+		a.engine.SetUITheme(themeName)
 		// Force full redraw to apply theme changes
 		a.app.Sync()
 		return nil
@@ -673,9 +672,7 @@ func (a *App) showNamespaceModal() {
 		}
 
 		// Update config and save
-		a.LockConfig()
-		a.config.Namespace = ns
-		if err := a.UnlockAndSaveConfig(); err != nil {
+		if err := a.engine.SetNamespace(ns); err != nil {
 			statusText.SetText(CurrentTheme.TagError + "Save failed: " + err.Error() + CurrentTheme.TagReset)
 			return
 		}
@@ -759,9 +756,7 @@ Examples: plant-floor-1, factory-east, packaging-line` + CurrentTheme.TagReset)
 		}
 
 		// Update config and save
-		a.LockConfig()
-		a.config.Namespace = ns
-		if err := a.UnlockAndSaveConfig(); err != nil {
+		if err := a.engine.SetNamespace(ns); err != nil {
 			statusText.SetText(CurrentTheme.TagError + "Save failed: " + err.Error() + CurrentTheme.TagReset)
 			return
 		}
@@ -834,25 +829,6 @@ func (a *App) showConfirm(title, message string, onConfirm func()) {
 	a.pages.AddPage("confirm", modal, true, true)
 }
 
-// SaveConfig saves the current configuration (self-locking).
-func (a *App) SaveConfig() error {
-	return a.config.Save(a.configPath)
-}
-
-// LockConfig acquires the config data mutex.
-func (a *App) LockConfig() {
-	a.config.Lock()
-}
-
-// UnlockConfig releases the config data mutex without saving.
-func (a *App) UnlockConfig() {
-	a.config.Unlock()
-}
-
-// UnlockAndSaveConfig marshals under lock, then unlocks and writes to disk.
-func (a *App) UnlockAndSaveConfig() error {
-	return a.config.UnlockAndSave(a.configPath)
-}
 
 // Run starts the TUI application.
 func (a *App) Run() error {
@@ -909,9 +885,6 @@ func (a *App) Run() error {
 	// Start periodic refresh goroutine for MQTT, Valkey, and Debug tabs
 	go a.periodicRefresh()
 
-	// Start health publishing goroutine (publishes every 10 seconds)
-	go a.publishHealthLoop()
-
 	return a.app.Run()
 }
 
@@ -965,55 +938,6 @@ func (a *App) periodicRefresh() {
 	}
 }
 
-// publishHealthLoop publishes PLC health status to all services every 10 seconds.
-func (a *App) publishHealthLoop() {
-	// Wait for initial services to start
-	time.Sleep(2 * time.Second)
-
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	// Publish immediately on start, then every 10 seconds
-	a.publishAllHealth()
-
-	for {
-		select {
-		case <-a.stopChan:
-			return
-		case <-ticker.C:
-			a.publishAllHealth()
-		}
-	}
-}
-
-// publishAllHealth publishes health status for all PLCs to MQTT, Valkey, and Kafka.
-func (a *App) publishAllHealth() {
-	plcs := a.manager.ListPLCs()
-	DebugLog("Publishing health for %d PLCs", len(plcs))
-	for _, plc := range plcs {
-		// Skip PLCs with health check disabled
-		if !plc.Config.IsHealthCheckEnabled() {
-			continue
-		}
-
-		health := plc.GetHealthStatus()
-
-		// Publish to MQTT
-		if a.mqttMgr != nil {
-			a.mqttMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
-		}
-
-		// Publish to Valkey
-		if a.valkeyMgr != nil {
-			a.valkeyMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
-		}
-
-		// Publish to Kafka
-		if a.kafkaMgr != nil {
-			a.kafkaMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
-		}
-	}
-}
 
 // Shutdown performs a clean shutdown of all resources.
 func (a *App) Shutdown() {
@@ -1043,50 +967,21 @@ func (a *App) Shutdown() {
 	a.manager.SetOnValueChange(nil)
 	a.manager.SetOnLog(nil)
 
-	// Stop all services with a single timeout
-	// All these operations can potentially block, so wrap them together
+	// Stop all services via engine with a timeout
 	done := make(chan struct{})
 	go func() {
-		// Stop triggers and pushes first (they may be waiting on PLC reads)
-		if a.triggerMgr != nil {
-			a.triggerMgr.Stop()
+		if a.engine != nil {
+			a.engine.Stop()
 		}
-		if a.pushMgr != nil {
-			a.pushMgr.Stop()
-		}
-
-		// Stop messaging services
-		if a.mqttMgr != nil {
-			a.mqttMgr.StopAll()
-		}
-		if a.valkeyMgr != nil {
-			a.valkeyMgr.StopAll()
-		}
-		if a.kafkaMgr != nil {
-			a.kafkaMgr.StopAll()
-		}
-
-		// Stop web server and manager
 		if a.webServer != nil {
 			a.webServer.Stop()
 		}
-		if a.manager != nil {
-			a.manager.Stop()
-		}
-
 		close(done)
 	}()
 
-	// Wait with timeout for all services (reduced to allow room in outer 2s timeout)
 	select {
 	case <-done:
 	case <-time.After(1 * time.Second):
-		// Timeout - proceed anyway
-	}
-
-	// Disconnect PLCs in background (don't wait - can be slow)
-	if a.manager != nil {
-		go a.manager.DisconnectAll()
 	}
 }
 
@@ -1119,88 +1014,6 @@ func (a *App) QueueUpdateDraw(f func()) {
 	a.app.QueueUpdateDraw(f)
 }
 
-// SetPackManager sets the TagPack manager for the app.
-func (a *App) SetPackManager(mgr *tagpack.Manager) {
-	a.packMgr = mgr
-}
-
-// SetPushManager sets the Push manager for the app.
-func (a *App) SetPushManager(mgr *push.Manager) {
-	a.pushMgr = mgr
-}
-
-// ForcePublishTag publishes a single tag's current value to enabled services (MQTT, Valkey, Kafka).
-// This is called when a tag is newly enabled to publish its current value immediately.
-// Respects per-tag service inhibit flags (NoMQTT, NoValkey, NoKafka).
-func (a *App) ForcePublishTag(plcName, tagName string) {
-	v := a.manager.GetTagValueChange(plcName, tagName)
-	if v == nil {
-		return
-	}
-
-	DebugLog("ForcePublishTag: publishing %s.%s", plcName, tagName)
-
-	// Publish to enabled services with force=true, respecting inhibit flags
-	if !v.NoMQTT {
-		a.mqttMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, true)
-	}
-	if !v.NoValkey {
-		a.valkeyMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable)
-	}
-	if !v.NoKafka {
-		a.kafkaMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable, true)
-	}
-}
-
-// ForcePublishAllValues publishes all current tag values to MQTT brokers.
-// This is called when an MQTT broker connects to do an initial sync.
-// Respects per-tag NoMQTT inhibit flag.
-func (a *App) ForcePublishAllValues() {
-	values := a.manager.GetAllCurrentValues()
-	DebugLogMQTT("ForcePublishAllValues: publishing %d values", len(values))
-	for _, v := range values {
-		if !v.NoMQTT {
-			a.mqttMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, true)
-		}
-	}
-}
-
-// ForcePublishAllValuesToValkey publishes all current tag values to Valkey servers.
-// This is called when a Valkey server connects to do an initial sync.
-// Respects per-tag NoValkey inhibit flag.
-func (a *App) ForcePublishAllValuesToValkey() {
-	values := a.manager.GetAllCurrentValues()
-	DebugLogValkey("ForcePublishAllValuesToValkey: publishing %d values", len(values))
-	for _, v := range values {
-		if !v.NoValkey {
-			a.valkeyMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable)
-		}
-	}
-}
-
-// ForcePublishAllValuesToKafka publishes all current tag values to Kafka clusters.
-// This is called when a Kafka cluster connects with PublishChanges enabled.
-// Respects per-tag NoKafka inhibit flag.
-func (a *App) ForcePublishAllValuesToKafka() {
-	values := a.manager.GetAllCurrentValues()
-	DebugLog("ForcePublishAllValuesToKafka: publishing %d values", len(values))
-	for _, v := range values {
-		if !v.NoKafka {
-			a.kafkaMgr.Publish(v.PLCName, v.TagName, v.Alias, v.Address, v.TypeName, v.Value, v.Writable, true)
-		}
-	}
-}
-
-// UpdateMQTTPLCNames updates the MQTT manager with current PLC names.
-// Call this when PLCs are added or removed.
-func (a *App) UpdateMQTTPLCNames() {
-	plcNames := make([]string, len(a.config.PLCs))
-	for i, plc := range a.config.PLCs {
-		plcNames[i] = plc.Name
-	}
-	a.mqttMgr.SetPLCNames(plcNames)
-	a.mqttMgr.UpdateWriteSubscriptions()
-}
 
 // showCenteredModal displays a modal dialog centered on the screen.
 // pageName is the unique identifier for this modal in the pages stack.

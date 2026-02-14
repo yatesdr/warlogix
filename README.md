@@ -67,6 +67,7 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 ### Advanced Features
 - [Daemon Mode](docs/daemon-mode.md) - Background service with SSH access
 - [Triggers](docs/triggers.md) - Event-driven data capture to MQTT and Kafka
+- [Push Webhooks](docs/push.md) - HTTP webhooks triggered by PLC conditions
 - [TagPacks](docs/tagpacks.md) - Aggregate tags for atomic publishing
 - [Multi-Instance Deployment](docs/multi-instance.md) - Namespace isolation for multiple sites
 - [Data Types](docs/data-types.md) - Types, byte order, and UDT support
@@ -108,7 +109,7 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 | Siemens | S7-300/400/1200/1500 | Manual | S7comm | Tested on S7-1200 |
 | Beckhoff | TwinCAT 2/3 | Automatic | ADS | Tested on CX9020 |
 | Omron (FINS) | CS1, CJ1/2, CP1 | Manual | FINS TCP/UDP | Tested on CP1 |
-| Omron (EIP) | NJ, NX Series | Automatic | EtherNet/IP | Experimental |
+| Omron (EIP) | NJ, NX Series | Automatic (no UDT members) | EtherNet/IP | Experimental |
 
 ## Performance
 
@@ -166,14 +167,16 @@ Run `warlink --stress-test-republishing` to benchmark your system.
 --namespace <name>           Set instance namespace (saved to config)
 --log <path>                 Write debug messages to a file
 --log-debug [filter]         Enable protocol debugging (omron,ads,logix,s7,mqtt,kafka,valkey,tui)
--d                           Daemon mode (serve TUI over SSH)
--p <port>                    SSH port for daemon mode (default: 2222)
---ssh-password <pw>          SSH password authentication
---ssh-keys <path>            Path to authorized_keys file
---web-admin-user <user>      Create/update admin user for web UI
---web-admin-pass <pass>      Password for admin user (enables web server)
---web-port <port>            Override web server port (default: 8080)
---web-host <host>            Override web server bind address
+-d, --no-tui                 Headless mode (no local TUI)
+-p <port>                    HTTP listen port (overrides config)
+--host <addr>                HTTP bind address (overrides config)
+--admin-user <user>          Create/update admin user (saved to config)
+--admin-pass <pass>          Password for admin user (saved to config)
+--no-api                     Disable REST API (ephemeral)
+--no-webui                   Disable browser UI (ephemeral)
+--ssh-port <port>            SSH listen port (default: 2222)
+--ssh-pass <pw>              SSH password for remote TUI access
+--ssh-keys <path>            Path to authorized_keys file or directory
 --stress-test-republishing   Stress test Kafka, MQTT, and Valkey throughput
 --test-duration <dur>        Stress test duration (default: 10s)
 --test-tags <n>              Simulated tags per PLC (default: 100)
@@ -187,14 +190,14 @@ Run `warlink --stress-test-republishing` to benchmark your system.
 Run as a background service with SSH access:
 
 ```bash
-./warlink -d -p 2222 --ssh-password "secret"
+./warlink -d --ssh-pass "secret"
 ssh -p 2222 localhost
 ```
 
 Add the web UI to daemon mode for browser-based management alongside SSH:
 
 ```bash
-./warlink -d -p 2222 --ssh-password "secret" --web-admin-user admin --web-admin-pass "password"
+./warlink -d --ssh-pass "secret" --admin-user admin --admin-pass "password"
 ```
 
 See [Daemon Mode](docs/daemon-mode.md) for systemd setup, Docker deployment, and security options.

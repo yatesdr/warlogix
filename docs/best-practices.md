@@ -333,7 +333,7 @@ For SSH access:
 ./warlink -d --ssh-keys /etc/warlink/authorized_keys
 
 # If using passwords, use strong passwords
-./warlink -d --ssh-password "$(openssl rand -base64 32)"
+./warlink -d --ssh-pass "$(openssl rand -base64 32)"
 ```
 
 ### Write-Back Security

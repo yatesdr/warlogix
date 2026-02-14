@@ -39,9 +39,7 @@ func (t *RESTTab) setupUI() {
 		SetText(t.app.config.Web.Host).
 		SetFieldWidth(15).
 		SetChangedFunc(func(text string) {
-			t.app.LockConfig()
-			t.app.config.Web.Host = text
-			t.app.UnlockAndSaveConfig()
+			t.app.engine.SetWebHost(text)
 			t.updateEndpointsList()
 		})
 
@@ -55,9 +53,7 @@ func (t *RESTTab) setupUI() {
 			var port int
 			fmt.Sscanf(text, "%d", &port)
 			if port > 0 && port < 65536 {
-				t.app.LockConfig()
-				t.app.config.Web.Port = port
-				t.app.UnlockAndSaveConfig()
+				t.app.engine.SetWebPort(port)
 				t.updateEndpointsList()
 			}
 		})
@@ -71,9 +67,7 @@ func (t *RESTTab) setupUI() {
 		SetLabel("API ").
 		SetChecked(t.app.config.Web.API.Enabled).
 		SetChangedFunc(func(checked bool) {
-			t.app.LockConfig()
-			t.app.config.Web.API.Enabled = checked
-			t.app.UnlockAndSaveConfig()
+			t.app.engine.SetWebAPIEnabled(checked)
 			if t.app.webServer != nil {
 				t.app.webServer.Reload(&t.app.config.Web)
 			}
@@ -85,9 +79,7 @@ func (t *RESTTab) setupUI() {
 		SetLabel("UI ").
 		SetChecked(t.app.config.Web.UI.Enabled).
 		SetChangedFunc(func(checked bool) {
-			t.app.LockConfig()
-			t.app.config.Web.UI.Enabled = checked
-			t.app.UnlockAndSaveConfig()
+			t.app.engine.SetWebUIEnabled(checked)
 			if t.app.webServer != nil {
 				t.app.webServer.Reload(&t.app.config.Web)
 			}
@@ -249,9 +241,7 @@ func (t *RESTTab) startServer() {
 		return
 	}
 
-	t.app.LockConfig()
-	t.app.config.Web.Enabled = true
-	t.app.UnlockAndSaveConfig()
+	t.app.engine.SetWebEnabled(true)
 	t.Refresh()
 	t.app.setStatus(fmt.Sprintf("Web server started on %s", t.app.webServer.Address()))
 }
@@ -272,9 +262,7 @@ func (t *RESTTab) stopServer() {
 		return
 	}
 
-	t.app.LockConfig()
-	t.app.config.Web.Enabled = false
-	t.app.UnlockAndSaveConfig()
+	t.app.engine.SetWebEnabled(false)
 	t.Refresh()
 	t.app.setStatus("Web server stopped")
 }

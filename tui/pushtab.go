@@ -9,6 +9,7 @@ import (
 	"github.com/rivo/tview"
 
 	"warlink/config"
+	"warlink/engine"
 	"warlink/push"
 	"warlink/trigger"
 )
@@ -409,7 +410,7 @@ func (t *PushTab) showAddDialog() {
 			authCfg.HeaderValue = tokenPwd
 		}
 
-		cfg := config.PushConfig{
+		if err := t.app.engine.CreatePush(engine.PushCreateRequest{
 			Name:            name,
 			Enabled:         enabled,
 			Conditions:      []config.PushCondition{},
@@ -421,23 +422,9 @@ func (t *PushTab) showAddDialog() {
 			CooldownMin:     cooldown,
 			CooldownPerCond: perCond,
 			Timeout:         timeout,
-		}
-
-		t.app.LockConfig()
-		t.app.config.AddPush(cfg)
-		t.app.UnlockAndSaveConfig()
-
-		if t.app.pushMgr != nil {
-			pushCfg := t.app.config.FindPush(name)
-			if pushCfg != nil {
-				if err := t.app.pushMgr.AddPush(pushCfg); err != nil {
-					t.app.showError("Error", fmt.Sprintf("Failed to add push: %v", err))
-					return
-				}
-				if enabled {
-					t.app.pushMgr.StartPush(name)
-				}
-			}
+		}); err != nil {
+			t.app.showError("Error", fmt.Sprintf("Failed to create push: %v", err))
+			return
 		}
 
 		t.app.closeModal(pageName)
@@ -638,10 +625,9 @@ func (t *PushTab) showEditDialog() {
 			newAuthCfg.HeaderValue = newTokenPwd
 		}
 
-		updated := config.PushConfig{
-			Name:            name,
+		if err := t.app.engine.UpdatePush(name, engine.PushUpdateRequest{
 			Enabled:         enabled,
-			Conditions:      cfg.Conditions, // Keep conditions as modified
+			Conditions:      cfg.Conditions,
 			URL:             urlStr,
 			Method:          methods[newMethodIdx],
 			ContentType:     contentType,
@@ -651,20 +637,9 @@ func (t *PushTab) showEditDialog() {
 			CooldownMin:     cooldown,
 			CooldownPerCond: perCond,
 			Timeout:         timeout,
-		}
-
-		t.app.LockConfig()
-		t.app.config.UpdatePush(name, updated)
-		t.app.UnlockAndSaveConfig()
-
-		if t.app.pushMgr != nil {
-			pushCfg := t.app.config.FindPush(name)
-			if pushCfg != nil {
-				t.app.pushMgr.UpdatePush(pushCfg)
-				if enabled {
-					t.app.pushMgr.StartPush(name)
-				}
-			}
+		}); err != nil {
+			t.app.showError("Error", fmt.Sprintf("Failed to update push: %v", err))
+			return
 		}
 
 		t.app.closeModal(pageName)
@@ -688,13 +663,10 @@ func (t *PushTab) confirmRemovePush() {
 	}
 
 	t.app.showConfirm("Remove Push", fmt.Sprintf("Remove %s?", name), func() {
-		if t.app.pushMgr != nil {
-			t.app.pushMgr.StopPush(name)
-			t.app.pushMgr.RemovePush(name)
+		if err := t.app.engine.DeletePush(name); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
-		t.app.LockConfig()
-		t.app.config.RemovePush(name)
-		t.app.UnlockAndSaveConfig()
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Removed push: %s", name))
 	})
@@ -712,26 +684,13 @@ func (t *PushTab) toggleSelected() {
 	}
 
 	if cfg.Enabled {
-		t.app.LockConfig()
-		cfg.Enabled = false
-		t.app.UnlockAndSaveConfig()
-		if t.app.pushMgr != nil {
-			if err := t.app.pushMgr.StopPush(name); err != nil {
-				t.app.setStatus(fmt.Sprintf("Failed to stop: %v", err))
-				return
-			}
-		}
+		t.app.engine.StopPush(name)
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Stopped push: %s", name))
 	} else {
-		t.app.LockConfig()
-		cfg.Enabled = true
-		t.app.UnlockAndSaveConfig()
-		if t.app.pushMgr != nil {
-			if err := t.app.pushMgr.StartPush(name); err != nil {
-				t.app.setStatus(fmt.Sprintf("Failed to start: %v", err))
-				return
-			}
+		if err := t.app.engine.StartPush(name); err != nil {
+			t.app.setStatus(fmt.Sprintf("Failed to start: %v", err))
+			return
 		}
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Started push: %s", name))
@@ -744,15 +703,10 @@ func (t *PushTab) testSelected() {
 		return
 	}
 
-	if t.app.pushMgr == nil {
-		t.app.setStatus("Push manager not available")
-		return
-	}
-
 	t.app.setStatus(fmt.Sprintf("Test firing push: %s - check Debug tab for results", name))
 
 	go func() {
-		err := t.app.pushMgr.TestFirePush(name)
+		err := t.app.engine.TestFirePush(name)
 
 		go func() {
 			time.Sleep(100 * time.Millisecond)

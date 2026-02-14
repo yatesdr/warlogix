@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"warlink/config"
+	"warlink/engine"
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
@@ -84,12 +85,18 @@ type WriteResponse struct {
 // handlers holds the API handler functions.
 type handlers struct {
 	managers Managers
+	engine   *engine.Engine
 }
 
 // NewRouter creates the REST API router.
 func NewRouter(managers Managers) chi.Router {
 	r := chi.NewRouter()
 	h := &handlers{managers: managers}
+
+	// Capture engine if managers is *engine.Engine
+	if eng, ok := managers.(*engine.Engine); ok {
+		h.engine = eng
+	}
 
 	// Root - list PLCs
 	r.Get("/", h.handleListPLCs)
@@ -107,6 +114,59 @@ func NewRouter(managers Managers) chi.Router {
 		r.Get("/tags", h.handleAllTags)
 		r.Get("/tags/*", h.handleSingleTag)
 		r.Post("/write", h.handleWrite)
+	})
+
+	// Mutation endpoints (require engine)
+	r.Route("/plcs", func(r chi.Router) {
+		r.Post("/", h.handleCreatePLC)
+		r.Put("/{name}", h.handleUpdatePLC)
+		r.Delete("/{name}", h.handleDeletePLC)
+		r.Post("/{name}/connect", h.handleConnectPLC)
+		r.Post("/{name}/disconnect", h.handleDisconnectPLC)
+	})
+	r.Route("/mqtt", func(r chi.Router) {
+		r.Post("/", h.handleCreateMQTT)
+		r.Put("/{name}", h.handleUpdateMQTT)
+		r.Delete("/{name}", h.handleDeleteMQTT)
+		r.Post("/{name}/start", h.handleStartMQTT)
+		r.Post("/{name}/stop", h.handleStopMQTT)
+	})
+	r.Route("/valkey", func(r chi.Router) {
+		r.Post("/", h.handleCreateValkey)
+		r.Put("/{name}", h.handleUpdateValkey)
+		r.Delete("/{name}", h.handleDeleteValkey)
+		r.Post("/{name}/start", h.handleStartValkey)
+		r.Post("/{name}/stop", h.handleStopValkey)
+	})
+	r.Route("/kafka", func(r chi.Router) {
+		r.Post("/", h.handleCreateKafka)
+		r.Put("/{name}", h.handleUpdateKafka)
+		r.Delete("/{name}", h.handleDeleteKafka)
+		r.Post("/{name}/connect", h.handleConnectKafka)
+		r.Post("/{name}/disconnect", h.handleDisconnectKafka)
+	})
+	r.Route("/triggers", func(r chi.Router) {
+		r.Post("/", h.handleCreateTrigger)
+		r.Put("/{name}", h.handleUpdateTrigger)
+		r.Delete("/{name}", h.handleDeleteTrigger)
+		r.Post("/{name}/start", h.handleStartTrigger)
+		r.Post("/{name}/stop", h.handleStopTrigger)
+		r.Post("/{name}/test", h.handleTestFireTrigger)
+	})
+	r.Route("/push", func(r chi.Router) {
+		r.Post("/", h.handleCreatePush)
+		r.Put("/{name}", h.handleUpdatePush)
+		r.Delete("/{name}", h.handleDeletePush)
+		r.Post("/{name}/start", h.handleStartPush)
+		r.Post("/{name}/stop", h.handleStopPush)
+		r.Post("/{name}/test", h.handleTestFirePush)
+	})
+	r.Route("/tagpacks", func(r chi.Router) {
+		r.Post("/", h.handleCreateTagPack)
+		r.Put("/{name}", h.handleUpdateTagPack)
+		r.Delete("/{name}", h.handleDeleteTagPack)
+		r.Patch("/{name}", h.handleToggleTagPack)
+		r.Post("/{name}/members", h.handleAddTagPackMember)
 	})
 
 	return r

@@ -7,8 +7,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlink/config"
-	"warlink/mqtt"
+	"warlink/engine"
 )
 
 // MQTTTab handles the MQTT configuration tab.
@@ -209,32 +208,23 @@ func (t *MQTTTab) showAddDialog() {
 			port = 1883
 		}
 
-		cfg := config.MQTTConfig{
-			Name:      name,
-			Enabled:   autoConnect,
-			Broker:    broker,
-			Port:      port,
+		if err := t.app.engine.CreateMQTT(engine.MQTTCreateRequest{
+			Name:     name,
+			Broker:   broker,
+			Port:     port,
+			ClientID: clientID,
+			Username: username,
+			Password: password,
 			Selector: rootTopic,
-			ClientID:  clientID,
-			Username:  username,
-			Password:  password,
-			UseTLS:    useTLS,
+			UseTLS:   useTLS,
+			Enabled:  autoConnect,
+		}); err != nil {
+			t.app.showError("Error", err.Error())
+			return
 		}
 
-		t.app.LockConfig()
-		t.app.config.AddMQTT(cfg)
-		t.app.UnlockAndSaveConfig()
-
-		// Add to manager
-		pub := mqtt.NewPublisher(&t.app.config.MQTT[len(t.app.config.MQTT)-1], t.app.config.Namespace)
-		t.app.mqttMgr.Add(pub)
-
 		if autoConnect {
-			go func() {
-				if err := pub.Start(); err == nil {
-					t.app.ForcePublishAllValues()
-				}
-			}()
+			go t.app.engine.ForcePublishAllToMQTT()
 		}
 
 		t.app.closeModal(pageName)
@@ -303,39 +293,30 @@ func (t *MQTTTab) showEditDialog() {
 			port = 1883
 		}
 
-		updated := config.MQTTConfig{
-			Name:      name,
-			Enabled:   autoConnect,
-			Broker:    broker,
-			Port:      port,
-			Selector: rootTopic,
-			ClientID:  clientID,
-			Username:  username,
-			Password:  password,
-			UseTLS:    useTLS,
-		}
-
-		t.app.LockConfig()
-		t.app.config.UpdateMQTT(originalName, updated)
-		t.app.UnlockAndSaveConfig()
-
 		// Close dialog immediately
 		t.app.closeModal(pageName)
 		t.app.setStatus(fmt.Sprintf("Updating MQTT broker: %s...", name))
 
-		// Update manager in background to avoid blocking UI
+		// Update in background to avoid blocking UI
 		go func() {
-			t.app.mqttMgr.Remove(originalName)
-			newPub := mqtt.NewPublisher(t.app.config.FindMQTT(name), t.app.config.Namespace)
-			t.app.mqttMgr.Add(newPub)
+			if err := t.app.engine.UpdateMQTT(originalName, engine.MQTTUpdateRequest{
+				Broker:   broker,
+				Port:     port,
+				ClientID: clientID,
+				Username: username,
+				Password: password,
+				Selector: rootTopic,
+				UseTLS:   useTLS,
+				Enabled:  autoConnect,
+			}); err != nil {
+				t.app.QueueUpdateDraw(func() {
+					t.app.showError("Error", err.Error())
+				})
+				return
+			}
 
 			if autoConnect {
-				if err := newPub.Start(); err == nil {
-					t.app.ForcePublishAllValues()
-					DebugLogMQTT("Reconnected to %s after config update (topic: %s)", name, rootTopic)
-				} else {
-					DebugLogError("MQTT %s reconnect failed: %v", name, err)
-				}
+				t.app.engine.ForcePublishAllToMQTT()
 			}
 
 			t.app.QueueUpdateDraw(func() {
@@ -370,14 +351,9 @@ func (t *MQTTTab) removeSelected() {
 	name := pub.Name()
 
 	t.app.showConfirm("Remove MQTT Broker", fmt.Sprintf("Remove %s?", name), func() {
-		// Run removal in background to avoid blocking UI (Stop() may block)
 		go func() {
-			t.app.mqttMgr.Remove(name)
-
+			t.app.engine.DeleteMQTT(name)
 			t.app.QueueUpdateDraw(func() {
-				t.app.LockConfig()
-				t.app.config.RemoveMQTT(name)
-				t.app.UnlockAndSaveConfig()
 				t.Refresh()
 				t.app.setStatus(fmt.Sprintf("Removed MQTT broker: %s", name))
 			})
@@ -407,31 +383,20 @@ func (t *MQTTTab) connectSelected() {
 	go func() {
 		pubName := pub.Name()
 		pubAddr := pub.Address()
-		pubTopic := pub.Config().Selector
-		err := pub.Start()
+		err := t.app.engine.StartMQTT(pubName)
 
-		// Update UI immediately after connection attempt
 		t.app.QueueUpdateDraw(func() {
 			if err != nil {
 				t.app.setStatus(fmt.Sprintf("MQTT connect failed: %v", err))
 				DebugLogError("MQTT %s connection failed: %v", pubName, err)
 			} else {
-				t.app.LockConfig()
-				if cfg := t.app.config.FindMQTT(pubName); cfg != nil {
-					cfg.Enabled = true
-					t.app.UnlockAndSaveConfig()
-				} else {
-					t.app.UnlockConfig()
-				}
 				t.app.setStatus(fmt.Sprintf("MQTT connected to %s", pubAddr))
-				DebugLogMQTT("Connected to %s (broker: %s, topic: %s)", pubName, pubAddr, pubTopic)
 			}
 			t.Refresh()
 		})
 
-		// Force publish in separate goroutine to not delay UI
 		if err == nil {
-			go t.app.ForcePublishAllValues()
+			go t.app.engine.ForcePublishAllToMQTT()
 		}
 	}()
 }
@@ -456,18 +421,9 @@ func (t *MQTTTab) disconnectSelected() {
 	pubName := pub.Name()
 	t.app.setStatus(fmt.Sprintf("Disconnecting from %s...", pubName))
 
-	// Run disconnect in background to avoid blocking UI
 	go func() {
-		pub.Stop()
-
+		t.app.engine.StopMQTT(pubName)
 		t.app.QueueUpdateDraw(func() {
-			t.app.LockConfig()
-			if cfg := t.app.config.FindMQTT(pubName); cfg != nil {
-				cfg.Enabled = false
-				t.app.UnlockAndSaveConfig()
-			} else {
-				t.app.UnlockConfig()
-			}
 			t.Refresh()
 			t.app.setStatus(fmt.Sprintf("MQTT disconnected from %s", pubName))
 		})
