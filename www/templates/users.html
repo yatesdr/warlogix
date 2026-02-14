@@ -14,7 +14,7 @@
     <div class="modal-content">
         <div class="modal-header">
             <h2>Add User</h2>
-            <button class="modal-close" onclick="hideAddUserModal()">&times;</button>
+            <button class="modal-close" onclick="WarLink.hideModal('add-user-modal')">&times;</button>
         </div>
         <form id="add-user-form" onsubmit="addUser(event)">
             <div class="form-group">
@@ -33,7 +33,7 @@
                 </select>
             </div>
             <div class="form-actions">
-                <button type="button" class="btn" onclick="hideAddUserModal()">Cancel</button>
+                <button type="button" class="btn" onclick="WarLink.hideModal('add-user-modal')">Cancel</button>
                 <button type="submit" class="btn btn-primary">Add User</button>
             </div>
         </form>
@@ -42,48 +42,41 @@
 
 <script>
 function showAddUserModal() {
-    document.getElementById('add-user-modal').style.display = 'flex';
+    WarLink.showModal('add-user-modal');
 }
 
 function hideAddUserModal() {
-    document.getElementById('add-user-modal').style.display = 'none';
+    WarLink.hideModal('add-user-modal');
     document.getElementById('add-user-form').reset();
 }
 
 function addUser(e) {
     e.preventDefault();
-    const form = e.target;
-    const data = {
+    var form = e.target;
+    var data = {
         username: form.username.value,
         password: form.password.value,
         role: form.role.value
     };
-    fetch('/users/', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    }).then(response => {
-        if (response.ok) {
+    WarLink.api.post('/users/', data)
+        .then(function() {
             hideAddUserModal();
-            htmx.trigger('#users-container', 'htmx:load');
             location.reload();
-        } else {
-            response.text().then(msg => alert('Error: ' + msg));
-        }
-    });
+        })
+        .catch(function(err) {
+            WarLink.toast('Error: ' + err.message, 'error');
+        });
 }
 
 function deleteUser(username) {
     if (!confirm('Delete user "' + username + '"?')) return;
-    fetch('/users/' + encodeURIComponent(username), {
-        method: 'DELETE'
-    }).then(response => {
-        if (response.ok) {
+    WarLink.api.del('/users/' + encodeURIComponent(username))
+        .then(function() {
             location.reload();
-        } else {
-            response.text().then(msg => alert('Error: ' + msg));
-        }
-    });
+        })
+        .catch(function(err) {
+            WarLink.toast('Error: ' + err.message, 'error');
+        });
 }
 </script>
 

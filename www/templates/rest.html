@@ -118,7 +118,7 @@ function toggleAPI() {
             }
         })
         .catch(function(err) {
-            alert('Error: ' + err.message);
+            WarLink.toast('Error: ' + err.message, 'error');
         });
 }
 </script>

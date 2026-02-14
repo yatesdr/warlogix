@@ -1,0 +1,58 @@
+{{define "rules_table.html"}}
+<table class="table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Logic</th>
+            <th>Conditions</th>
+            <th>Actions</th>
+            <th>Status</th>
+            <th>Fires</th>
+            <th>Last Fire</th>
+            {{if .IsAdmin}}<th>Actions</th>{{end}}
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Rules}}
+        <tr class="rule-row" data-name="{{.Name}}" data-status="{{.Status}}" data-status-class="{{.StatusClass}}">
+            <td>{{.Name}}</td>
+            <td>{{.LogicMode}}</td>
+            <td>{{.Conditions}}</td>
+            <td>{{.Actions}}</td>
+            <td><span class="status-badge status-{{.StatusClass}}">{{.Status}}</span></td>
+            <td class="fire-count">{{.FireCount}}</td>
+            <td class="last-fire">{{if .LastFire}}{{.LastFire}}{{else}}-{{end}}</td>
+            {{if $.IsAdmin}}
+            <td class="actions">
+                <button class="btn btn-sm" onclick="showEditRuleModal('{{.Name}}')">Edit</button>
+                {{if .Enabled}}
+                <button class="btn btn-sm btn-danger"
+                        hx-post="/htmx/rules/{{.Name}}/stop"
+                        hx-target="#rules-container"
+                        hx-swap="innerHTML">Stop</button>
+                <button class="btn btn-sm"
+                        hx-post="/htmx/rules/{{.Name}}/test"
+                        hx-target="#rules-container"
+                        hx-swap="innerHTML">Test</button>
+                {{else}}
+                <button class="btn btn-sm btn-primary"
+                        hx-post="/htmx/rules/{{.Name}}/start"
+                        hx-target="#rules-container"
+                        hx-swap="innerHTML">Start</button>
+                {{end}}
+                <button class="btn btn-sm btn-danger"
+                        hx-delete="/htmx/rules/{{.Name}}"
+                        hx-target="#rules-container"
+                        hx-swap="innerHTML"
+                        hx-confirm="Delete rule '{{.Name}}'?">Delete</button>
+            </td>
+            {{end}}
+        </tr>
+        {{else}}
+        <tr>
+            <td colspan="{{if .IsAdmin}}8{{else}}7{{end}}" class="empty-cell">No rules configured</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{end}}

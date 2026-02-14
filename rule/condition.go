@@ -1,5 +1,4 @@
-// Package trigger provides event-driven data capture with configurable triggers.
-package trigger
+package rule
 
 import (
 	"fmt"
@@ -19,32 +18,42 @@ const (
 	OpLessEqual    Operator = "<="
 )
 
-// Condition represents a trigger condition.
+// Condition represents a single evaluated condition.
 type Condition struct {
 	Operator Operator
 	Value    interface{}
+	Not      bool // Invert result
 }
 
 // Evaluate checks if the given value satisfies the condition.
 func (c *Condition) Evaluate(value interface{}) (bool, error) {
-	// Convert both values to comparable types
 	targetFloat, targetIsNum := toFloat64(c.Value)
 	valueFloat, valueIsNum := toFloat64(value)
 
-	// If both are numeric, compare as floats
+	var result bool
+	var err error
+
 	if targetIsNum && valueIsNum {
-		return c.compareFloat(valueFloat, targetFloat), nil
+		result = c.compareFloat(valueFloat, targetFloat)
+	} else {
+		switch c.Operator {
+		case OpEqual:
+			result = reflect.DeepEqual(value, c.Value)
+		case OpNotEqual:
+			result = !reflect.DeepEqual(value, c.Value)
+		default:
+			return false, fmt.Errorf("operator %s not supported for non-numeric types", c.Operator)
+		}
 	}
 
-	// For non-numeric types, only == and != are supported
-	switch c.Operator {
-	case OpEqual:
-		return reflect.DeepEqual(value, c.Value), nil
-	case OpNotEqual:
-		return !reflect.DeepEqual(value, c.Value), nil
-	default:
-		return false, fmt.Errorf("operator %s not supported for non-numeric types", c.Operator)
+	if err != nil {
+		return false, err
 	}
+
+	if c.Not {
+		return !result, nil
+	}
+	return result, nil
 }
 
 func (c *Condition) compareFloat(value, target float64) bool {

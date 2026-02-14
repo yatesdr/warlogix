@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
     <title>WarLink</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script>
     (function(){var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'}document.documentElement.dataset.theme=t})();
     </script>
@@ -22,8 +23,7 @@
             <a href="/plcs" class="{{if eq .Page "plcs"}}active{{end}}">PLCs</a>
             <a href="/republisher" class="{{if eq .Page "republisher"}}active{{end}}">Republisher</a>
             <a href="/tagpacks" class="{{if eq .Page "tagpacks"}}active{{end}}">TagPacks</a>
-            <a href="/triggers" class="{{if eq .Page "triggers"}}active{{end}}">Triggers</a>
-            <a href="/push" class="{{if eq .Page "push"}}active{{end}}">Push</a>
+            <a href="/rules" class="{{if eq .Page "rules"}}active{{end}}">Rules</a>
             <a href="/rest" class="{{if eq .Page "rest"}}active{{end}}">REST</a>
             <a href="/mqtt" class="{{if eq .Page "mqtt"}}active{{end}}">MQTT</a>
             <a href="/valkey" class="{{if eq .Page "valkey"}}active{{end}}">Valkey</a>

@@ -70,8 +70,7 @@ type Config struct {
 	MQTT      []MQTTConfig     `yaml:"mqtt"`
 	Valkey    []ValkeyConfig   `yaml:"valkey,omitempty"`
 	Kafka     []KafkaConfig    `yaml:"kafka,omitempty"`
-	Triggers  []TriggerConfig  `yaml:"triggers,omitempty"`
-	Pushes    []PushConfig     `yaml:"pushes,omitempty"`
+	Rules     []RuleConfig     `yaml:"rules,omitempty"`
 	TagPacks  []TagPackConfig  `yaml:"tag_packs,omitempty"`
 	PollRate  time.Duration    `yaml:"poll_rate"`
 	UI        UIConfig         `yaml:"ui,omitempty"`
@@ -371,73 +370,91 @@ type KafkaConfig struct {
 	WriteMaxAge     time.Duration `yaml:"write_max_age,omitempty"`    // Max age of write requests to process (default: 2s)
 }
 
-// PushCondition defines a condition that can trigger a push notification.
-// Each condition references a specific PLC and tag with a comparison operator.
-type PushCondition struct {
-	PLC      string      `yaml:"plc"`
-	Tag      string      `yaml:"tag"`
-	Operator string      `yaml:"operator"` // ==, !=, >, <, >=, <=
-	Value    interface{} `yaml:"value"`
-}
-
-// PushAuthType represents the authentication method for a push endpoint.
-type PushAuthType string
+// RuleLogicMode determines how multiple conditions are combined.
+type RuleLogicMode string
 
 const (
-	PushAuthNone         PushAuthType = ""
-	PushAuthBearer       PushAuthType = "bearer"
-	PushAuthBasic        PushAuthType = "basic"
-	PushAuthJWT          PushAuthType = "jwt"
-	PushAuthCustomHeader PushAuthType = "custom_header"
+	RuleLogicAND RuleLogicMode = "and"
+	RuleLogicOR  RuleLogicMode = "or"
 )
 
-// PushAuthConfig holds authentication configuration for a push endpoint.
-type PushAuthConfig struct {
-	Type        PushAuthType `yaml:"type,omitempty"`
-	Token       string       `yaml:"token,omitempty"`        // Bearer/JWT
-	Username    string       `yaml:"username,omitempty"`      // Basic auth
-	Password    string       `yaml:"password,omitempty"`      // Basic auth
-	HeaderName  string       `yaml:"header_name,omitempty"`   // Custom header
-	HeaderValue string       `yaml:"header_value,omitempty"`  // Custom header
+// RuleCondition defines a single condition for a rule.
+type RuleCondition struct {
+	PLC      string      `yaml:"plc" json:"plc"`
+	Tag      string      `yaml:"tag" json:"tag"`
+	Operator string      `yaml:"operator" json:"operator"` // ==, !=, >, <, >=, <=
+	Value    interface{} `yaml:"value" json:"value"`
+	Not      bool        `yaml:"not,omitempty" json:"not,omitempty"`
 }
 
-// PushConfig holds configuration for an HTTP push notification.
-type PushConfig struct {
-	Name            string            `yaml:"name"`
-	Enabled         bool              `yaml:"enabled"`
-	Conditions      []PushCondition   `yaml:"conditions"`                       // Multiple triggers (OR logic)
-	URL             string            `yaml:"url"`
-	Method          string            `yaml:"method"`                           // GET, POST, PUT, PATCH
-	ContentType     string            `yaml:"content_type,omitempty"`           // application/json, text/plain
-	Headers         map[string]string `yaml:"headers,omitempty"`
-	Body            string            `yaml:"body,omitempty"`                   // Template with #PLC.tagName refs
-	Auth            PushAuthConfig    `yaml:"auth,omitempty"`
-	CooldownMin     time.Duration     `yaml:"cooldown_min,omitempty"`           // Min interval (default 15m)
-	CooldownPerCond bool              `yaml:"cooldown_per_condition,omitempty"` // false=global, true=per-condition
-	Timeout         time.Duration     `yaml:"timeout,omitempty"`                // HTTP timeout (default 30s)
+// RuleActionType identifies the kind of action a rule performs.
+type RuleActionType string
+
+const (
+	ActionPublish   RuleActionType = "publish"
+	ActionWebhook   RuleActionType = "webhook"
+	ActionWriteback RuleActionType = "writeback"
+)
+
+// RuleAction defines a single action to execute when a rule fires or clears.
+type RuleAction struct {
+	Type RuleActionType `yaml:"type" json:"type"`
+	Name string         `yaml:"name,omitempty" json:"name,omitempty"` // Label for logging/UI
+
+	// --- Publish (type=publish) ---
+	TagOrPack      string `yaml:"tag_or_pack,omitempty" json:"tag_or_pack,omitempty"`
+	IncludeTrigger bool   `yaml:"include_trigger,omitempty" json:"include_trigger,omitempty"`
+	MQTTBroker     string `yaml:"mqtt_broker,omitempty" json:"mqtt_broker,omitempty"`
+	MQTTTopic      string `yaml:"mqtt_topic,omitempty" json:"mqtt_topic,omitempty"`
+	KafkaCluster   string `yaml:"kafka_cluster,omitempty" json:"kafka_cluster,omitempty"`
+	KafkaTopic     string `yaml:"kafka_topic,omitempty" json:"kafka_topic,omitempty"`
+
+	// --- Webhook (type=webhook) ---
+	URL         string            `yaml:"url,omitempty" json:"url,omitempty"`
+	Method      string            `yaml:"method,omitempty" json:"method,omitempty"`
+	ContentType string            `yaml:"content_type,omitempty" json:"content_type,omitempty"`
+	Headers     map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Body        string            `yaml:"body,omitempty" json:"body,omitempty"`
+	Auth        RuleAuthConfig    `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Timeout     time.Duration     `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+
+	// --- Writeback (type=writeback) ---
+	WritePLC   string      `yaml:"write_plc,omitempty" json:"write_plc,omitempty"`
+	WriteTag   string      `yaml:"write_tag,omitempty" json:"write_tag,omitempty"`
+	WriteValue interface{} `yaml:"write_value,omitempty" json:"write_value,omitempty"`
 }
 
-// TriggerCondition defines when a trigger fires.
-type TriggerCondition struct {
-	Operator string      `yaml:"operator"` // ==, !=, >, <, >=, <=
-	Value    interface{} `yaml:"value"`    // Value to compare against
+// RuleAuthType represents the authentication method for a webhook action.
+type RuleAuthType string
+
+const (
+	RuleAuthNone         RuleAuthType = ""
+	RuleAuthBearer       RuleAuthType = "bearer"
+	RuleAuthBasic        RuleAuthType = "basic"
+	RuleAuthJWT          RuleAuthType = "jwt"
+	RuleAuthCustomHeader RuleAuthType = "custom_header"
+)
+
+// RuleAuthConfig holds authentication configuration for a webhook action.
+type RuleAuthConfig struct {
+	Type        RuleAuthType `yaml:"type,omitempty" json:"type,omitempty"`
+	Token       string       `yaml:"token,omitempty" json:"token,omitempty"`
+	Username    string       `yaml:"username,omitempty" json:"username,omitempty"`
+	Password    string       `yaml:"password,omitempty" json:"password,omitempty"`
+	HeaderName  string       `yaml:"header_name,omitempty" json:"header_name,omitempty"`
+	HeaderValue string       `yaml:"header_value,omitempty" json:"header_value,omitempty"`
 }
 
-// TriggerConfig holds configuration for an event-driven data capture trigger.
-type TriggerConfig struct {
-	Name         string            `yaml:"name"`
-	Enabled      bool              `yaml:"enabled"`
-	PLC          string            `yaml:"plc"`                    // PLC name to monitor
-	TriggerTag   string            `yaml:"trigger_tag"`            // Tag to watch for condition
-	Condition    TriggerCondition  `yaml:"condition"`              // When to fire
-	AckTag       string            `yaml:"ack_tag,omitempty"`      // Tag to write status: 1=success, -1=error
-	DebounceMS   int               `yaml:"debounce_ms,omitempty"`  // Debounce time in milliseconds
-	Tags         []string          `yaml:"tags"`                   // Tags to capture when triggered
-	MQTTBroker   string            `yaml:"mqtt_broker"`            // MQTT broker: "all", "none", or specific broker name
-	KafkaCluster string            `yaml:"kafka_cluster"`          // Kafka cluster: "all", "none", or specific cluster name
-	Selector     string            `yaml:"selector,omitempty"`     // Optional sub-namespace for topic
-	Metadata     map[string]string `yaml:"metadata,omitempty"`     // Static metadata to include
-	PublishPack  string            `yaml:"publish_pack,omitempty"` // TagPack name to republish on trigger
+// RuleConfig holds configuration for an automation rule.
+type RuleConfig struct {
+	Name           string          `yaml:"name"`
+	Enabled        bool            `yaml:"enabled"`
+	Conditions     []RuleCondition `yaml:"conditions"`                // Up to 10
+	LogicMode      RuleLogicMode   `yaml:"logic_mode,omitempty"`     // "and" (default) or "or"
+	DebounceMS     int             `yaml:"debounce_ms,omitempty"`
+	CooldownMS     int             `yaml:"cooldown_ms,omitempty"`    // Min interval before re-arm
+	Actions        []RuleAction    `yaml:"actions"`                  // Fired on rising edge
+	ClearedActions []RuleAction    `yaml:"cleared_actions,omitempty"` // Fired on falling edge
 }
 
 // DefaultConfig returns a configuration with sensible defaults.
@@ -459,8 +476,7 @@ func DefaultConfig() *Config {
 		MQTT:     []MQTTConfig{},
 		Valkey:   []ValkeyConfig{},
 		Kafka:    []KafkaConfig{},
-		Triggers: []TriggerConfig{},
-		Pushes:   []PushConfig{},
+		Rules:    []RuleConfig{},
 	}
 }
 
@@ -750,74 +766,37 @@ func (c *Config) UpdateKafka(name string, updated KafkaConfig) bool {
 	return false
 }
 
-// FindTrigger returns the Trigger config with the given name, or nil if not found.
-func (c *Config) FindTrigger(name string) *TriggerConfig {
-	for i := range c.Triggers {
-		if c.Triggers[i].Name == name {
-			return &c.Triggers[i]
+// FindRule returns the Rule config with the given name, or nil if not found.
+func (c *Config) FindRule(name string) *RuleConfig {
+	for i := range c.Rules {
+		if c.Rules[i].Name == name {
+			return &c.Rules[i]
 		}
 	}
 	return nil
 }
 
-// AddTrigger adds a new Trigger configuration.
-func (c *Config) AddTrigger(trigger TriggerConfig) {
-	c.Triggers = append(c.Triggers, trigger)
+// AddRule adds a new Rule configuration.
+func (c *Config) AddRule(rule RuleConfig) {
+	c.Rules = append(c.Rules, rule)
 }
 
-// RemoveTrigger removes a Trigger config by name.
-func (c *Config) RemoveTrigger(name string) bool {
-	for i, t := range c.Triggers {
-		if t.Name == name {
-			c.Triggers = append(c.Triggers[:i], c.Triggers[i+1:]...)
+// RemoveRule removes a Rule config by name.
+func (c *Config) RemoveRule(name string) bool {
+	for i, r := range c.Rules {
+		if r.Name == name {
+			c.Rules = append(c.Rules[:i], c.Rules[i+1:]...)
 			return true
 		}
 	}
 	return false
 }
 
-// UpdateTrigger updates an existing Trigger configuration.
-func (c *Config) UpdateTrigger(name string, updated TriggerConfig) bool {
-	for i, t := range c.Triggers {
-		if t.Name == name {
-			c.Triggers[i] = updated
-			return true
-		}
-	}
-	return false
-}
-
-// FindPush returns the Push config with the given name, or nil if not found.
-func (c *Config) FindPush(name string) *PushConfig {
-	for i := range c.Pushes {
-		if c.Pushes[i].Name == name {
-			return &c.Pushes[i]
-		}
-	}
-	return nil
-}
-
-// AddPush adds a new Push configuration.
-func (c *Config) AddPush(push PushConfig) {
-	c.Pushes = append(c.Pushes, push)
-}
-
-// RemovePush removes a Push config by name.
-func (c *Config) RemovePush(name string) bool {
-	for i, p := range c.Pushes {
-		if p.Name == name {
-			c.Pushes = append(c.Pushes[:i], c.Pushes[i+1:]...)
-			return true
-		}
-	}
-	return false
-}
-
-// UpdatePush updates an existing Push configuration.
-func (c *Config) UpdatePush(name string, updated PushConfig) bool {
-	for i, p := range c.Pushes {
-		if p.Name == name {
-			c.Pushes[i] = updated
+// UpdateRule updates an existing Rule configuration.
+func (c *Config) UpdateRule(name string, updated RuleConfig) bool {
+	for i, r := range c.Rules {
+		if r.Name == name {
+			c.Rules[i] = updated
 			return true
 		}
 	}

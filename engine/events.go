@@ -41,23 +41,13 @@ const (
 	EventKafkaConnected
 	EventKafkaDisconnected
 
-	// Trigger events
-	EventTriggerCreated
-	EventTriggerUpdated
-	EventTriggerDeleted
-	EventTriggerStarted
-	EventTriggerStopped
-	EventTriggerTestFired
-	EventTriggerTagAdded
-	EventTriggerTagRemoved
-
-	// Push events
-	EventPushCreated
-	EventPushUpdated
-	EventPushDeleted
-	EventPushStarted
-	EventPushStopped
-	EventPushTestFired
+	// Rule events
+	EventRuleCreated
+	EventRuleUpdated
+	EventRuleDeleted
+	EventRuleStarted
+	EventRuleStopped
+	EventRuleTestFired
 
 	// TagPack events
 	EventTagPackCreated
@@ -98,20 +88,8 @@ type ServiceEvent struct {
 	Name string
 }
 
-// TriggerEvent is the payload for trigger lifecycle events.
-type TriggerEvent struct {
-	Name string
-}
-
-// TriggerTagEvent is the payload for trigger tag add/remove events.
-type TriggerTagEvent struct {
-	TriggerName string
-	Tag         string
-	Index       int
-}
-
-// PushEvent is the payload for push lifecycle events.
-type PushEvent struct {
+// RuleEvent is the payload for rule lifecycle events.
+type RuleEvent struct {
 	Name string
 }
 

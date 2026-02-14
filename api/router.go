@@ -12,27 +12,9 @@ import (
 
 	"warlink/config"
 	"warlink/engine"
-	"warlink/kafka"
-	"warlink/mqtt"
 	"warlink/plcman"
-	"warlink/push"
 	"warlink/tagpack"
-	"warlink/trigger"
-	"warlink/valkey"
 )
-
-// Managers provides access to shared backend managers.
-type Managers interface {
-	GetConfig() *config.Config
-	GetConfigPath() string
-	GetPLCMan() *plcman.Manager
-	GetMQTTMgr() *mqtt.Manager
-	GetValkeyMgr() *valkey.Manager
-	GetKafkaMgr() *kafka.Manager
-	GetTriggerMgr() *trigger.Manager
-	GetPushMgr() *push.Manager
-	GetPackMgr() *tagpack.Manager
-}
 
 // PLCResponse is the JSON response for PLC info.
 type PLCResponse struct {
@@ -84,12 +66,12 @@ type WriteResponse struct {
 
 // handlers holds the API handler functions.
 type handlers struct {
-	managers Managers
+	managers engine.Managers
 	engine   *engine.Engine
 }
 
 // NewRouter creates the REST API router.
-func NewRouter(managers Managers) chi.Router {
+func NewRouter(managers engine.Managers) chi.Router {
 	r := chi.NewRouter()
 	h := &handlers{managers: managers}
 
@@ -145,21 +127,15 @@ func NewRouter(managers Managers) chi.Router {
 		r.Post("/{name}/connect", h.handleConnectKafka)
 		r.Post("/{name}/disconnect", h.handleDisconnectKafka)
 	})
-	r.Route("/triggers", func(r chi.Router) {
-		r.Post("/", h.handleCreateTrigger)
-		r.Put("/{name}", h.handleUpdateTrigger)
-		r.Delete("/{name}", h.handleDeleteTrigger)
-		r.Post("/{name}/start", h.handleStartTrigger)
-		r.Post("/{name}/stop", h.handleStopTrigger)
-		r.Post("/{name}/test", h.handleTestFireTrigger)
-	})
-	r.Route("/push", func(r chi.Router) {
-		r.Post("/", h.handleCreatePush)
-		r.Put("/{name}", h.handleUpdatePush)
-		r.Delete("/{name}", h.handleDeletePush)
-		r.Post("/{name}/start", h.handleStartPush)
-		r.Post("/{name}/stop", h.handleStopPush)
-		r.Post("/{name}/test", h.handleTestFirePush)
+	r.Route("/rules", func(r chi.Router) {
+		r.Get("/", h.handleListRules)
+		r.Post("/", h.handleCreateRule)
+		r.Get("/{name}", h.handleGetRule)
+		r.Put("/{name}", h.handleUpdateRule)
+		r.Delete("/{name}", h.handleDeleteRule)
+		r.Post("/{name}/start", h.handleStartRule)
+		r.Post("/{name}/stop", h.handleStopRule)
+		r.Post("/{name}/test", h.handleTestFireRule)
 	})
 	r.Route("/tagpacks", func(r chi.Router) {
 		r.Post("/", h.handleCreateTagPack)

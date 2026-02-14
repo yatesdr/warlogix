@@ -31,7 +31,7 @@
     <div class="modal-content modal-lg">
         <div class="modal-header">
             <h2>PLC Information</h2>
-            <button class="modal-close" onclick="hideInfoModal()">&times;</button>
+            <button class="modal-close" onclick="WarLink.hideModal('plc-info-modal')">&times;</button>
         </div>
         <div class="modal-body" id="plc-info-content">
             Loading...
@@ -44,7 +44,7 @@
     <div class="modal-content modal-lg">
         <div class="modal-header">
             <h2>Edit PLC</h2>
-            <button class="modal-close" onclick="hideEditModal()">&times;</button>
+            <button class="modal-close" onclick="WarLink.hideModal('plc-edit-modal')">&times;</button>
         </div>
         <form id="plc-edit-form" onsubmit="savePLC(event)">
             <input type="hidden" id="edit-plc-name" name="name">
@@ -148,7 +148,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn" onclick="hideEditModal()">Cancel</button>
+                <button type="button" class="btn" onclick="WarLink.hideModal('plc-edit-modal')">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save Changes</button>
             </div>
         </form>
@@ -160,7 +160,7 @@
     <div class="modal-content modal-lg">
         <div class="modal-header">
             <h2>Add PLC</h2>
-            <button class="modal-close" onclick="hideAddPLCModal()">&times;</button>
+            <button class="modal-close" onclick="WarLink.hideModal('plc-add-modal')">&times;</button>
         </div>
         <form id="plc-add-form" onsubmit="addPLC(event)">
             <div class="modal-body">
@@ -269,7 +269,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn" onclick="hideAddPLCModal()">Cancel</button>
+                <button type="button" class="btn" onclick="WarLink.hideModal('plc-add-modal')">Cancel</button>
                 <button type="submit" class="btn btn-primary">Add PLC</button>
             </div>
         </form>
@@ -281,7 +281,7 @@
     <div class="modal-content modal-xl">
         <div class="modal-header">
             <h2>Detect PLCs</h2>
-            <button class="modal-close" onclick="hideDetectModal()">&times;</button>
+            <button class="modal-close" onclick="WarLink.hideModal('plc-detect-modal')">&times;</button>
         </div>
         <div class="modal-body">
             <div id="detect-status" class="detect-status">
@@ -309,7 +309,7 @@
             </div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn" onclick="hideDetectModal()">Close</button>
+            <button type="button" class="btn" onclick="WarLink.hideModal('plc-detect-modal')">Close</button>
             <button type="button" class="btn btn-primary" onclick="detectPLCs()">Rescan</button>
         </div>
     </div>
@@ -321,37 +321,36 @@ function showInfoFromRow(btn) {
     if (!row) return;
 
     var d = row.dataset;
-    var modal = document.getElementById('plc-info-modal');
     var content = document.getElementById('plc-info-content');
 
     var html = '<table class="info-table">';
-    html += '<tr><th>Name</th><td>' + escapeHtml(d.name) + '</td></tr>';
-    html += '<tr><th>Address</th><td>' + escapeHtml(d.address) + '</td></tr>';
-    html += '<tr><th>Family</th><td>' + escapeHtml(d.family) + '</td></tr>';
+    html += '<tr><th>Name</th><td>' + WarLink.escapeHtml(d.name) + '</td></tr>';
+    html += '<tr><th>Address</th><td>' + WarLink.escapeHtml(d.address) + '</td></tr>';
+    html += '<tr><th>Family</th><td>' + WarLink.escapeHtml(d.family) + '</td></tr>';
     html += '<tr><th>Slot</th><td>' + d.slot + '</td></tr>';
-    html += '<tr><th>Status</th><td><span class="status-badge ' + d.statusClass + '">' + escapeHtml(d.status) + '</span></td></tr>';
+    html += '<tr><th>Status</th><td><span class="status-badge ' + d.statusClass + '">' + WarLink.escapeHtml(d.status) + '</span></td></tr>';
     html += '<tr><th>Auto-connect</th><td>' + (d.enabled === 'true' ? 'Yes' : 'No') + '</td></tr>';
     if (d.product) {
-        html += '<tr><th>Product</th><td>' + escapeHtml(d.product) + '</td></tr>';
+        html += '<tr><th>Product</th><td>' + WarLink.escapeHtml(d.product) + '</td></tr>';
     }
     if (d.serial) {
-        html += '<tr><th>Serial</th><td>' + escapeHtml(d.serial) + '</td></tr>';
+        html += '<tr><th>Serial</th><td>' + WarLink.escapeHtml(d.serial) + '</td></tr>';
     }
     if (d.vendor) {
-        html += '<tr><th>Vendor</th><td>' + escapeHtml(d.vendor) + '</td></tr>';
+        html += '<tr><th>Vendor</th><td>' + WarLink.escapeHtml(d.vendor) + '</td></tr>';
     }
     html += '<tr><th>Tags</th><td>' + d.tags + '</td></tr>';
     if (d.pollRate && d.pollRate !== '' && d.pollRate !== '0s') {
-        html += '<tr><th>Poll Rate</th><td>' + escapeHtml(d.pollRate) + '</td></tr>';
+        html += '<tr><th>Poll Rate</th><td>' + WarLink.escapeHtml(d.pollRate) + '</td></tr>';
     }
     if (d.error) {
-        html += '<tr><th>Error</th><td class="text-danger">' + escapeHtml(d.error) + '</td></tr>';
+        html += '<tr><th>Error</th><td class="text-danger">' + WarLink.escapeHtml(d.error) + '</td></tr>';
     }
 
     // Family-specific info
     if (d.family === 'Beckhoff') {
         if (d.amsNetId) {
-            html += '<tr><th>AMS Net ID</th><td>' + escapeHtml(d.amsNetId) + '</td></tr>';
+            html += '<tr><th>AMS Net ID</th><td>' + WarLink.escapeHtml(d.amsNetId) + '</td></tr>';
         }
         if (d.amsPort && d.amsPort !== '0') {
             html += '<tr><th>AMS Port</th><td>' + d.amsPort + '</td></tr>';
@@ -359,34 +358,24 @@ function showInfoFromRow(btn) {
     }
     if (d.family === 'Omron') {
         if (d.protocol) {
-            html += '<tr><th>Protocol</th><td>' + escapeHtml(d.protocol) + '</td></tr>';
+            html += '<tr><th>Protocol</th><td>' + WarLink.escapeHtml(d.protocol) + '</td></tr>';
         }
         if (d.finsPort && d.finsPort !== '0') {
             html += '<tr><th>FINS Port</th><td>' + d.finsPort + '</td></tr>';
         }
     }
     if (d.connectionMode && d.connectionMode !== 'Not connected') {
-        html += '<tr><th>Connection</th><td>' + escapeHtml(d.connectionMode) + '</td></tr>';
+        html += '<tr><th>Connection</th><td>' + WarLink.escapeHtml(d.connectionMode) + '</td></tr>';
     }
 
     html += '</table>';
     content.innerHTML = html;
-    modal.style.display = 'flex';
-}
-
-function hideInfoModal() {
-    document.getElementById('plc-info-modal').style.display = 'none';
+    WarLink.showModal('plc-info-modal');
 }
 
 function showEditModal(name) {
-    fetch('/htmx/plcs/' + encodeURIComponent(name))
-        .then(function(response) {
-            if (!response.ok) throw new Error('Failed to load PLC');
-            return response.json();
-        })
+    WarLink.api.get('/htmx/plcs/' + encodeURIComponent(name))
         .then(function(data) {
-            console.log('PLC data received:', data);
-            console.log('poll_rate value:', data.poll_rate, 'type:', typeof data.poll_rate);
             document.getElementById('edit-plc-name').value = data.name;
             document.getElementById('edit-address').value = data.address;
             document.getElementById('edit-slot').value = data.slot;
@@ -409,15 +398,11 @@ function showEditModal(name) {
             document.getElementById('edit-fins-unit').value = data.fins_unit || 0;
 
             updateFamilyFields();
-            document.getElementById('plc-edit-modal').style.display = 'flex';
+            WarLink.showModal('plc-edit-modal');
         })
         .catch(function(err) {
-            alert('Error loading PLC: ' + err.message);
+            WarLink.toast('Error loading PLC: ' + err.message, 'error');
         });
-}
-
-function hideEditModal() {
-    document.getElementById('plc-edit-modal').style.display = 'none';
 }
 
 function updateFamilyFields() {
@@ -453,37 +438,29 @@ function savePLC(e) {
         discover_tags: document.getElementById('edit-discover-tags').checked
     };
 
-    fetch('/htmx/plcs/' + encodeURIComponent(name), {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    })
-    .then(function(response) {
-        if (!response.ok) {
-            return response.text().then(function(msg) { throw new Error(msg); });
-        }
-        hideEditModal();
-        // Update the row in place with the edited values
-        var row = document.querySelector('.plc-row[data-name="' + name + '"]');
-        if (row) {
-            row.dataset.address = data.address;
-            row.dataset.slot = data.slot;
-            row.dataset.family = data.family;
-            row.dataset.enabled = data.enabled;
-            row.dataset.pollRate = data.poll_rate;
-            row.dataset.amsNetId = data.ams_net_id || '';
-            row.dataset.amsPort = data.ams_port || '';
-            row.dataset.protocol = data.protocol || '';
-            row.dataset.finsPort = data.fins_port || '';
-            // Update visible cells
-            row.cells[1].textContent = data.address;
-            row.cells[2].textContent = data.family;
-        }
-        // SSE will handle status updates
-    })
-    .catch(function(err) {
-        alert('Error saving PLC: ' + err.message);
-    });
+    WarLink.api.put('/htmx/plcs/' + encodeURIComponent(name), data)
+        .then(function() {
+            WarLink.hideModal('plc-edit-modal');
+            // Update the row in place with the edited values
+            var row = document.querySelector('.plc-row[data-name="' + name + '"]');
+            if (row) {
+                row.dataset.address = data.address;
+                row.dataset.slot = data.slot;
+                row.dataset.family = data.family;
+                row.dataset.enabled = data.enabled;
+                row.dataset.pollRate = data.poll_rate;
+                row.dataset.amsNetId = data.ams_net_id || '';
+                row.dataset.amsPort = data.ams_port || '';
+                row.dataset.protocol = data.protocol || '';
+                row.dataset.finsPort = data.fins_port || '';
+                // Update visible cells
+                row.cells[1].textContent = data.address;
+                row.cells[2].textContent = data.family;
+            }
+        })
+        .catch(function(err) {
+            WarLink.toast('Error saving PLC: ' + err.message, 'error');
+        });
 }
 
 // Add PLC functions
@@ -492,11 +469,7 @@ function showAddPLCModal() {
     document.getElementById('add-enabled').checked = true;
     document.getElementById('add-health-check').checked = true;
     updateAddFamilyFields();
-    document.getElementById('plc-add-modal').style.display = 'flex';
-}
-
-function hideAddPLCModal() {
-    document.getElementById('plc-add-modal').style.display = 'none';
+    WarLink.showModal('plc-add-modal');
 }
 
 function updateAddFamilyFields() {
@@ -531,98 +504,84 @@ function addPLC(e) {
         discover_tags: document.getElementById('add-discover-tags').checked
     };
 
-    fetch('/htmx/plcs', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    })
-    .then(function(response) {
-        if (!response.ok) {
-            return response.text().then(function(msg) { throw new Error(msg); });
-        }
-        hideAddPLCModal();
-        // Add the new row to the table
-        var tbody = document.querySelector('#plcs-container tbody');
-        if (!tbody) return;
-        // Remove "No PLCs configured" row if present
-        var emptyCell = tbody.querySelector('.empty-cell');
-        if (emptyCell) {
-            emptyCell.parentElement.remove();
-        }
-        var tr = document.createElement('tr');
-        tr.className = 'plc-row';
-        tr.dataset.name = data.name;
-        tr.dataset.address = data.address;
-        tr.dataset.slot = data.slot;
-        tr.dataset.family = data.family;
-        tr.dataset.status = 'Disconnected';
-        tr.dataset.statusClass = 'status-disconnected';
-        tr.dataset.enabled = data.enabled;
-        tr.dataset.product = '';
-        tr.dataset.serial = '';
-        tr.dataset.vendor = '';
-        tr.dataset.tags = '0';
-        tr.dataset.pollRate = data.poll_rate || '';
-        tr.dataset.error = '';
-        tr.dataset.amsNetId = data.ams_net_id || '';
-        tr.dataset.amsPort = data.ams_port || '';
-        tr.dataset.protocol = data.protocol || '';
-        tr.dataset.finsPort = data.fins_port || '';
-        tr.dataset.connectionMode = '';
-        var statusCell = '{{if .IsAdmin}}<button class="status-indicator status-disconnected" onclick="toggleConnection(\'' + escapeHtml(data.name) + '\')" title="Click to connect">Disconnected</button>{{else}}<span class="status-badge status-disconnected">Disconnected</span>{{end}}';
-        var actionsHtml = '<button class="btn-icon" title="Info" onclick="showInfoFromRow(this)"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><text x="8" y="11.5" text-anchor="middle" font-size="9" font-weight="bold" fill="currentColor">i</text></svg></button>';
-        {{if .IsAdmin}}
-        actionsHtml += '<button class="btn-icon" title="Settings" onclick="showEditModal(\'' + escapeHtml(data.name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/></svg></button>';
-        actionsHtml += '<button class="btn-icon btn-icon-danger" title="Delete" onclick="deletePLC(\'' + escapeHtml(data.name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/><path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/></svg></button>';
-        {{end}}
-        tr.innerHTML = '<td>' + escapeHtml(data.name) + '</td>' +
-            '<td>' + escapeHtml(data.address) + '</td>' +
-            '<td>' + escapeHtml(data.family) + '</td>' +
-            '<td></td>' +
-            '<td>0</td>' +
-            '<td>' + statusCell + '</td>' +
-            '<td class="actions">' + actionsHtml + '</td>';
-        tbody.appendChild(tr);
-        // SSE will update status once the PLC connects
-    })
-    .catch(function(err) {
-        alert('Error adding PLC: ' + err.message);
-    });
+    WarLink.api.post('/htmx/plcs', data)
+        .then(function() {
+            WarLink.hideModal('plc-add-modal');
+            // Add the new row to the table
+            var tbody = document.querySelector('#plcs-container tbody');
+            if (!tbody) return;
+            // Remove "No PLCs configured" row if present
+            var emptyCell = tbody.querySelector('.empty-cell');
+            if (emptyCell) {
+                emptyCell.parentElement.remove();
+            }
+            var tr = document.createElement('tr');
+            tr.className = 'plc-row';
+            tr.dataset.name = data.name;
+            tr.dataset.address = data.address;
+            tr.dataset.slot = data.slot;
+            tr.dataset.family = data.family;
+            tr.dataset.status = 'Disconnected';
+            tr.dataset.statusClass = 'status-disconnected';
+            tr.dataset.enabled = data.enabled;
+            tr.dataset.product = '';
+            tr.dataset.serial = '';
+            tr.dataset.vendor = '';
+            tr.dataset.tags = '0';
+            tr.dataset.pollRate = data.poll_rate || '';
+            tr.dataset.error = '';
+            tr.dataset.amsNetId = data.ams_net_id || '';
+            tr.dataset.amsPort = data.ams_port || '';
+            tr.dataset.protocol = data.protocol || '';
+            tr.dataset.finsPort = data.fins_port || '';
+            tr.dataset.connectionMode = '';
+            var statusCell = '{{if .IsAdmin}}<button class="status-indicator status-disconnected" onclick="toggleConnection(\'' + WarLink.escapeHtml(data.name) + '\')" title="Click to connect">Disconnected</button>{{else}}<span class="status-badge status-disconnected">Disconnected</span>{{end}}';
+            var actionsHtml = '<button class="btn-icon" title="Info" onclick="showInfoFromRow(this)"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><text x="8" y="11.5" text-anchor="middle" font-size="9" font-weight="bold" fill="currentColor">i</text></svg></button>';
+            {{if .IsAdmin}}
+            actionsHtml += '<button class="btn-icon" title="Settings" onclick="showEditModal(\'' + WarLink.escapeHtml(data.name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 10a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M6.5 1a.5.5 0 00-.5.5v1.02a5.5 5.5 0 00-1.5.62l-.72-.72a.5.5 0 00-.71 0l-.71.71a.5.5 0 000 .71l.72.72a5.5 5.5 0 00-.62 1.5H1.5a.5.5 0 00-.5.5v1a.5.5 0 00.5.5h1.02a5.5 5.5 0 00.62 1.5l-.72.72a.5.5 0 000 .71l.71.71a.5.5 0 00.71 0l.72-.72a5.5 5.5 0 001.5.62v1.02a.5.5 0 00.5.5h1a.5.5 0 00.5-.5v-1.02a5.5 5.5 0 001.5-.62l.72.72a.5.5 0 00.71 0l.71-.71a.5.5 0 000-.71l-.72-.72a5.5 5.5 0 00.62-1.5h1.02a.5.5 0 00.5-.5v-1a.5.5 0 00-.5-.5h-1.02a5.5 5.5 0 00-.62-1.5l.72-.72a.5.5 0 000-.71l-.71-.71a.5.5 0 00-.71 0l-.72.72a5.5 5.5 0 00-1.5-.62V1.5a.5.5 0 00-.5-.5h-1zM8 11a3 3 0 100-6 3 3 0 000 6z"/></svg></button>';
+            actionsHtml += '<button class="btn-icon btn-icon-danger" title="Delete" onclick="deletePLC(\'' + WarLink.escapeHtml(data.name) + '\')"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5v6M8 5.5v6M10.5 5.5v6"/><path d="M3 4h10l-.75 9.25a1 1 0 01-1 .75H4.75a1 1 0 01-1-.75L3 4z" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M5.5 4V2.5a.5.5 0 01.5-.5h4a.5.5 0 01.5.5V4" fill="none" stroke="currentColor" stroke-width="1.25"/><path d="M2 4h12" stroke="currentColor" stroke-width="1.25"/></svg></button>';
+            {{end}}
+            tr.innerHTML = '<td>' + WarLink.escapeHtml(data.name) + '</td>' +
+                '<td>' + WarLink.escapeHtml(data.address) + '</td>' +
+                '<td>' + WarLink.escapeHtml(data.family) + '</td>' +
+                '<td></td>' +
+                '<td>0</td>' +
+                '<td>' + statusCell + '</td>' +
+                '<td class="actions">' + actionsHtml + '</td>';
+            tbody.appendChild(tr);
+        })
+        .catch(function(err) {
+            WarLink.toast('Error adding PLC: ' + err.message, 'error');
+        });
 }
 
 function deletePLC(name) {
     if (!confirm('Delete PLC "' + name + '"? This cannot be undone.')) return;
 
-    fetch('/htmx/plcs/' + encodeURIComponent(name), {
-        method: 'DELETE'
-    })
-    .then(function(response) {
-        if (!response.ok) {
-            return response.text().then(function(msg) { throw new Error(msg); });
-        }
-        // Remove the row from DOM
-        var row = document.querySelector('.plc-row[data-name="' + name + '"]');
-        if (row) {
-            // Also remove error row if present
-            var nextRow = row.nextElementSibling;
-            if (nextRow && nextRow.classList.contains('error-row')) {
-                nextRow.remove();
+    WarLink.api.del('/htmx/plcs/' + encodeURIComponent(name))
+        .then(function() {
+            // Remove the row from DOM
+            var row = document.querySelector('.plc-row[data-name="' + name + '"]');
+            if (row) {
+                // Also remove error row if present
+                var nextRow = row.nextElementSibling;
+                if (nextRow && nextRow.classList.contains('error-row')) {
+                    nextRow.remove();
+                }
+                row.remove();
             }
-            row.remove();
-        }
-        // Check if table is now empty
-        var tbody = document.querySelector('#plcs-container tbody');
-        if (tbody && tbody.querySelectorAll('.plc-row').length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">No PLCs configured</td></tr>';
-        }
-    })
-    .catch(function(err) {
-        alert('Error deleting PLC: ' + err.message);
-    });
+            // Check if table is now empty
+            var tbody = document.querySelector('#plcs-container tbody');
+            if (tbody && tbody.querySelectorAll('.plc-row').length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">No PLCs configured</td></tr>';
+            }
+        })
+        .catch(function(err) {
+            WarLink.toast('Error deleting PLC: ' + err.message, 'error');
+        });
 }
 
 function toggleConnection(name) {
-    // Read current status from the row's data attribute (kept up-to-date by SSE)
     var row = document.querySelector('.plc-row[data-name="' + name + '"]');
     if (!row) return;
     var currentStatus = row.dataset.status || 'Disconnected';
@@ -638,43 +597,30 @@ function toggleConnection(name) {
         btn.className = 'status-indicator status-connecting';
     }
 
-    fetch('/htmx/plcs/' + encodeURIComponent(name) + '/' + action, {
-        method: 'POST'
-    })
-    .then(function(response) {
-        if (!response.ok) {
-            return response.text().then(function(msg) { throw new Error(msg); });
-        }
-        // SSE will update the status
-    })
-    .catch(function(err) {
-        delete row.dataset.statusLock;
-        alert('Error: ' + err.message);
-        // Revert on error - SSE should correct it anyway
-    });
+    WarLink.api.post('/htmx/plcs/' + encodeURIComponent(name) + '/' + action)
+        .then(function() {
+            // SSE will update the status
+        })
+        .catch(function(err) {
+            delete row.dataset.statusLock;
+            WarLink.toast('Error: ' + err.message, 'error');
+        });
 }
 
 function detectPLCs() {
-    var modal = document.getElementById('plc-detect-modal');
     var status = document.getElementById('detect-status');
     var results = document.getElementById('detect-results');
     var empty = document.getElementById('detect-empty');
     var tbody = document.getElementById('detect-results-body');
 
     // Show modal and loading state
-    modal.style.display = 'flex';
+    WarLink.showModal('plc-detect-modal');
     status.style.display = 'flex';
     results.style.display = 'none';
     empty.style.display = 'none';
     tbody.innerHTML = '';
 
-    fetch('/htmx/discover')
-        .then(function(response) {
-            if (!response.ok) {
-                throw new Error('Discovery failed');
-            }
-            return response.json();
-        })
+    WarLink.api.get('/htmx/discover')
         .then(function(devices) {
             status.style.display = 'none';
 
@@ -686,16 +632,16 @@ function detectPLCs() {
             results.style.display = 'block';
             devices.forEach(function(dev) {
                 var tr = document.createElement('tr');
-                tr.innerHTML = '<td>' + escapeHtml(dev.ip) + '</td>' +
-                    '<td>' + escapeHtml(formatFamily(dev.family)) + '</td>' +
-                    '<td>' + escapeHtml(dev.product_name || '-') + '</td>' +
-                    '<td>' + escapeHtml(dev.vendor || '-') + '</td>' +
-                    '<td>' + escapeHtml(dev.protocol || '-') + '</td>' +
+                tr.innerHTML = '<td>' + WarLink.escapeHtml(dev.ip) + '</td>' +
+                    '<td>' + WarLink.escapeHtml(formatFamily(dev.family)) + '</td>' +
+                    '<td>' + WarLink.escapeHtml(dev.product_name || '-') + '</td>' +
+                    '<td>' + WarLink.escapeHtml(dev.vendor || '-') + '</td>' +
+                    '<td>' + WarLink.escapeHtml(dev.protocol || '-') + '</td>' +
                     '<td><button class="btn btn-sm btn-primary" onclick="addFromDetected(\'' +
-                        escapeHtml(dev.ip) + '\', \'' +
-                        escapeHtml(dev.family) + '\', \'' +
-                        escapeHtml(dev.product_name || '') + '\', \'' +
-                        escapeHtml(dev.extra && dev.extra.amsNetId || '') + '\')">Add</button></td>';
+                        WarLink.escapeHtml(dev.ip) + '\', \'' +
+                        WarLink.escapeHtml(dev.family) + '\', \'' +
+                        WarLink.escapeHtml(dev.product_name || '') + '\', \'' +
+                        WarLink.escapeHtml(dev.extra && dev.extra.amsNetId || '') + '\')">Add</button></td>';
                 tbody.appendChild(tr);
             });
         })
@@ -704,10 +650,6 @@ function detectPLCs() {
             empty.style.display = 'block';
             empty.textContent = 'Error: ' + err.message;
         });
-}
-
-function hideDetectModal() {
-    document.getElementById('plc-detect-modal').style.display = 'none';
 }
 
 function formatFamily(family) {
@@ -722,7 +664,6 @@ function formatFamily(family) {
 }
 
 function addFromDetected(ip, family, productName, amsNetId) {
-    // Generate a name from the IP
     var name = 'plc_' + ip.replace(/\./g, '_');
 
     document.getElementById('add-name').value = name;
@@ -730,14 +671,13 @@ function addFromDetected(ip, family, productName, amsNetId) {
     document.getElementById('add-family').value = family;
     document.getElementById('add-enabled').checked = true;
 
-    // Set Beckhoff-specific fields
     if (family === 'beckhoff' && amsNetId) {
         document.getElementById('add-ams-net-id').value = amsNetId;
     }
 
     updateAddFamilyFields();
-    hideDetectModal();
-    document.getElementById('plc-add-modal').style.display = 'flex';
+    WarLink.hideModal('plc-detect-modal');
+    WarLink.showModal('plc-add-modal');
 }
 
 // Show/hide the "Auto-discover Tags" checkbox based on family/protocol.
@@ -765,136 +705,113 @@ function updateDiscoverTagsVisibility(prefix) {
     }
 }
 
-function escapeHtml(text) {
-    if (text === null || text === undefined) return '';
-    var div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+// SSE for real-time PLC updates
+function onStatusChange(data) {
+    var row = document.querySelector('.plc-row[data-name="' + data.plc + '"]');
+    if (!row) return;
+
+    var statusText = WarLink.capitalizeFirst(data.status);
+
+    // Update data attributes (always, these don't trigger reflow)
+    row.dataset.status = statusText;
+    row.dataset.statusClass = data.statusClass;
+    row.dataset.tags = data.tagCount;
+    row.dataset.error = data.error || '';
+    if (data.productName) row.dataset.product = data.productName;
+    if (data.serialNumber) row.dataset.serial = data.serialNumber;
+    if (data.vendor) row.dataset.vendor = data.vendor;
+    if (data.connectionMode) row.dataset.connectionMode = data.connectionMode;
+
+    // If user just clicked connect/disconnect, suppress SSE button updates
+    // briefly so stale events don't revert the button
+    var lockUntil = parseInt(row.dataset.statusLock, 10);
+    if (lockUntil && Date.now() < lockUntil) {
+        return;
+    }
+    if (lockUntil) {
+        delete row.dataset.statusLock;
+        delete row.dataset.lastStatusEvent;
+    }
+
+    // Skip DOM updates if nothing visible changed (avoids reflow that can swallow clicks)
+    var eventKey = data.status + '|' + data.tagCount + '|' + (data.error || '');
+    if (row.dataset.lastStatusEvent === eventKey) {
+        return;
+    }
+    row.dataset.lastStatusEvent = eventKey;
+
+    // Update status button/badge
+    var statusCell = row.cells[5];
+    var statusBtn = statusCell.querySelector('.status-indicator');
+    var statusBadge = statusCell.querySelector('.status-badge');
+
+    if (statusBtn) {
+        var newClass = 'status-indicator ' + data.statusClass;
+        if (statusBtn.className !== newClass) statusBtn.className = newClass;
+        if (statusBtn.textContent !== statusText) statusBtn.textContent = statusText;
+        var shouldDisable = data.status !== 'connected' && data.status !== 'disconnected';
+        if (statusBtn.disabled !== shouldDisable) statusBtn.disabled = shouldDisable;
+        var newTitle = shouldDisable ? statusText : (data.status === 'connected' ? 'Click to disconnect' : 'Click to connect');
+        if (statusBtn.title !== newTitle) statusBtn.title = newTitle;
+    } else if (statusBadge) {
+        var newClass = 'status-badge ' + data.statusClass;
+        if (statusBadge.className !== newClass) statusBadge.className = newClass;
+        if (statusBadge.textContent !== statusText) statusBadge.textContent = statusText;
+    }
+
+    // Update tag count
+    var tagStr = String(data.tagCount);
+    if (row.cells[4].textContent !== tagStr) row.cells[4].textContent = tagStr;
+
+    // Update product name if available
+    if (data.productName && row.cells[3].textContent !== data.productName) {
+        row.cells[3].textContent = data.productName;
+    }
+
+    // Handle error row
+    var nextRow = row.nextElementSibling;
+    var hasErrorRow = nextRow && nextRow.classList.contains('error-row');
+
+    if (data.error) {
+        if (hasErrorRow) {
+            nextRow.querySelector('td').textContent = data.error;
+        } else {
+            var errorRow = document.createElement('tr');
+            errorRow.className = 'error-row';
+            errorRow.innerHTML = '<td colspan="7" class="error-cell">' + WarLink.escapeHtml(data.error) + '</td>';
+            row.parentNode.insertBefore(errorRow, row.nextSibling);
+        }
+    } else if (hasErrorRow) {
+        nextRow.remove();
+    }
 }
 
-// SSE client for real-time PLC updates
-var PLCsSSE = (function() {
-    var es = null;
-    var reconnectTimeout = null;
-
-    function connect() {
-        if (es) {
-            es.close();
-        }
-
-        es = new EventSource('/events/republisher');
-
-        es.addEventListener('status-change', function(e) {
-            try {
-                var data = JSON.parse(e.data);
-                onStatusChange(data);
-            } catch (err) {
-                console.error('SSE status-change parse error:', err);
+WarLink.createSSE('/events/republisher', {
+    onStatusChange: onStatusChange,
+    onEntityChange: function(data) {
+        if (data.entityType !== 'plc') return;
+        if (data.action === 'remove') {
+            var row = document.querySelector('.plc-row[data-name="' + data.name + '"]');
+            if (row) {
+                var nextRow = row.nextElementSibling;
+                if (nextRow && nextRow.classList.contains('error-row')) {
+                    nextRow.remove();
+                }
+                row.remove();
             }
-        });
-
-        es.onerror = function() {
-            es.close();
-            if (reconnectTimeout) clearTimeout(reconnectTimeout);
-            reconnectTimeout = setTimeout(connect, 1000);
-        };
-    }
-
-    function onStatusChange(data) {
-        // Find the PLC row
-        var row = document.querySelector('.plc-row[data-name="' + data.plc + '"]');
-        if (!row) return;
-
-        var statusText = capitalizeFirst(data.status);
-
-        // Update data attributes (always, these don't trigger reflow)
-        row.dataset.status = statusText;
-        row.dataset.statusClass = data.statusClass;
-        row.dataset.tags = data.tagCount;
-        row.dataset.error = data.error || '';
-        if (data.productName) row.dataset.product = data.productName;
-        if (data.serialNumber) row.dataset.serial = data.serialNumber;
-        if (data.vendor) row.dataset.vendor = data.vendor;
-        if (data.connectionMode) row.dataset.connectionMode = data.connectionMode;
-
-        // If user just clicked connect/disconnect, suppress SSE button updates
-        // briefly so stale events don't revert the button
-        var lockUntil = parseInt(row.dataset.statusLock, 10);
-        if (lockUntil && Date.now() < lockUntil) {
-            return;
-        }
-        if (lockUntil) {
-            // Lock just expired — clear it and force a full DOM update
-            delete row.dataset.statusLock;
-            delete row.dataset.lastStatusEvent;
-        }
-
-        // Skip DOM updates if nothing visible changed (avoids reflow that can swallow clicks)
-        var eventKey = data.status + '|' + data.tagCount + '|' + (data.error || '');
-        if (row.dataset.lastStatusEvent === eventKey) {
-            return;
-        }
-        row.dataset.lastStatusEvent = eventKey;
-
-        // Update status button/badge
-        var statusCell = row.cells[5];
-        var statusBtn = statusCell.querySelector('.status-indicator');
-        var statusBadge = statusCell.querySelector('.status-badge');
-
-        if (statusBtn) {
-            var newClass = 'status-indicator ' + data.statusClass;
-            if (statusBtn.className !== newClass) statusBtn.className = newClass;
-            if (statusBtn.textContent !== statusText) statusBtn.textContent = statusText;
-            var shouldDisable = data.status !== 'connected' && data.status !== 'disconnected';
-            if (statusBtn.disabled !== shouldDisable) statusBtn.disabled = shouldDisable;
-            var newTitle = shouldDisable ? statusText : (data.status === 'connected' ? 'Click to disconnect' : 'Click to connect');
-            if (statusBtn.title !== newTitle) statusBtn.title = newTitle;
-        } else if (statusBadge) {
-            var newClass = 'status-badge ' + data.statusClass;
-            if (statusBadge.className !== newClass) statusBadge.className = newClass;
-            if (statusBadge.textContent !== statusText) statusBadge.textContent = statusText;
-        }
-
-        // Update tag count
-        var tagStr = String(data.tagCount);
-        if (row.cells[4].textContent !== tagStr) row.cells[4].textContent = tagStr;
-
-        // Update product name if available
-        if (data.productName && row.cells[3].textContent !== data.productName) {
-            row.cells[3].textContent = data.productName;
-        }
-
-        // Handle error row
-        var nextRow = row.nextElementSibling;
-        var hasErrorRow = nextRow && nextRow.classList.contains('error-row');
-
-        if (data.error) {
-            if (hasErrorRow) {
-                nextRow.querySelector('td').textContent = data.error;
-            } else {
-                var errorRow = document.createElement('tr');
-                errorRow.className = 'error-row';
-                errorRow.innerHTML = '<td colspan="7" class="error-cell">' + escapeHtml(data.error) + '</td>';
-                row.parentNode.insertBefore(errorRow, row.nextSibling);
+            var tbody = document.querySelector('#plcs-container tbody');
+            if (tbody && tbody.querySelectorAll('.plc-row').length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">No PLCs configured</td></tr>';
             }
-        } else if (hasErrorRow) {
-            nextRow.remove();
+        }
+        if (data.action === 'add') {
+            var existing = document.querySelector('.plc-row[data-name="' + data.name + '"]');
+            if (!existing) {
+                location.reload();
+            }
         }
     }
-
-    function capitalizeFirst(str) {
-        return str.charAt(0).toUpperCase() + str.slice(1);
-    }
-
-    // Auto-connect
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', connect);
-    } else {
-        connect();
-    }
-
-    return { connect: connect };
-})();
+});
 </script>
 
 {{template "footer" .}}

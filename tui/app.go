@@ -12,9 +12,8 @@ import (
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
-	"warlink/push"
+	"warlink/rule"
 	"warlink/tagpack"
-	"warlink/trigger"
 	"warlink/valkey"
 )
 
@@ -38,27 +37,25 @@ type App struct {
 	namespaceIndicator *tview.TextView
 	themeIndicator     *tview.TextView
 
-	plcsTab     *PLCsTab
-	browserTab  *BrowserTab
-	packsTab    *PacksTab
-	restTab     *RESTTab
-	mqttTab     *MQTTTab
-	valkeyTab   *ValkeyTab
-	kafkaTab    *KafkaTab
-	triggersTab *TriggersTab
-	pushTab     *PushTab
-	debugTab    *DebugTab
+	plcsTab    *PLCsTab
+	browserTab *BrowserTab
+	packsTab   *PacksTab
+	rulesTab   *RulesTab
+	restTab    *RESTTab
+	mqttTab    *MQTTTab
+	valkeyTab  *ValkeyTab
+	kafkaTab   *KafkaTab
+	debugTab   *DebugTab
 
 	engine  *engine.Engine
 	packMgr *tagpack.Manager
-	pushMgr *push.Manager
+	ruleMgr *rule.Manager
 
-	manager    *plcman.Manager
-	webServer  WebServer
-	mqttMgr    *mqtt.Manager
-	valkeyMgr  *valkey.Manager
-	kafkaMgr   *kafka.Manager
-	triggerMgr *trigger.Manager
+	manager   *plcman.Manager
+	webServer WebServer
+	mqttMgr   *mqtt.Manager
+	valkeyMgr *valkey.Manager
+	kafkaMgr  *kafka.Manager
 	config *config.Config
 
 	currentTab int
@@ -100,10 +97,9 @@ func NewApp(cfg *config.Config, eng *engine.Engine, webServer WebServer) *App {
 		mqttMgr:    eng.GetMQTTMgr(),
 		valkeyMgr:  eng.GetValkeyMgr(),
 		kafkaMgr:   eng.GetKafkaMgr(),
-		triggerMgr: eng.GetTriggerMgr(),
 		packMgr:    eng.GetPackMgr(),
-		pushMgr:    eng.GetPushMgr(),
-		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
+		ruleMgr:    eng.GetRuleMgr(),
+		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabRules, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 	}
 
@@ -148,10 +144,9 @@ func NewAppWithSharedBackend(screen tcell.Screen, managers SharedManagers) (*App
 		mqttMgr:    eng.GetMQTTMgr(),
 		valkeyMgr:  eng.GetValkeyMgr(),
 		kafkaMgr:   eng.GetKafkaMgr(),
-		triggerMgr: eng.GetTriggerMgr(),
 		packMgr:    eng.GetPackMgr(),
-		pushMgr:    eng.GetPushMgr(),
-		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabTriggers, TabPush, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
+		ruleMgr:    eng.GetRuleMgr(),
+		tabNames:   []string{TabPLCs, TabBrowser, TabPacks, TabRules, TabWeb, TabMQTT, TabValkey, TabKafka, TabDebug},
 		stopChan:   make(chan struct{}),
 		daemonMode: true,
 	}
@@ -216,8 +211,8 @@ func (a *App) registerListeners() {
 			if a.kafkaTab != nil {
 				a.kafkaTab.Refresh()
 			}
-			if a.triggersTab != nil {
-				a.triggersTab.Refresh()
+			if a.rulesTab != nil {
+				a.rulesTab.Refresh()
 			}
 		})
 	})
@@ -281,20 +276,18 @@ func (a *App) setupUI() {
 	a.plcsTab = NewPLCsTab(a)
 	a.browserTab = NewBrowserTab(a)
 	a.packsTab = NewPacksTab(a)
+	a.rulesTab = NewRulesTab(a)
 	a.restTab = NewRESTTab(a)
 	a.mqttTab = NewMQTTTab(a)
 	a.valkeyTab = NewValkeyTab(a)
 	a.kafkaTab = NewKafkaTab(a)
-	a.triggersTab = NewTriggersTab(a)
-	a.pushTab = NewPushTab(a)
 	a.debugTab = NewDebugTab(a)
 
 	// Add pages
 	a.pages.AddPage(TabPLCs, a.plcsTab.GetPrimitive(), true, true)
 	a.pages.AddPage(TabBrowser, a.browserTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabPacks, a.packsTab.GetPrimitive(), true, false)
-	a.pages.AddPage(TabTriggers, a.triggersTab.GetPrimitive(), true, false)
-	a.pages.AddPage(TabPush, a.pushTab.GetPrimitive(), true, false)
+	a.pages.AddPage(TabRules, a.rulesTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabWeb, a.restTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabMQTT, a.mqttTab.GetPrimitive(), true, false)
 	a.pages.AddPage(TabValkey, a.valkeyTab.GetPrimitive(), true, false)
@@ -343,7 +336,7 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	frontPage, _ := a.pages.GetFrontPage()
 
 	// List of known tab pages - anything else is considered a modal
-	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabPacks || frontPage == TabTriggers || frontPage == TabPush || frontPage == TabWeb || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabKafka || frontPage == TabDebug
+	isMainTab := frontPage == TabPLCs || frontPage == TabBrowser || frontPage == TabPacks || frontPage == TabRules || frontPage == TabWeb || frontPage == TabMQTT || frontPage == TabValkey || frontPage == TabKafka || frontPage == TabDebug
 
 	// Don't intercept keys (including Shift-Q) when a modal/form is open
 	if !isMainTab {
@@ -414,26 +407,23 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'T': // TagPacks
 		a.switchToTab(2)
 		return nil
-	case 'G': // triGGers
+	case 'R': // Rules
 		a.switchToTab(3)
 		return nil
-	case 'U': // pUsh
+	case 'E': // wEb
 		a.switchToTab(4)
 		return nil
-	case 'E': // wEb
+	case 'M': // MQTT
 		a.switchToTab(5)
 		return nil
-	case 'M': // MQTT
+	case 'V': // Valkey
 		a.switchToTab(6)
 		return nil
-	case 'V': // Valkey
+	case 'K': // Kafka
 		a.switchToTab(7)
 		return nil
-	case 'K': // Kafka
-		a.switchToTab(8)
-		return nil
 	case 'D': // Debug
-		a.switchToTab(9)
+		a.switchToTab(8)
 		return nil
 	}
 
@@ -462,18 +452,16 @@ func (a *App) focusCurrentTab() {
 	case 2:
 		a.app.SetFocus(a.packsTab.GetFocusable())
 	case 3:
-		a.app.SetFocus(a.triggersTab.GetFocusable())
+		a.app.SetFocus(a.rulesTab.GetFocusable())
 	case 4:
-		a.app.SetFocus(a.pushTab.GetFocusable())
-	case 5:
 		a.app.SetFocus(a.restTab.GetFocusable())
-	case 6:
+	case 5:
 		a.app.SetFocus(a.mqttTab.GetFocusable())
-	case 7:
+	case 6:
 		a.app.SetFocus(a.valkeyTab.GetFocusable())
-	case 8:
+	case 7:
 		a.app.SetFocus(a.kafkaTab.GetFocusable())
-	case 9:
+	case 8:
 		a.app.SetFocus(a.debugTab.GetFocusable())
 	}
 }
@@ -491,8 +479,7 @@ func (a *App) updateTabsDisplay() {
 		{"", "P", "LCs"},           // PLCs
 		{"Repu", "B", "lisher"},    // Republisher
 		{"", "T", "agPacks"},       // TagPacks
-		{"Tri", "G", "gers"},       // Triggers
-		{"P", "U", "sh"},           // Push
+		{"", "R", "ules"},          // Rules
 		{"W", "E", "b"},            // Web
 		{"", "M", "QTT"},           // MQTT
 		{"", "V", "alkey"},         // Valkey
@@ -503,7 +490,7 @@ func (a *App) updateTabsDisplay() {
 	text := ""
 	for i, name := range a.tabNames {
 		if i > 0 {
-			// Use diamond separator between PLC-side tabs (Triggers) and Services (Web)
+			// Use diamond separator between PLC-side tabs (Rules) and Services (Web)
 			if name == TabWeb { // Diamond separator between PLC-side tabs and Services
 				text += th.TagTextDim + "  │ " + th.TagAccent + "◆" + th.TagTextDim + " │  " + th.TagReset
 			} else {
@@ -831,8 +818,7 @@ func (a *App) Run() error {
 	a.mqttTab.Refresh()
 	a.valkeyTab.Refresh()
 	a.kafkaTab.Refresh()
-	a.triggersTab.Refresh()
-	a.pushTab.Refresh()
+	a.rulesTab.Refresh()
 	a.restTab.Refresh()
 
 	// Start periodic refresh goroutine for MQTT, Valkey, and Debug tabs
@@ -855,8 +841,8 @@ func (a *App) periodicRefresh() {
 				// Skip refresh if a modal dialog is open to avoid interference with form input
 				frontPage, _ := a.pages.GetFrontPage()
 				isModalOpen := frontPage != TabPLCs && frontPage != TabBrowser &&
-					frontPage != TabPacks && frontPage != TabTriggers &&
-					frontPage != TabPush && frontPage != TabWeb &&
+					frontPage != TabPacks && frontPage != TabRules &&
+					frontPage != TabWeb &&
 					frontPage != TabMQTT && frontPage != TabValkey &&
 					frontPage != TabKafka && frontPage != TabDebug
 
@@ -871,19 +857,16 @@ func (a *App) periodicRefresh() {
 				if a.packsTab != nil && a.currentTab == 2 {
 					a.packsTab.Refresh()
 				}
-				if a.triggersTab != nil && a.currentTab == 3 {
-					a.triggersTab.Refresh()
+				if a.rulesTab != nil && a.currentTab == 3 {
+					a.rulesTab.Refresh()
 				}
-				if a.pushTab != nil && a.currentTab == 4 {
-					a.pushTab.Refresh()
-				}
-				if a.mqttTab != nil && a.currentTab == 6 {
+				if a.mqttTab != nil && a.currentTab == 5 {
 					a.mqttTab.Refresh()
 				}
-				if a.valkeyTab != nil && a.currentTab == 7 {
+				if a.valkeyTab != nil && a.currentTab == 6 {
 					a.valkeyTab.Refresh()
 				}
-				if a.kafkaTab != nil && a.currentTab == 8 {
+				if a.kafkaTab != nil && a.currentTab == 7 {
 					a.kafkaTab.Refresh()
 				}
 			})
@@ -991,8 +974,8 @@ func (a *App) closeModal(pageName string) {
 func (a *App) isModalOpen() bool {
 	frontPage, _ := a.pages.GetFrontPage()
 	return frontPage != TabPLCs && frontPage != TabBrowser &&
-		frontPage != TabPacks && frontPage != TabTriggers &&
-		frontPage != TabPush && frontPage != TabWeb &&
+		frontPage != TabPacks && frontPage != TabRules &&
+		frontPage != TabWeb &&
 		frontPage != TabMQTT && frontPage != TabValkey &&
 		frontPage != TabKafka && frontPage != TabDebug
 }
@@ -1018,11 +1001,8 @@ func (a *App) refreshAllThemes() {
 	if a.kafkaTab != nil {
 		a.kafkaTab.RefreshTheme()
 	}
-	if a.triggersTab != nil {
-		a.triggersTab.RefreshTheme()
-	}
-	if a.pushTab != nil {
-		a.pushTab.RefreshTheme()
+	if a.rulesTab != nil {
+		a.rulesTab.RefreshTheme()
 	}
 	if a.restTab != nil {
 		a.restTab.RefreshTheme()

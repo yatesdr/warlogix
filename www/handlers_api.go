@@ -2,13 +2,11 @@ package www
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,25 +17,14 @@ import (
 	"warlink/engine"
 	"warlink/logix"
 	"warlink/omron"
-	"warlink/push"
+	"warlink/rule"
 	"warlink/s7"
 	"warlink/tui"
 )
 
 // writeEngineError maps engine sentinel errors to appropriate HTTP status codes.
 func (h *Handlers) writeEngineError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, engine.ErrNotFound):
-		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, engine.ErrAlreadyExists):
-		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, engine.ErrInvalidInput):
-		http.Error(w, err.Error(), http.StatusBadRequest)
-	case errors.Is(err, engine.ErrSaveFailed):
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	http.Error(w, err.Error(), engine.EngineHTTPStatus(err))
 }
 
 // htmx partial handlers for live updates
@@ -84,11 +71,11 @@ func (h *Handlers) handleTagPacksPartial(w http.ResponseWriter, r *http.Request)
 	h.renderTemplate(w, "tagpacks_table.html", data)
 }
 
-// handleTriggersPartial returns the Triggers table partial.
-func (h *Handlers) handleTriggersPartial(w http.ResponseWriter, r *http.Request) {
+// handleRulesPartial returns the Rules table partial.
+func (h *Handlers) handleRulesPartial(w http.ResponseWriter, r *http.Request) {
 	data := h.getUserInfo(r)
-	data["Triggers"] = h.getTriggersData()
-	h.renderTemplate(w, "triggers_table.html", data)
+	data["Rules"] = h.getRulesData()
+	h.renderTemplate(w, "rules_table.html", data)
 }
 
 // handleDebugPartial returns the debug log partial.
@@ -191,12 +178,12 @@ func (h *Handlers) handleKafkaDisconnect(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleTriggerStart starts a trigger.
-func (h *Handlers) handleTriggerStart(w http.ResponseWriter, r *http.Request) {
+// handleRuleStart starts a rule.
+func (h *Handlers) handleRuleStart(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	if err := h.engine.StartTrigger(name); err != nil {
+	if err := h.engine.StartRule(name); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -204,32 +191,13 @@ func (h *Handlers) handleTriggerStart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleTriggerStop stops a trigger.
-func (h *Handlers) handleTriggerStop(w http.ResponseWriter, r *http.Request) {
+// handleRuleStop stops a rule.
+func (h *Handlers) handleRuleStop(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	h.engine.StopTrigger(name)
+	h.engine.StopRule(name)
 	w.WriteHeader(http.StatusOK)
-}
-
-// PLCUpdateRequest holds the fields for updating a PLC.
-type PLCUpdateRequest struct {
-	Address            string `json:"address"`
-	Slot               int    `json:"slot"`
-	Family             string `json:"family"`
-	Enabled            bool   `json:"enabled"`
-	HealthCheckEnabled *bool  `json:"health_check_enabled"`
-	DiscoverTags       *bool  `json:"discover_tags"`
-	PollRate           string `json:"poll_rate"`
-	Timeout            string `json:"timeout"`
-	AmsNetId           string `json:"ams_net_id"`
-	AmsPort            int    `json:"ams_port"`
-	Protocol           string `json:"protocol"`
-	FinsPort           int    `json:"fins_port"`
-	FinsNetwork        int    `json:"fins_network"`
-	FinsNode           int    `json:"fins_node"`
-	FinsUnit           int    `json:"fins_unit"`
 }
 
 // handlePLCUpdate updates a PLC configuration.
@@ -237,45 +205,13 @@ func (h *Handlers) handlePLCUpdate(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	var req PLCUpdateRequest
+	var req engine.PLCHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	var pollRate, timeout time.Duration
-	if req.PollRate != "" {
-		if d, err := time.ParseDuration(req.PollRate); err == nil {
-			pollRate = d
-		}
-	}
-	if req.Timeout != "" {
-		if d, err := time.ParseDuration(req.Timeout); err == nil {
-			timeout = d
-		}
-	}
-
-	engReq := engine.PLCUpdateRequest{
-		Address:            req.Address,
-		Slot:               byte(req.Slot),
-		Enabled:            req.Enabled,
-		HealthCheckEnabled: req.HealthCheckEnabled,
-		DiscoverTags:       req.DiscoverTags,
-		PollRate:           pollRate,
-		Timeout:            timeout,
-		AmsNetId:           req.AmsNetId,
-		AmsPort:            uint16(req.AmsPort),
-		Protocol:           req.Protocol,
-		FinsPort:           req.FinsPort,
-		FinsNetwork:        byte(req.FinsNetwork),
-		FinsNode:           byte(req.FinsNode),
-		FinsUnit:           byte(req.FinsUnit),
-	}
-	if req.Family != "" {
-		engReq.Family = config.PLCFamily(req.Family)
-	}
-
-	if err := h.engine.UpdatePLC(name, engReq); err != nil {
+	if err := h.engine.UpdatePLC(name, req.ToUpdateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -318,68 +254,15 @@ func (h *Handlers) handlePLCGet(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// PLCCreateRequest holds the fields for creating a new PLC.
-type PLCCreateRequest struct {
-	Name               string `json:"name"`
-	Address            string `json:"address"`
-	Slot               int    `json:"slot"`
-	Family             string `json:"family"`
-	Enabled            bool   `json:"enabled"`
-	HealthCheckEnabled *bool  `json:"health_check_enabled"`
-	DiscoverTags       *bool  `json:"discover_tags"`
-	PollRate           string `json:"poll_rate"`
-	Timeout            string `json:"timeout"`
-	AmsNetId           string `json:"ams_net_id"`
-	AmsPort            int    `json:"ams_port"`
-	Protocol           string `json:"protocol"`
-	FinsPort           int    `json:"fins_port"`
-	FinsNetwork        int    `json:"fins_network"`
-	FinsNode           int    `json:"fins_node"`
-	FinsUnit           int    `json:"fins_unit"`
-}
-
 // handlePLCCreate creates a new PLC.
 func (h *Handlers) handlePLCCreate(w http.ResponseWriter, r *http.Request) {
-	var req PLCCreateRequest
+	var req engine.PLCHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	var pollRate, timeout time.Duration
-	if req.PollRate != "" {
-		if d, err := time.ParseDuration(req.PollRate); err == nil {
-			pollRate = d
-		}
-	}
-	if req.Timeout != "" {
-		if d, err := time.ParseDuration(req.Timeout); err == nil {
-			timeout = d
-		}
-	}
-
-	engReq := engine.PLCCreateRequest{
-		Name:               req.Name,
-		Address:            req.Address,
-		Slot:               byte(req.Slot),
-		Enabled:            req.Enabled,
-		HealthCheckEnabled: req.HealthCheckEnabled,
-		DiscoverTags:       req.DiscoverTags,
-		PollRate:           pollRate,
-		Timeout:            timeout,
-		AmsNetId:           req.AmsNetId,
-		AmsPort:            uint16(req.AmsPort),
-		Protocol:           req.Protocol,
-		FinsPort:           req.FinsPort,
-		FinsNetwork:        byte(req.FinsNetwork),
-		FinsNode:           byte(req.FinsNode),
-		FinsUnit:           byte(req.FinsUnit),
-	}
-	if req.Family != "" {
-		engReq.Family = config.PLCFamily(req.Family)
-	}
-
-	if err := h.engine.CreatePLC(engReq); err != nil {
+	if err := h.engine.CreatePLC(req.ToCreateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -675,36 +558,14 @@ func (h *Handlers) handleAPIToggle(w http.ResponseWriter, r *http.Request) {
 
 // --- MQTT CRUD ---
 
-type mqttRequest struct {
-	Name     string `json:"name"`
-	Broker   string `json:"broker"`
-	Port     int    `json:"port"`
-	ClientID string `json:"client_id"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Selector string `json:"selector"`
-	UseTLS   bool   `json:"use_tls"`
-	Enabled  bool   `json:"enabled"`
-}
-
 func (h *Handlers) handleMQTTCreate(w http.ResponseWriter, r *http.Request) {
-	var req mqttRequest
+	var req engine.MQTTHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := h.engine.CreateMQTT(engine.MQTTCreateRequest{
-		Name:     req.Name,
-		Broker:   req.Broker,
-		Port:     req.Port,
-		ClientID: req.ClientID,
-		Username: req.Username,
-		Password: req.Password,
-		Selector: req.Selector,
-		UseTLS:   req.UseTLS,
-		Enabled:  req.Enabled,
-	}); err != nil {
+	if err := h.engine.CreateMQTT(req.ToCreateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -743,22 +604,13 @@ func (h *Handlers) handleMQTTUpdate(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	var req mqttRequest
+	var req engine.MQTTHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := h.engine.UpdateMQTT(name, engine.MQTTUpdateRequest{
-		Broker:   req.Broker,
-		Port:     req.Port,
-		ClientID: req.ClientID,
-		Username: req.Username,
-		Password: req.Password,
-		Selector: req.Selector,
-		UseTLS:   req.UseTLS,
-		Enabled:  req.Enabled,
-	}); err != nil {
+	if err := h.engine.UpdateMQTT(name, req.ToUpdateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -780,45 +632,14 @@ func (h *Handlers) handleMQTTDelete(w http.ResponseWriter, r *http.Request) {
 
 // --- Valkey CRUD ---
 
-type valkeyRequest struct {
-	Name            string `json:"name"`
-	Address         string `json:"address"`
-	Password        string `json:"password"`
-	Database        int    `json:"database"`
-	Selector        string `json:"selector"`
-	KeyTTL          string `json:"key_ttl"`
-	UseTLS          bool   `json:"use_tls"`
-	PublishChanges  bool   `json:"publish_changes"`
-	EnableWriteback bool   `json:"enable_writeback"`
-	Enabled         bool   `json:"enabled"`
-}
-
 func (h *Handlers) handleValkeyCreate(w http.ResponseWriter, r *http.Request) {
-	var req valkeyRequest
+	var req engine.ValkeyHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	var keyTTL time.Duration
-	if req.KeyTTL != "" {
-		if d, err := time.ParseDuration(req.KeyTTL); err == nil {
-			keyTTL = d
-		}
-	}
-
-	if err := h.engine.CreateValkey(engine.ValkeyCreateRequest{
-		Name:            req.Name,
-		Address:         req.Address,
-		Password:        req.Password,
-		Database:        req.Database,
-		Selector:        req.Selector,
-		KeyTTL:          keyTTL,
-		UseTLS:          req.UseTLS,
-		PublishChanges:  req.PublishChanges,
-		EnableWriteback: req.EnableWriteback,
-		Enabled:         req.Enabled,
-	}); err != nil {
+	if err := h.engine.CreateValkey(req.ToCreateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -862,30 +683,13 @@ func (h *Handlers) handleValkeyUpdate(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	var req valkeyRequest
+	var req engine.ValkeyHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	var keyTTL time.Duration
-	if req.KeyTTL != "" {
-		if d, err := time.ParseDuration(req.KeyTTL); err == nil {
-			keyTTL = d
-		}
-	}
-
-	if err := h.engine.UpdateValkey(name, engine.ValkeyUpdateRequest{
-		Address:         req.Address,
-		Password:        req.Password,
-		Database:        req.Database,
-		Selector:        req.Selector,
-		KeyTTL:          keyTTL,
-		UseTLS:          req.UseTLS,
-		PublishChanges:  req.PublishChanges,
-		EnableWriteback: req.EnableWriteback,
-		Enabled:         req.Enabled,
-	}); err != nil {
+	if err := h.engine.UpdateValkey(name, req.ToUpdateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -907,85 +711,14 @@ func (h *Handlers) handleValkeyDelete(w http.ResponseWriter, r *http.Request) {
 
 // --- Kafka CRUD ---
 
-type kafkaRequest struct {
-	Name             string   `json:"name"`
-	Brokers          string   `json:"brokers"` // comma-separated
-	UseTLS           bool     `json:"use_tls"`
-	TLSSkipVerify    bool     `json:"tls_skip_verify"`
-	SASLMechanism    string   `json:"sasl_mechanism"`
-	Username         string   `json:"username"`
-	Password         string   `json:"password"`
-	Selector         string   `json:"selector"`
-	PublishChanges   bool     `json:"publish_changes"`
-	EnableWriteback  bool     `json:"enable_writeback"`
-	AutoCreateTopics bool     `json:"auto_create_topics"`
-	Enabled          bool     `json:"enabled"`
-	BrokerList       []string `json:"broker_list,omitempty"` // alternative to comma-separated
-	RequiredAcks     int      `json:"required_acks"`
-	MaxRetries       int      `json:"max_retries"`
-	RetryBackoff     string   `json:"retry_backoff"`
-	ConsumerGroup    string   `json:"consumer_group"`
-	WriteMaxAge      string   `json:"write_max_age"`
-}
-
-func (h *Handlers) parseBrokerList(req kafkaRequest) []string {
-	if len(req.BrokerList) > 0 {
-		return req.BrokerList
-	}
-	if req.Brokers == "" {
-		return nil
-	}
-	var brokers []string
-	for _, b := range strings.Split(req.Brokers, ",") {
-		b = strings.TrimSpace(b)
-		if b != "" {
-			brokers = append(brokers, b)
-		}
-	}
-	return brokers
-}
-
 func (h *Handlers) handleKafkaCreate(w http.ResponseWriter, r *http.Request) {
-	var req kafkaRequest
+	var req engine.KafkaHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	brokers := h.parseBrokerList(req)
-
-	var retryBackoff time.Duration
-	if req.RetryBackoff != "" {
-		if d, err := time.ParseDuration(req.RetryBackoff); err == nil {
-			retryBackoff = d
-		}
-	}
-	var writeMaxAge time.Duration
-	if req.WriteMaxAge != "" {
-		if d, err := time.ParseDuration(req.WriteMaxAge); err == nil {
-			writeMaxAge = d
-		}
-	}
-
-	if err := h.engine.CreateKafka(engine.KafkaCreateRequest{
-		Name:             req.Name,
-		Brokers:          brokers,
-		UseTLS:           req.UseTLS,
-		TLSSkipVerify:    req.TLSSkipVerify,
-		SASLMechanism:    req.SASLMechanism,
-		Username:         req.Username,
-		Password:         req.Password,
-		Selector:         req.Selector,
-		PublishChanges:   req.PublishChanges,
-		EnableWriteback:  req.EnableWriteback,
-		AutoCreateTopics: req.AutoCreateTopics,
-		Enabled:          req.Enabled,
-		RequiredAcks:     req.RequiredAcks,
-		MaxRetries:       req.MaxRetries,
-		RetryBackoff:     retryBackoff,
-		ConsumerGroup:    req.ConsumerGroup,
-		WriteMaxAge:      writeMaxAge,
-	}); err != nil {
+	if err := h.engine.CreateKafka(req.ToCreateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -1040,45 +773,13 @@ func (h *Handlers) handleKafkaUpdate(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	var req kafkaRequest
+	var req engine.KafkaHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	brokers := h.parseBrokerList(req)
-
-	var retryBackoff time.Duration
-	if req.RetryBackoff != "" {
-		if d, err := time.ParseDuration(req.RetryBackoff); err == nil {
-			retryBackoff = d
-		}
-	}
-	var writeMaxAge time.Duration
-	if req.WriteMaxAge != "" {
-		if d, err := time.ParseDuration(req.WriteMaxAge); err == nil {
-			writeMaxAge = d
-		}
-	}
-
-	if err := h.engine.UpdateKafka(name, engine.KafkaUpdateRequest{
-		Brokers:          brokers,
-		UseTLS:           req.UseTLS,
-		TLSSkipVerify:    req.TLSSkipVerify,
-		SASLMechanism:    req.SASLMechanism,
-		Username:         req.Username,
-		Password:         req.Password,
-		Selector:         req.Selector,
-		PublishChanges:   req.PublishChanges,
-		EnableWriteback:  req.EnableWriteback,
-		AutoCreateTopics: req.AutoCreateTopics,
-		Enabled:          req.Enabled,
-		RequiredAcks:     req.RequiredAcks,
-		MaxRetries:       req.MaxRetries,
-		RetryBackoff:     retryBackoff,
-		ConsumerGroup:    req.ConsumerGroup,
-		WriteMaxAge:      writeMaxAge,
-	}); err != nil {
+	if err := h.engine.UpdateKafka(name, req.ToUpdateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -1100,30 +801,14 @@ func (h *Handlers) handleKafkaDelete(w http.ResponseWriter, r *http.Request) {
 
 // --- TagPack CRUD ---
 
-type tagPackRequest struct {
-	Name          string               `json:"name"`
-	Enabled       bool                 `json:"enabled"`
-	MQTTEnabled   bool                 `json:"mqtt_enabled"`
-	KafkaEnabled  bool                 `json:"kafka_enabled"`
-	ValkeyEnabled bool                 `json:"valkey_enabled"`
-	Members       []config.TagPackMember `json:"members,omitempty"`
-}
-
 func (h *Handlers) handleTagPackCreate(w http.ResponseWriter, r *http.Request) {
-	var req tagPackRequest
+	var req engine.TagPackHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := h.engine.CreateTagPack(engine.TagPackCreateRequest{
-		Name:          req.Name,
-		Enabled:       req.Enabled,
-		MQTTEnabled:   req.MQTTEnabled,
-		KafkaEnabled:  req.KafkaEnabled,
-		ValkeyEnabled: req.ValkeyEnabled,
-		Members:       req.Members,
-	}); err != nil {
+	if err := h.engine.CreateTagPack(req.ToCreateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -1169,19 +854,13 @@ func (h *Handlers) handleTagPackUpdate(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	var req tagPackRequest
+	var req engine.TagPackHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := h.engine.UpdateTagPack(name, engine.TagPackUpdateRequest{
-		Enabled:       req.Enabled,
-		MQTTEnabled:   req.MQTTEnabled,
-		KafkaEnabled:  req.KafkaEnabled,
-		ValkeyEnabled: req.ValkeyEnabled,
-		Members:       req.Members,
-	}); err != nil {
+	if err := h.engine.UpdateTagPack(name, req.ToUpdateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -1286,46 +965,16 @@ func (h *Handlers) handleTagPackToggleMemberIgnore(w http.ResponseWriter, r *htt
 	json.NewEncoder(w).Encode(map[string]bool{"ignore_changes": ignoreChanges})
 }
 
-// --- Trigger CRUD ---
+// --- Rule CRUD ---
 
-type triggerRequest struct {
-	Name         string            `json:"name"`
-	Enabled      bool              `json:"enabled"`
-	PLC          string            `json:"plc"`
-	TriggerTag   string            `json:"trigger_tag"`
-	Condition    config.TriggerCondition `json:"condition"`
-	AckTag       string            `json:"ack_tag"`
-	DebounceMS   int               `json:"debounce_ms"`
-	Tags         []string          `json:"tags"`
-	MQTTBroker   string            `json:"mqtt_broker"`
-	KafkaCluster string            `json:"kafka_cluster"`
-	Selector     string            `json:"selector"`
-	Metadata     map[string]string `json:"metadata"`
-	PublishPack  string            `json:"publish_pack"`
-}
-
-func (h *Handlers) handleTriggerCreate(w http.ResponseWriter, r *http.Request) {
-	var req triggerRequest
+func (h *Handlers) handleRuleCreate(w http.ResponseWriter, r *http.Request) {
+	var req engine.RuleHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := h.engine.CreateTrigger(engine.TriggerCreateRequest{
-		Name:         req.Name,
-		Enabled:      req.Enabled,
-		PLC:          req.PLC,
-		TriggerTag:   req.TriggerTag,
-		Condition:    req.Condition,
-		AckTag:       req.AckTag,
-		DebounceMS:   req.DebounceMS,
-		Tags:         req.Tags,
-		MQTTBroker:   req.MQTTBroker,
-		KafkaCluster: req.KafkaCluster,
-		Selector:     req.Selector,
-		Metadata:     req.Metadata,
-		PublishPack:  req.PublishPack,
-	}); err != nil {
+	if err := h.engine.CreateRule(req.ToCreateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -1333,40 +982,35 @@ func (h *Handlers) handleTriggerCreate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (h *Handlers) handleTriggerGet(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) handleRuleGet(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
 	cfg := h.managers.GetConfig()
-	tc := cfg.FindTrigger(name)
-	if tc == nil {
-		http.Error(w, "Trigger not found", http.StatusNotFound)
+	rc := cfg.FindRule(name)
+	if rc == nil {
+		http.Error(w, "Rule not found", http.StatusNotFound)
 		return
 	}
 
 	// Also get runtime status
-	triggerMgr := h.managers.GetTriggerMgr()
-	status, trigErr, fireCount, lastFire := triggerMgr.GetTriggerStatus(name)
+	ruleMgr := h.managers.GetRuleMgr()
+	status, ruleErr, fireCount, lastFire := ruleMgr.GetRuleStatus(name)
 
 	resp := map[string]interface{}{
-		"name":          tc.Name,
-		"enabled":       tc.Enabled,
-		"plc":           tc.PLC,
-		"trigger_tag":   tc.TriggerTag,
-		"condition":     tc.Condition,
-		"ack_tag":       tc.AckTag,
-		"debounce_ms":   tc.DebounceMS,
-		"tags":          tc.Tags,
-		"mqtt_broker":   tc.MQTTBroker,
-		"kafka_cluster": tc.KafkaCluster,
-		"selector":      tc.Selector,
-		"metadata":      tc.Metadata,
-		"publish_pack":  tc.PublishPack,
-		"status":        triggerStatusString(status),
-		"fire_count":    fireCount,
+		"name":            rc.Name,
+		"enabled":         rc.Enabled,
+		"conditions":      rc.Conditions,
+		"logic_mode":      rc.LogicMode,
+		"debounce_ms":     rc.DebounceMS,
+		"cooldown_ms":     rc.CooldownMS,
+		"actions":         rc.Actions,
+		"cleared_actions": rc.ClearedActions,
+		"status":          ruleStatusString(status),
+		"fire_count":      fireCount,
 	}
-	if trigErr != nil {
-		resp["error"] = trigErr.Error()
+	if ruleErr != nil {
+		resp["error"] = ruleErr.Error()
 	}
 	if !lastFire.IsZero() {
 		resp["last_fire"] = lastFire.Format("2006-01-02 15:04:05")
@@ -1376,30 +1020,17 @@ func (h *Handlers) handleTriggerGet(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (h *Handlers) handleTriggerUpdate(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) handleRuleUpdate(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	var req triggerRequest
+	var req engine.RuleHTTPRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if err := h.engine.UpdateTrigger(name, engine.TriggerUpdateRequest{
-		Enabled:      req.Enabled,
-		PLC:          req.PLC,
-		TriggerTag:   req.TriggerTag,
-		Condition:    req.Condition,
-		AckTag:       req.AckTag,
-		DebounceMS:   req.DebounceMS,
-		Tags:         req.Tags,
-		MQTTBroker:   req.MQTTBroker,
-		KafkaCluster: req.KafkaCluster,
-		Selector:     req.Selector,
-		Metadata:     req.Metadata,
-		PublishPack:  req.PublishPack,
-	}); err != nil {
+	if err := h.engine.UpdateRule(name, req.ToUpdateRequest()); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -1407,11 +1038,11 @@ func (h *Handlers) handleTriggerUpdate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *Handlers) handleTriggerDelete(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) handleRuleDelete(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	if err := h.engine.DeleteTrigger(name); err != nil {
+	if err := h.engine.DeleteRule(name); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}
@@ -1419,50 +1050,12 @@ func (h *Handlers) handleTriggerDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *Handlers) handleTriggerTestFire(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) handleRuleTestFire(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	name, _ = url.PathUnescape(name)
 
-	if err := h.engine.TestFireTrigger(name); err != nil {
+	if err := h.engine.TestFireRule(name); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (h *Handlers) handleTriggerAddTag(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	name, _ = url.PathUnescape(name)
-
-	var req struct {
-		Tag string `json:"tag"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if err := h.engine.AddTriggerTag(name, req.Tag); err != nil {
-		h.writeEngineError(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-}
-
-func (h *Handlers) handleTriggerRemoveTag(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	name, _ = url.PathUnescape(name)
-	indexStr := chi.URLParam(r, "index")
-	index, err := strconv.Atoi(indexStr)
-	if err != nil {
-		http.Error(w, "Invalid tag index", http.StatusBadRequest)
-		return
-	}
-
-	if err := h.engine.RemoveTriggerTag(name, index); err != nil {
-		h.writeEngineError(w, err)
 		return
 	}
 
@@ -1560,229 +1153,17 @@ func flattenTagValue(prefix string, m map[string]interface{}, results *[]plcTagE
 	}
 }
 
-// --- Push CRUD ---
-
-type pushRequest struct {
-	Name            string                `json:"name"`
-	Enabled         bool                  `json:"enabled"`
-	Conditions      []config.PushCondition `json:"conditions"`
-	URL             string                `json:"url"`
-	Method          string                `json:"method"`
-	ContentType     string                `json:"content_type"`
-	Headers         map[string]string     `json:"headers,omitempty"`
-	Body            string                `json:"body"`
-	Auth            config.PushAuthConfig `json:"auth"`
-	CooldownMin     string                `json:"cooldown_min"`
-	CooldownPerCond bool                  `json:"cooldown_per_condition"`
-	Timeout         string                `json:"timeout"`
-}
-
-func (h *Handlers) handlePushCreate(w http.ResponseWriter, r *http.Request) {
-	var req pushRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	var cooldown time.Duration
-	if req.CooldownMin != "" {
-		if d, err := time.ParseDuration(req.CooldownMin); err == nil {
-			cooldown = d
-		}
-	}
-	var timeout time.Duration
-	if req.Timeout != "" {
-		if d, err := time.ParseDuration(req.Timeout); err == nil {
-			timeout = d
-		}
-	}
-
-	if err := h.engine.CreatePush(engine.PushCreateRequest{
-		Name:            req.Name,
-		Enabled:         req.Enabled,
-		Conditions:      req.Conditions,
-		URL:             req.URL,
-		Method:          req.Method,
-		ContentType:     req.ContentType,
-		Headers:         req.Headers,
-		Body:            req.Body,
-		Auth:            req.Auth,
-		CooldownMin:     cooldown,
-		CooldownPerCond: req.CooldownPerCond,
-		Timeout:         timeout,
-	}); err != nil {
-		h.writeEngineError(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-}
-
-func (h *Handlers) handlePushGet(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	name, _ = url.PathUnescape(name)
-
-	cfg := h.managers.GetConfig()
-	pc := cfg.FindPush(name)
-	if pc == nil {
-		http.Error(w, "Push not found", http.StatusNotFound)
-		return
-	}
-
-	pushMgr := h.managers.GetPushMgr()
-	var statusStr string
-	var sendCount int64
-	var lastSendStr string
-	var lastHTTPCode int
-	var errStr string
-
-	if pushMgr != nil {
-		pStatus, pErr, count, lastSend, lastCode := pushMgr.GetPushStatus(name)
-		statusStr = pushStatusStr(pStatus)
-		sendCount = count
-		lastHTTPCode = lastCode
-		if !lastSend.IsZero() {
-			lastSendStr = lastSend.Format("2006-01-02 15:04:05")
-		}
-		if pErr != nil {
-			errStr = pErr.Error()
-		}
-	}
-
-	resp := map[string]interface{}{
-		"name":                  pc.Name,
-		"enabled":               pc.Enabled,
-		"conditions":            pc.Conditions,
-		"url":                   pc.URL,
-		"method":                pc.Method,
-		"content_type":          pc.ContentType,
-		"headers":               pc.Headers,
-		"body":                  pc.Body,
-		"cooldown_min":          pc.CooldownMin.String(),
-		"cooldown_per_condition": pc.CooldownPerCond,
-		"timeout":               pc.Timeout.String(),
-		"status":                statusStr,
-		"send_count":            sendCount,
-		"last_http_code":        lastHTTPCode,
-		"auth_type":             string(pc.Auth.Type),
-		"has_token":             pc.Auth.Token != "",
-	}
-	if lastSendStr != "" {
-		resp["last_send"] = lastSendStr
-	}
-	if errStr != "" {
-		resp["error"] = errStr
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
-}
-
-func (h *Handlers) handlePushUpdate(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	name, _ = url.PathUnescape(name)
-
-	var req pushRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	var cooldown time.Duration
-	if req.CooldownMin != "" {
-		if d, err := time.ParseDuration(req.CooldownMin); err == nil {
-			cooldown = d
-		}
-	}
-	var timeout time.Duration
-	if req.Timeout != "" {
-		if d, err := time.ParseDuration(req.Timeout); err == nil {
-			timeout = d
-		}
-	}
-
-	if err := h.engine.UpdatePush(name, engine.PushUpdateRequest{
-		Enabled:         req.Enabled,
-		Conditions:      req.Conditions,
-		URL:             req.URL,
-		Method:          req.Method,
-		ContentType:     req.ContentType,
-		Headers:         req.Headers,
-		Body:            req.Body,
-		Auth:            req.Auth,
-		CooldownMin:     cooldown,
-		CooldownPerCond: req.CooldownPerCond,
-		Timeout:         timeout,
-	}); err != nil {
-		h.writeEngineError(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (h *Handlers) handlePushDelete(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	name, _ = url.PathUnescape(name)
-
-	if err := h.engine.DeletePush(name); err != nil {
-		h.writeEngineError(w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (h *Handlers) handlePushStart(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	name, _ = url.PathUnescape(name)
-
-	if err := h.engine.StartPush(name); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (h *Handlers) handlePushStop(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	name, _ = url.PathUnescape(name)
-
-	h.engine.StopPush(name)
-	w.WriteHeader(http.StatusOK)
-}
-
-func (h *Handlers) handlePushTestFire(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
-	name, _ = url.PathUnescape(name)
-
-	if err := h.engine.TestFirePush(name); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-// handlePushPartial returns the push list partial.
-func (h *Handlers) handlePushPartial(w http.ResponseWriter, r *http.Request) {
-	data := h.getUserInfo(r)
-	data["Pushes"] = h.getPushData()
-	h.renderTemplate(w, "push_table.html", data)
-}
-
-func pushStatusStr(s push.Status) string {
+func ruleStatusString(s rule.Status) string {
 	switch s {
-	case push.StatusArmed:
+	case rule.StatusArmed:
 		return "armed"
-	case push.StatusFiring:
+	case rule.StatusFiring:
 		return "firing"
-	case push.StatusWaitingClear:
-		return "waiting"
-	case push.StatusMinInterval:
+	case rule.StatusWaitingClear:
+		return "waiting_clear"
+	case rule.StatusCooldown:
 		return "cooldown"
-	case push.StatusError:
+	case rule.StatusError:
 		return "error"
 	default:
 		return "disabled"

@@ -133,6 +133,27 @@ var RepublisherSSE = (function() {
                 display += ' [' + fieldCount + ' fields]';
                 nameSpan.textContent = display;
             }
+
+            // Add published child count span if not already present
+            var tagRowForCount = tagItem.querySelector('.tag-row');
+            if (tagRowForCount && !tagRowForCount.querySelector('.published-child-count')) {
+                var pubChildren = {};
+                try { pubChildren = JSON.parse(tagItem.dataset.publishedChildren || '{}'); } catch (e) {}
+                var pubCount = 0;
+                for (var pk in pubChildren) {
+                    if (pubChildren[pk] && pubChildren[pk].enabled) pubCount++;
+                }
+                var countSpan = document.createElement('span');
+                countSpan.className = 'published-child-count';
+                countSpan.dataset.publishedCount = pubCount;
+                countSpan.textContent = '(' + pubCount + ' published children)';
+                var nameEl = tagRowForCount.querySelector('.tag-name');
+                if (nameEl && nameEl.nextSibling) {
+                    tagRowForCount.insertBefore(countSpan, nameEl.nextSibling);
+                } else {
+                    tagRowForCount.appendChild(countSpan);
+                }
+            }
         } else {
             // Update displayed value for non-struct types
             var tagValue = tagItem.querySelector('.tag-row .tag-value');
@@ -195,9 +216,22 @@ var RepublisherSSE = (function() {
             if (data.enabled) {
                 publishedChildren[childPath] = { enabled: data.enabled, writable: data.writable };
             } else {
-                delete publishedChildren[childPath];
+                if (publishedChildren[childPath]) {
+                    publishedChildren[childPath] = { enabled: false, writable: false };
+                }
             }
             tagItem.dataset.publishedChildren = JSON.stringify(publishedChildren);
+
+            // Update published child count display
+            var countEl = tagItem.querySelector(':scope > .tag-row .published-child-count');
+            if (countEl) {
+                var pubCount = 0;
+                for (var k in publishedChildren) {
+                    if (publishedChildren[k] && publishedChildren[k].enabled) pubCount++;
+                }
+                countEl.textContent = '(' + pubCount + ' published children)';
+                countEl.dataset.publishedCount = pubCount;
+            }
 
             // Update the child row's indicators if it exists
             var childRow = tagItem.querySelector('.tag-child-row[data-path="' + WarLink.escapeSelector(childPath) + '"]');

@@ -2201,27 +2201,27 @@ func (m *Manager) ReadTagValues(plcName string, tagNames []string) (map[string]i
 	return result, nil
 }
 
-// TriggerTagReader wraps the Manager to implement the trigger.TagReader interface.
-type TriggerTagReader struct {
+// RuleTagReader wraps the Manager to implement the rule.TagReader interface.
+type RuleTagReader struct {
 	Manager *Manager
 }
 
-// ReadTag implements trigger.TagReader.
-func (r *TriggerTagReader) ReadTag(plcName, tagName string) (interface{}, error) {
+// ReadTag implements rule.TagReader.
+func (r *RuleTagReader) ReadTag(plcName, tagName string) (interface{}, error) {
 	return r.Manager.ReadTagValue(plcName, tagName)
 }
 
-// ReadTags implements trigger.TagReader.
-func (r *TriggerTagReader) ReadTags(plcName string, tagNames []string) (map[string]interface{}, error) {
+// ReadTags implements rule.TagReader.
+func (r *RuleTagReader) ReadTags(plcName string, tagNames []string) (map[string]interface{}, error) {
 	return r.Manager.ReadTagValues(plcName, tagNames)
 }
 
-// TriggerTagWriter wraps the Manager to implement the trigger.TagWriter interface.
-type TriggerTagWriter struct {
+// RuleTagWriter wraps the Manager to implement the rule.TagWriter interface.
+type RuleTagWriter struct {
 	Manager *Manager
 }
 
-// WriteTag implements trigger.TagWriter.
-func (w *TriggerTagWriter) WriteTag(plcName, tagName string, value interface{}) error {
+// WriteTag implements rule.TagWriter.
+func (w *RuleTagWriter) WriteTag(plcName, tagName string, value interface{}) error {
 	return w.Manager.WriteTag(plcName, tagName, value)
 }

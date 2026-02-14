@@ -1,0 +1,705 @@
+{{template "header" .}}
+
+<div class="page-header">
+    <h1>Rules</h1>
+</div>
+
+{{if .IsAdmin}}
+<div class="action-bar">
+    <button class="btn btn-primary" onclick="showAddRuleModal()">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;vertical-align:-2px">
+            <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        Add Rule
+    </button>
+</div>
+{{end}}
+
+<div id="rules-container">
+    {{template "rules_table.html" .}}
+</div>
+
+<!-- Rule Modal (shared for add/edit) -->
+<div id="rule-modal" class="modal" style="display:none">
+    <div class="modal-content modal-xl">
+        <div class="modal-header">
+            <h2 id="rule-modal-title">Add Rule</h2>
+            <button class="modal-close" onclick="WarLink.hideModal('rule-modal')">&times;</button>
+        </div>
+        <form id="rule-form" onsubmit="submitRule(event)">
+            <input type="hidden" id="rule-mode" value="add">
+            <input type="hidden" id="rule-edit-name" value="">
+            <div class="modal-body">
+                <!-- Basic Settings -->
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="rule-name">Name</label>
+                        <input type="text" id="rule-name" required pattern="[a-zA-Z0-9_-]+" title="Letters, numbers, underscore, dash only">
+                    </div>
+                    <div class="form-group">
+                        <label for="rule-logic-mode">Logic Mode</label>
+                        <select id="rule-logic-mode">
+                            <option value="and">AND (all conditions)</option>
+                            <option value="or">OR (any condition)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="rule-debounce">Debounce (ms)</label>
+                        <input type="number" id="rule-debounce" min="0" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label for="rule-cooldown">Cooldown (ms)</label>
+                        <input type="number" id="rule-cooldown" min="0" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="rule-enabled" checked>
+                            Enabled
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Conditions -->
+                <div class="rule-section">
+                    <div class="rule-section-header">
+                        <h4>Conditions</h4>
+                        <button type="button" class="btn btn-sm" onclick="addConditionRow()">+ Add</button>
+                    </div>
+                    <div id="conditions-list"></div>
+                </div>
+
+                <!-- Actions -->
+                <div class="rule-section">
+                    <div class="rule-section-header">
+                        <h4>Actions (Rising Edge)</h4>
+                        <button type="button" class="btn btn-sm" onclick="addActionRow('actions')">+ Add</button>
+                    </div>
+                    <div id="actions-list"></div>
+                </div>
+
+                <!-- Cleared Actions (collapsible) -->
+                <div class="rule-section">
+                    <div class="rule-section-header rule-section-toggle" onclick="toggleClearedActions()">
+                        <h4>Cleared Actions (Falling Edge) <span id="cleared-arrow" class="section-expand">&#9660;</span></h4>
+                        <button type="button" class="btn btn-sm" onclick="event.stopPropagation(); addActionRow('cleared')">+ Add</button>
+                    </div>
+                    <div id="cleared-list" style="display:none"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn" onclick="WarLink.hideModal('rule-modal')">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="rule-submit-btn">Add Rule</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// PLC names from server for condition dropdowns
+var plcNames = [{{range $i, $name := .PLCNames}}{{if $i}},{{end}}"{{$name}}"{{end}}];
+
+// Tag cache per PLC
+var plcTagCache = {};
+
+function fetchPLCTags(plcName, callback) {
+    if (plcTagCache[plcName]) {
+        callback(plcTagCache[plcName]);
+        return;
+    }
+    WarLink.api.get('/htmx/plc-tags/' + encodeURIComponent(plcName))
+        .then(function(tags) {
+            plcTagCache[plcName] = tags || [];
+            callback(plcTagCache[plcName]);
+        })
+        .catch(function() {
+            callback([]);
+        });
+}
+
+// --- Condition Rows ---
+var conditionIdx = 0;
+
+function addConditionRow(data) {
+    var idx = conditionIdx++;
+    var div = document.createElement('div');
+    div.className = 'dynamic-row';
+    div.id = 'cond-' + idx;
+
+    var plcOptions = '<option value="">Select PLC</option>';
+    plcNames.forEach(function(n) {
+        var sel = data && data.PLC === n ? ' selected' : '';
+        plcOptions += '<option value="' + WarLink.escapeHtml(n) + '"' + sel + '>' + WarLink.escapeHtml(n) + '</option>';
+    });
+
+    var ops = ['==', '!=', '>', '<', '>=', '<='];
+    var opOptions = '';
+    ops.forEach(function(op) {
+        var sel = data && data.Operator === op ? ' selected' : '';
+        opOptions += '<option value="' + op + '"' + sel + '>' + op + '</option>';
+    });
+
+    div.innerHTML =
+        '<div class="form-row">' +
+            '<div class="form-group">' +
+                '<label>PLC</label>' +
+                '<select id="cond-plc-' + idx + '" onchange="onCondPLCChange(' + idx + ')">' + plcOptions + '</select>' +
+            '</div>' +
+            '<div class="form-group">' +
+                '<label>Tag</label>' +
+                '<select id="cond-tag-' + idx + '"><option value="">Select tag</option></select>' +
+            '</div>' +
+            '<div class="form-group">' +
+                '<label>Operator</label>' +
+                '<select id="cond-op-' + idx + '">' + opOptions + '</select>' +
+            '</div>' +
+            '<div class="form-group">' +
+                '<label>Value</label>' +
+                '<input type="text" id="cond-val-' + idx + '" value="' + WarLink.escapeHtml(data && data.Value != null ? String(data.Value) : '') + '">' +
+            '</div>' +
+            '<div class="form-group">' +
+                '<label><input type="checkbox" id="cond-not-' + idx + '"' + (data && data.Not ? ' checked' : '') + '> NOT</label>' +
+            '</div>' +
+            '<div class="form-group form-group-btn">' +
+                '<button type="button" class="btn btn-sm btn-danger" onclick="removeRow(\'cond-' + idx + '\')">Remove</button>' +
+            '</div>' +
+        '</div>';
+
+    document.getElementById('conditions-list').appendChild(div);
+
+    // If data has a PLC, load its tags and set selected
+    if (data && data.PLC) {
+        fetchPLCTags(data.PLC, function(tags) {
+            populateTagSelect('cond-tag-' + idx, tags, data.Tag);
+        });
+    }
+}
+
+function onCondPLCChange(idx) {
+    var plc = document.getElementById('cond-plc-' + idx).value;
+    var tagSel = document.getElementById('cond-tag-' + idx);
+    tagSel.innerHTML = '<option value="">Loading...</option>';
+    if (!plc) {
+        tagSel.innerHTML = '<option value="">Select tag</option>';
+        return;
+    }
+    fetchPLCTags(plc, function(tags) {
+        populateTagSelect('cond-tag-' + idx, tags, '');
+    });
+}
+
+function populateTagSelect(selectId, tags, selectedName) {
+    var sel = document.getElementById(selectId);
+    if (!sel) return;
+    var html = '<option value="">Select tag</option>';
+    tags.forEach(function(t) {
+        var name = t.name || t.Name || t;
+        var s = name === selectedName ? ' selected' : '';
+        html += '<option value="' + WarLink.escapeHtml(name) + '"' + s + '>' + WarLink.escapeHtml(name) + '</option>';
+    });
+    sel.innerHTML = html;
+}
+
+// --- Action Rows ---
+var actionIdx = 0;
+
+function addActionRow(listKey, data) {
+    var idx = actionIdx++;
+    var prefix = listKey === 'cleared' ? 'ca' : 'act';
+    var containerId = listKey === 'cleared' ? 'cleared-list' : 'actions-list';
+    var div = document.createElement('div');
+    div.className = 'dynamic-row action-row';
+    div.id = prefix + '-' + idx;
+
+    var actionType = (data && data.Type) || 'publish';
+    var typeOptions = '';
+    ['publish', 'webhook', 'writeback'].forEach(function(t) {
+        var sel = t === actionType ? ' selected' : '';
+        typeOptions += '<option value="' + t + '"' + sel + '>' + t + '</option>';
+    });
+
+    div.innerHTML =
+        '<div class="form-row">' +
+            '<div class="form-group">' +
+                '<label>Type</label>' +
+                '<select id="' + prefix + '-type-' + idx + '" onchange="updateActionFields(\'' + prefix + '\',' + idx + ')">' + typeOptions + '</select>' +
+            '</div>' +
+            '<div class="form-group">' +
+                '<label>Name (optional)</label>' +
+                '<input type="text" id="' + prefix + '-name-' + idx + '" value="' + WarLink.escapeHtml((data && data.Name) || '') + '">' +
+            '</div>' +
+            '<div class="form-group form-group-btn">' +
+                '<button type="button" class="btn btn-sm btn-danger" onclick="removeRow(\'' + prefix + '-' + idx + '\')">Remove</button>' +
+            '</div>' +
+        '</div>' +
+        '<div id="' + prefix + '-fields-' + idx + '"></div>';
+
+    document.getElementById(containerId).appendChild(div);
+    renderActionFields(prefix, idx, data);
+}
+
+function updateActionFields(prefix, idx) {
+    renderActionFields(prefix, idx, null);
+}
+
+function renderActionFields(prefix, idx, data) {
+    var type = document.getElementById(prefix + '-type-' + idx).value;
+    var container = document.getElementById(prefix + '-fields-' + idx);
+
+    if (type === 'publish') {
+        container.innerHTML =
+            '<div class="form-row">' +
+                '<div class="form-group">' +
+                    '<label>Tag or Pack</label>' +
+                    '<input type="text" id="' + prefix + '-tagpack-' + idx + '" value="' + esc(data, 'TagOrPack') + '" placeholder="tag_name or pack:pack_name">' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label><input type="checkbox" id="' + prefix + '-includetrig-' + idx + '"' + (data && data.IncludeTrigger ? ' checked' : '') + '> Include Trigger</label>' +
+                '</div>' +
+            '</div>' +
+            '<div class="form-row">' +
+                '<div class="form-group">' +
+                    '<label>MQTT Broker</label>' +
+                    '<input type="text" id="' + prefix + '-mqttbroker-' + idx + '" value="' + esc(data, 'MQTTBroker') + '" placeholder="all, none, or name">' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>MQTT Topic</label>' +
+                    '<input type="text" id="' + prefix + '-mqtttopic-' + idx + '" value="' + esc(data, 'MQTTTopic') + '">' +
+                '</div>' +
+            '</div>' +
+            '<div class="form-row">' +
+                '<div class="form-group">' +
+                    '<label>Kafka Cluster</label>' +
+                    '<input type="text" id="' + prefix + '-kafkacluster-' + idx + '" value="' + esc(data, 'KafkaCluster') + '" placeholder="all, none, or name">' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Kafka Topic</label>' +
+                    '<input type="text" id="' + prefix + '-kafkatopic-' + idx + '" value="' + esc(data, 'KafkaTopic') + '">' +
+                '</div>' +
+            '</div>';
+    } else if (type === 'webhook') {
+        var methods = ['POST', 'GET', 'PUT', 'PATCH'];
+        var methodOpts = '';
+        methods.forEach(function(m) {
+            var sel = data && data.Method === m ? ' selected' : '';
+            methodOpts += '<option value="' + m + '"' + sel + '>' + m + '</option>';
+        });
+
+        var ctypes = ['application/json', 'text/plain', 'text/html'];
+        var ctypeOpts = '';
+        ctypes.forEach(function(ct) {
+            var sel = data && data.ContentType === ct ? ' selected' : '';
+            ctypeOpts += '<option value="' + ct + '"' + sel + '>' + ct + '</option>';
+        });
+
+        var authTypes = [
+            {value: '', label: 'None'},
+            {value: 'bearer', label: 'Bearer Token'},
+            {value: 'basic', label: 'Basic Auth'},
+            {value: 'jwt', label: 'JWT'},
+            {value: 'custom_header', label: 'Custom Header'}
+        ];
+        var authOpts = '';
+        var authType = (data && data.Auth && data.Auth.Type) || '';
+        authTypes.forEach(function(at) {
+            var sel = at.value === authType ? ' selected' : '';
+            authOpts += '<option value="' + at.value + '"' + sel + '>' + at.label + '</option>';
+        });
+
+        container.innerHTML =
+            '<div class="form-row">' +
+                '<div class="form-group">' +
+                    '<label>URL</label>' +
+                    '<input type="text" id="' + prefix + '-url-' + idx + '" value="' + esc(data, 'URL') + '" placeholder="https://example.com/hook">' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Method</label>' +
+                    '<select id="' + prefix + '-method-' + idx + '">' + methodOpts + '</select>' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Content Type</label>' +
+                    '<select id="' + prefix + '-ctype-' + idx + '">' + ctypeOpts + '</select>' +
+                '</div>' +
+            '</div>' +
+            '<div class="form-group">' +
+                '<label>Body</label>' +
+                '<textarea id="' + prefix + '-body-' + idx + '" rows="3" style="width:100%;padding:0.5rem 0.75rem;font-size:1rem;border:1px solid var(--color-border);border-radius:var(--radius);font-family:ui-monospace,SFMono-Regular,monospace;resize:vertical">' + WarLink.escapeHtml((data && data.Body) || '') + '</textarea>' +
+            '</div>' +
+            '<div class="form-row">' +
+                '<div class="form-group">' +
+                    '<label>Auth Type</label>' +
+                    '<select id="' + prefix + '-authtype-' + idx + '" onchange="updateAuthFields(\'' + prefix + '\',' + idx + ')">' + authOpts + '</select>' +
+                '</div>' +
+            '</div>' +
+            '<div id="' + prefix + '-authfields-' + idx + '"></div>';
+
+        renderAuthFields(prefix, idx, data && data.Auth);
+    } else if (type === 'writeback') {
+        container.innerHTML =
+            '<div class="form-row">' +
+                '<div class="form-group">' +
+                    '<label>PLC</label>' +
+                    '<input type="text" id="' + prefix + '-writeplc-' + idx + '" value="' + esc(data, 'WritePLC') + '">' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Tag</label>' +
+                    '<input type="text" id="' + prefix + '-writetag-' + idx + '" value="' + esc(data, 'WriteTag') + '">' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Value</label>' +
+                    '<input type="text" id="' + prefix + '-writeval-' + idx + '" value="' + esc(data, 'WriteValue') + '">' +
+                '</div>' +
+            '</div>';
+    }
+}
+
+function updateAuthFields(prefix, idx) {
+    renderAuthFields(prefix, idx, null);
+}
+
+function renderAuthFields(prefix, idx, authData) {
+    var type = document.getElementById(prefix + '-authtype-' + idx).value;
+    var container = document.getElementById(prefix + '-authfields-' + idx);
+    if (!container) return;
+
+    if (type === 'bearer' || type === 'jwt') {
+        container.innerHTML =
+            '<div class="form-row">' +
+                '<div class="form-group">' +
+                    '<label>Token</label>' +
+                    '<input type="text" id="' + prefix + '-authtoken-' + idx + '" value="' + WarLink.escapeHtml((authData && authData.Token) || '') + '">' +
+                '</div>' +
+            '</div>';
+    } else if (type === 'basic') {
+        container.innerHTML =
+            '<div class="form-row">' +
+                '<div class="form-group">' +
+                    '<label>Username</label>' +
+                    '<input type="text" id="' + prefix + '-authuser-' + idx + '" value="' + WarLink.escapeHtml((authData && authData.Username) || '') + '">' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Password</label>' +
+                    '<input type="password" id="' + prefix + '-authpass-' + idx + '" value="' + WarLink.escapeHtml((authData && authData.Password) || '') + '">' +
+                '</div>' +
+            '</div>';
+    } else if (type === 'custom_header') {
+        container.innerHTML =
+            '<div class="form-row">' +
+                '<div class="form-group">' +
+                    '<label>Header Name</label>' +
+                    '<input type="text" id="' + prefix + '-authhdrname-' + idx + '" value="' + WarLink.escapeHtml((authData && authData.HeaderName) || '') + '">' +
+                '</div>' +
+                '<div class="form-group">' +
+                    '<label>Header Value</label>' +
+                    '<input type="text" id="' + prefix + '-authhdrval-' + idx + '" value="' + WarLink.escapeHtml((authData && authData.HeaderValue) || '') + '">' +
+                '</div>' +
+            '</div>';
+    } else {
+        container.innerHTML = '';
+    }
+}
+
+function esc(data, field) {
+    if (!data || data[field] == null) return '';
+    return WarLink.escapeHtml(String(data[field]));
+}
+
+function removeRow(id) {
+    var el = document.getElementById(id);
+    if (el) el.remove();
+}
+
+function toggleClearedActions() {
+    var list = document.getElementById('cleared-list');
+    var arrow = document.getElementById('cleared-arrow');
+    if (list.style.display === 'none') {
+        list.style.display = '';
+        arrow.style.transform = 'rotate(0deg)';
+    } else {
+        list.style.display = 'none';
+        arrow.style.transform = 'rotate(-90deg)';
+    }
+}
+
+// --- Modal Show/Hide ---
+
+function resetModal() {
+    conditionIdx = 0;
+    actionIdx = 0;
+    plcTagCache = {};
+    document.getElementById('conditions-list').innerHTML = '';
+    document.getElementById('actions-list').innerHTML = '';
+    document.getElementById('cleared-list').innerHTML = '';
+    document.getElementById('cleared-list').style.display = 'none';
+    document.getElementById('cleared-arrow').style.transform = 'rotate(-90deg)';
+    document.getElementById('rule-name').value = '';
+    document.getElementById('rule-name').disabled = false;
+    document.getElementById('rule-logic-mode').value = 'and';
+    document.getElementById('rule-debounce').value = '0';
+    document.getElementById('rule-cooldown').value = '0';
+    document.getElementById('rule-enabled').checked = true;
+}
+
+function showAddRuleModal() {
+    resetModal();
+    document.getElementById('rule-mode').value = 'add';
+    document.getElementById('rule-edit-name').value = '';
+    document.getElementById('rule-modal-title').textContent = 'Add Rule';
+    document.getElementById('rule-submit-btn').textContent = 'Add Rule';
+    addConditionRow();
+    addActionRow('actions');
+    WarLink.showModal('rule-modal');
+}
+
+function showEditRuleModal(name) {
+    resetModal();
+    document.getElementById('rule-mode').value = 'edit';
+    document.getElementById('rule-edit-name').value = name;
+    document.getElementById('rule-modal-title').textContent = 'Edit Rule';
+    document.getElementById('rule-submit-btn').textContent = 'Save Changes';
+
+    WarLink.api.get('/htmx/rules/' + encodeURIComponent(name))
+        .then(function(data) {
+            document.getElementById('rule-name').value = data.name;
+            document.getElementById('rule-name').disabled = true;
+            document.getElementById('rule-logic-mode').value = data.logic_mode || 'and';
+            document.getElementById('rule-debounce').value = data.debounce_ms || 0;
+            document.getElementById('rule-cooldown').value = data.cooldown_ms || 0;
+            document.getElementById('rule-enabled').checked = data.enabled;
+
+            // Populate conditions (PascalCase from Go struct with yaml-only tags)
+            if (data.conditions && data.conditions.length > 0) {
+                data.conditions.forEach(function(c) {
+                    addConditionRow({
+                        PLC: c.PLC || c.plc || '',
+                        Tag: c.Tag || c.tag || '',
+                        Operator: c.Operator || c.operator || '==',
+                        Value: c.Value != null ? c.Value : (c.value != null ? c.value : ''),
+                        Not: c.Not || c.not || false
+                    });
+                });
+            }
+
+            // Populate actions
+            if (data.actions && data.actions.length > 0) {
+                data.actions.forEach(function(a) { addActionRow('actions', normalizeAction(a)); });
+            }
+
+            // Populate cleared actions
+            if (data.cleared_actions && data.cleared_actions.length > 0) {
+                document.getElementById('cleared-list').style.display = '';
+                document.getElementById('cleared-arrow').style.transform = 'rotate(0deg)';
+                data.cleared_actions.forEach(function(a) { addActionRow('cleared', normalizeAction(a)); });
+            }
+
+            WarLink.showModal('rule-modal');
+        })
+        .catch(function(err) {
+            WarLink.toast('Error loading rule: ' + err.message, 'error');
+        });
+}
+
+// Normalize action fields from PascalCase (Go yaml-only structs) to what our JS expects
+function normalizeAction(a) {
+    return {
+        Type: a.Type || a.type || 'publish',
+        Name: a.Name || a.name || '',
+        TagOrPack: a.TagOrPack || a.tag_or_pack || '',
+        IncludeTrigger: a.IncludeTrigger || a.include_trigger || false,
+        MQTTBroker: a.MQTTBroker || a.mqtt_broker || '',
+        MQTTTopic: a.MQTTTopic || a.mqtt_topic || '',
+        KafkaCluster: a.KafkaCluster || a.kafka_cluster || '',
+        KafkaTopic: a.KafkaTopic || a.kafka_topic || '',
+        URL: a.URL || a.url || '',
+        Method: a.Method || a.method || 'POST',
+        ContentType: a.ContentType || a.content_type || 'application/json',
+        Body: a.Body || a.body || '',
+        Auth: normalizeAuth(a.Auth || a.auth),
+        WritePLC: a.WritePLC || a.write_plc || '',
+        WriteTag: a.WriteTag || a.write_tag || '',
+        WriteValue: a.WriteValue != null ? a.WriteValue : (a.write_value != null ? a.write_value : '')
+    };
+}
+
+function normalizeAuth(a) {
+    if (!a) return {Type: '', Token: '', Username: '', Password: '', HeaderName: '', HeaderValue: ''};
+    return {
+        Type: a.Type || a.type || '',
+        Token: a.Token || a.token || '',
+        Username: a.Username || a.username || '',
+        Password: a.Password || a.password || '',
+        HeaderName: a.HeaderName || a.header_name || '',
+        HeaderValue: a.HeaderValue || a.header_value || ''
+    };
+}
+
+// --- Collect Form Data ---
+
+function collectConditions() {
+    var list = document.getElementById('conditions-list');
+    var rows = list.querySelectorAll('.dynamic-row');
+    var conditions = [];
+    rows.forEach(function(row) {
+        var id = row.id.replace('cond-', '');
+        var plc = document.getElementById('cond-plc-' + id);
+        var tag = document.getElementById('cond-tag-' + id);
+        var op = document.getElementById('cond-op-' + id);
+        var val = document.getElementById('cond-val-' + id);
+        var not = document.getElementById('cond-not-' + id);
+        if (!plc || !tag) return;
+
+        var rawVal = val.value;
+        var parsedVal = rawVal;
+        // Try to parse as number
+        if (rawVal !== '' && !isNaN(Number(rawVal))) {
+            parsedVal = Number(rawVal);
+        } else if (rawVal === 'true') {
+            parsedVal = true;
+        } else if (rawVal === 'false') {
+            parsedVal = false;
+        }
+
+        conditions.push({
+            plc: plc.value,
+            tag: tag.value,
+            operator: op.value,
+            value: parsedVal,
+            not: not.checked
+        });
+    });
+    return conditions;
+}
+
+function collectActions(containerId, prefix) {
+    var list = document.getElementById(containerId);
+    var rows = list.querySelectorAll('.action-row');
+    var actions = [];
+    rows.forEach(function(row) {
+        var id = row.id.replace(prefix + '-', '');
+        var typeEl = document.getElementById(prefix + '-type-' + id);
+        var nameEl = document.getElementById(prefix + '-name-' + id);
+        if (!typeEl) return;
+        var type = typeEl.value;
+        var action = {
+            type: type,
+            name: nameEl ? nameEl.value : ''
+        };
+
+        if (type === 'publish') {
+            action.tag_or_pack = gv(prefix + '-tagpack-' + id);
+            action.include_trigger = gc(prefix + '-includetrig-' + id);
+            action.mqtt_broker = gv(prefix + '-mqttbroker-' + id);
+            action.mqtt_topic = gv(prefix + '-mqtttopic-' + id);
+            action.kafka_cluster = gv(prefix + '-kafkacluster-' + id);
+            action.kafka_topic = gv(prefix + '-kafkatopic-' + id);
+        } else if (type === 'webhook') {
+            action.url = gv(prefix + '-url-' + id);
+            action.method = gv(prefix + '-method-' + id);
+            action.content_type = gv(prefix + '-ctype-' + id);
+            action.body = gv(prefix + '-body-' + id);
+            var authType = gv(prefix + '-authtype-' + id);
+            action.auth = {type: authType};
+            if (authType === 'bearer' || authType === 'jwt') {
+                action.auth.token = gv(prefix + '-authtoken-' + id);
+            } else if (authType === 'basic') {
+                action.auth.username = gv(prefix + '-authuser-' + id);
+                action.auth.password = gv(prefix + '-authpass-' + id);
+            } else if (authType === 'custom_header') {
+                action.auth.header_name = gv(prefix + '-authhdrname-' + id);
+                action.auth.header_value = gv(prefix + '-authhdrval-' + id);
+            }
+        } else if (type === 'writeback') {
+            action.write_plc = gv(prefix + '-writeplc-' + id);
+            action.write_tag = gv(prefix + '-writetag-' + id);
+            var wv = gv(prefix + '-writeval-' + id);
+            if (wv !== '' && !isNaN(Number(wv))) {
+                action.write_value = Number(wv);
+            } else if (wv === 'true') {
+                action.write_value = true;
+            } else if (wv === 'false') {
+                action.write_value = false;
+            } else {
+                action.write_value = wv;
+            }
+        }
+        actions.push(action);
+    });
+    return actions;
+}
+
+// Helper: get value by id
+function gv(id) {
+    var el = document.getElementById(id);
+    return el ? el.value : '';
+}
+
+// Helper: get checked by id
+function gc(id) {
+    var el = document.getElementById(id);
+    return el ? el.checked : false;
+}
+
+// --- Submit ---
+
+function submitRule(e) {
+    e.preventDefault();
+    var mode = document.getElementById('rule-mode').value;
+    var payload = {
+        name: document.getElementById('rule-name').value,
+        enabled: document.getElementById('rule-enabled').checked,
+        logic_mode: document.getElementById('rule-logic-mode').value,
+        debounce_ms: parseInt(document.getElementById('rule-debounce').value) || 0,
+        cooldown_ms: parseInt(document.getElementById('rule-cooldown').value) || 0,
+        conditions: collectConditions(),
+        actions: collectActions('actions-list', 'act'),
+        cleared_actions: collectActions('cleared-list', 'ca')
+    };
+
+    var promise;
+    if (mode === 'add') {
+        promise = WarLink.api.post('/htmx/rules', payload);
+    } else {
+        var name = document.getElementById('rule-edit-name').value;
+        promise = WarLink.api.put('/htmx/rules/' + encodeURIComponent(name), payload);
+    }
+
+    promise
+        .then(function() {
+            WarLink.hideModal('rule-modal');
+            location.reload();
+        })
+        .catch(function(err) {
+            WarLink.toast('Error: ' + err.message, 'error');
+        });
+}
+
+// SSE for real-time status updates
+WarLink.createSSE('/events/republisher', {
+    onRuleStatus: function(data) {
+        var row = document.querySelector('.rule-row[data-name="' + data.name + '"]');
+        if (!row) return;
+
+        row.dataset.status = data.status;
+        row.dataset.statusClass = data.statusClass;
+
+        var badge = row.querySelector('.status-badge');
+        if (badge) {
+            badge.className = 'status-badge status-' + data.statusClass;
+            badge.textContent = data.status;
+        }
+
+        var fireCell = row.querySelector('.fire-count');
+        if (fireCell) fireCell.textContent = data.fireCount;
+
+        var lastCell = row.querySelector('.last-fire');
+        if (lastCell) lastCell.textContent = data.lastFire || '-';
+    },
+    onEntityChange: function(data) {
+        if (data.entityType !== 'rule') return;
+        location.reload();
+    }
+});
+</script>
+
+{{template "footer" .}}

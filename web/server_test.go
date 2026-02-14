@@ -10,16 +10,19 @@ import (
 	"time"
 
 	"warlink/config"
+	"warlink/engine"
 	"warlink/kafka"
 	"warlink/mqtt"
 	"warlink/plcman"
-	"warlink/push"
+	"warlink/rule"
 	"warlink/tagpack"
-	"warlink/trigger"
 	"warlink/valkey"
 
 	"golang.org/x/crypto/bcrypt"
 )
+
+// Verify testManagers implements engine.Managers.
+var _ engine.Managers = (*testManagers)(nil)
 
 type testManagers struct {
 	cfg        *config.Config
@@ -33,9 +36,8 @@ func (m *testManagers) GetPLCMan() *plcman.Manager       { return m.plcMan }
 func (m *testManagers) GetMQTTMgr() *mqtt.Manager        { return nil }
 func (m *testManagers) GetValkeyMgr() *valkey.Manager     { return nil }
 func (m *testManagers) GetKafkaMgr() *kafka.Manager       { return nil }
-func (m *testManagers) GetTriggerMgr() *trigger.Manager   { return nil }
+func (m *testManagers) GetRuleMgr() *rule.Manager         { return nil }
 func (m *testManagers) GetPackMgr() *tagpack.Manager      { return nil }
-func (m *testManagers) GetPushMgr() *push.Manager          { return nil }
 
 func TestUnsecuredDeadline(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("admin"), bcrypt.DefaultCost)

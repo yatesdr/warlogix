@@ -869,16 +869,15 @@ func GetStatusBullet() string {
 
 // Tab labels
 const (
-	TabPLCs     = "PLCs"
-	TabBrowser  = "Republisher"
-	TabPacks    = "TagPacks"
-	TabWeb      = "Web"
-	TabMQTT     = "MQTT"
-	TabValkey   = "Valkey"
-	TabKafka    = "Kafka"
-	TabTriggers = "Triggers"
-	TabPush     = "Push"
-	TabDebug    = "Debug"
+	TabPLCs    = "PLCs"
+	TabBrowser = "Republisher"
+	TabPacks   = "TagPacks"
+	TabRules   = "Rules"
+	TabWeb     = "Web"
+	TabMQTT    = "MQTT"
+	TabValkey  = "Valkey"
+	TabKafka   = "Kafka"
+	TabDebug   = "Debug"
 )
 
 // acceptDigits is a validation function for numeric input fields.

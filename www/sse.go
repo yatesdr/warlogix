@@ -11,14 +11,12 @@ import (
 	"warlink/kafka"
 	"warlink/logging"
 	"warlink/plcman"
-	"warlink/push"
-	"warlink/trigger"
 	"warlink/tui"
 )
 
 // SSEEvent represents an event to broadcast to SSE clients.
 type SSEEvent struct {
-	Type string      `json:"type"` // "value-change", "config-change", "status-change", "mqtt-status", "valkey-status", "kafka-status", "trigger-status", "debug-log", "entity-change"
+	Type string      `json:"type"` // "value-change", "config-change", "status-change", "mqtt-status", "valkey-status", "kafka-status", "rule-status", "debug-log", "entity-change"
 	Data interface{} `json:"data"`
 }
 
@@ -76,23 +74,14 @@ type KafkaStatusUpdate struct {
 	Errors       int64  `json:"errors"`
 }
 
-// TriggerStatusUpdate represents a trigger status change.
-type TriggerStatusUpdate struct {
+// RuleStatusUpdate represents a rule status change.
+type RuleStatusUpdate struct {
 	Name        string `json:"name"`
-	Status      string `json:"status"` // "disabled", "armed", "firing", "cooldown", "error"
+	Status      string `json:"status"`
 	StatusClass string `json:"statusClass"`
 	FireCount   int64  `json:"fireCount"`
 	LastFire    string `json:"lastFire,omitempty"`
 	Error       string `json:"error,omitempty"`
-}
-
-// PushStatusUpdate represents a push webhook status change.
-type PushStatusUpdate struct {
-	Name         string `json:"name"`
-	Status       string `json:"status"`
-	StatusClass  string `json:"statusClass"`
-	SendCount    int64  `json:"sendCount"`
-	LastHTTPCode int    `json:"lastHTTPCode"`
 }
 
 // DebugLogUpdate represents a debug log entry.
@@ -104,7 +93,7 @@ type DebugLogUpdate struct {
 
 // EntityChangeUpdate represents an entity CRUD change.
 type EntityChangeUpdate struct {
-	EntityType string `json:"entityType"` // "mqtt", "valkey", "kafka", "trigger", "tagpack", "plc"
+	EntityType string `json:"entityType"` // "mqtt", "valkey", "kafka", "rule", "tagpack", "plc"
 	Action     string `json:"action"`     // "add", "update", "remove"
 	Name       string `json:"name"`
 }
@@ -448,23 +437,13 @@ func (h *Handlers) setupEventListeners() {
 		case engine.EventTagPackMemberAdded, engine.EventTagPackMemberRemoved, engine.EventTagPackMemberIgnoreToggled:
 			h.eventHub.broadcastEntityChange("tagpack", "update", evt.Payload.(engine.TagPackMemberEvent).PackName)
 
-		// Trigger CRUD
-		case engine.EventTriggerCreated:
-			h.eventHub.broadcastEntityChange("trigger", "add", evt.Payload.(engine.TriggerEvent).Name)
-		case engine.EventTriggerUpdated, engine.EventTriggerStarted, engine.EventTriggerStopped, engine.EventTriggerTestFired:
-			h.eventHub.broadcastEntityChange("trigger", "update", evt.Payload.(engine.TriggerEvent).Name)
-		case engine.EventTriggerDeleted:
-			h.eventHub.broadcastEntityChange("trigger", "remove", evt.Payload.(engine.TriggerEvent).Name)
-		case engine.EventTriggerTagAdded, engine.EventTriggerTagRemoved:
-			h.eventHub.broadcastEntityChange("trigger", "update", evt.Payload.(engine.TriggerTagEvent).TriggerName)
-
-		// Push CRUD
-		case engine.EventPushCreated:
-			h.eventHub.broadcastEntityChange("push", "add", evt.Payload.(engine.PushEvent).Name)
-		case engine.EventPushUpdated:
-			h.eventHub.broadcastEntityChange("push", "update", evt.Payload.(engine.PushEvent).Name)
-		case engine.EventPushDeleted:
-			h.eventHub.broadcastEntityChange("push", "remove", evt.Payload.(engine.PushEvent).Name)
+		// Rule CRUD
+		case engine.EventRuleCreated:
+			h.eventHub.broadcastEntityChange("rule", "add", evt.Payload.(engine.RuleEvent).Name)
+		case engine.EventRuleUpdated, engine.EventRuleStarted, engine.EventRuleStopped, engine.EventRuleTestFired:
+			h.eventHub.broadcastEntityChange("rule", "update", evt.Payload.(engine.RuleEvent).Name)
+		case engine.EventRuleDeleted:
+			h.eventHub.broadcastEntityChange("rule", "remove", evt.Payload.(engine.RuleEvent).Name)
 		}
 	})
 	}
@@ -487,7 +466,7 @@ func (h *Handlers) setupEventListeners() {
 	go h.pollServiceStatuses()
 }
 
-// pollServiceStatuses periodically checks MQTT/Valkey/Kafka/Trigger statuses and broadcasts changes.
+// pollServiceStatuses periodically checks MQTT/Valkey/Kafka/Rule statuses and broadcasts changes.
 func (h *Handlers) pollServiceStatuses() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -496,8 +475,7 @@ func (h *Handlers) pollServiceStatuses() {
 	lastMQTT := make(map[string]string)
 	lastValkey := make(map[string]string)
 	lastKafka := make(map[string]string)
-	lastTrigger := make(map[string]string)
-	lastPush := make(map[string]string)
+	lastRule := make(map[string]string)
 
 	for {
 		select {
@@ -588,12 +566,13 @@ func (h *Handlers) pollServiceStatuses() {
 				}
 			}
 
-			// Poll Trigger statuses
-			if triggerMgr := h.managers.GetTriggerMgr(); triggerMgr != nil {
-				for _, info := range triggerMgr.GetAllTriggerInfo() {
-					statusStr := triggerStatusString(info.Status)
-					if lastTrigger[info.Name] != statusStr {
-						lastTrigger[info.Name] = statusStr
+			// Poll Rule statuses
+			if ruleMgr := h.managers.GetRuleMgr(); ruleMgr != nil {
+				for _, info := range ruleMgr.GetAllRuleInfo() {
+					statusStr := info.Status.String()
+					statusClass := ruleStatusClass(info.Status)
+					if lastRule[info.Name] != statusStr {
+						lastRule[info.Name] = statusStr
 						errMsg := ""
 						if info.Error != nil {
 							errMsg = info.Error.Error()
@@ -603,34 +582,14 @@ func (h *Handlers) pollServiceStatuses() {
 							lastFireStr = info.LastFire.Format("2006-01-02 15:04:05")
 						}
 						h.eventHub.Broadcast(SSEEvent{
-							Type: "trigger-status",
-							Data: TriggerStatusUpdate{
+							Type: "rule-status",
+							Data: RuleStatusUpdate{
 								Name:        info.Name,
 								Status:      statusStr,
-								StatusClass: "status-" + statusStr,
+								StatusClass: statusClass,
 								FireCount:   info.FireCount,
 								LastFire:    lastFireStr,
 								Error:       errMsg,
-							},
-						})
-					}
-				}
-			}
-
-			// Poll Push statuses
-			if pushMgr := h.managers.GetPushMgr(); pushMgr != nil {
-				for _, info := range pushMgr.GetAllPushInfo() {
-					statusStr := pushStatusString(info.Status)
-					if lastPush[info.Name] != statusStr {
-						lastPush[info.Name] = statusStr
-						h.eventHub.Broadcast(SSEEvent{
-							Type: "push-status",
-							Data: PushStatusUpdate{
-								Name:         info.Name,
-								Status:       statusStr,
-								StatusClass:  "status-" + statusStr,
-								SendCount:    info.SendCount,
-								LastHTTPCode: info.LastHTTPCode,
 							},
 						})
 					}
@@ -653,38 +612,3 @@ func kafkaStatusString(s kafka.ConnectionStatus) string {
 		return "disconnected"
 	}
 }
-
-// triggerStatusString converts a trigger Status to a string.
-func triggerStatusString(s trigger.Status) string {
-	switch s {
-	case trigger.StatusArmed:
-		return "armed"
-	case trigger.StatusFiring:
-		return "firing"
-	case trigger.StatusCooldown:
-		return "cooldown"
-	case trigger.StatusError:
-		return "error"
-	default:
-		return "disabled"
-	}
-}
-
-// pushStatusString converts a push Status to a string.
-func pushStatusString(s push.Status) string {
-	switch s {
-	case push.StatusArmed:
-		return "armed"
-	case push.StatusFiring:
-		return "firing"
-	case push.StatusWaitingClear:
-		return "waiting"
-	case push.StatusMinInterval:
-		return "cooldown"
-	case push.StatusError:
-		return "error"
-	default:
-		return "disabled"
-	}
-}
-

@@ -11,8 +11,7 @@ import (
 	"warlink/config"
 	"warlink/kafka"
 	"warlink/plcman"
-	"warlink/push"
-	"warlink/trigger"
+	"warlink/rule"
 	"warlink/tui"
 )
 
@@ -332,12 +331,21 @@ func (h *Handlers) handleTagPacksPage(w http.ResponseWriter, r *http.Request) {
 	h.renderTemplate(w, "tagpacks.html", data)
 }
 
-// handleTriggersPage renders the triggers page.
-func (h *Handlers) handleTriggersPage(w http.ResponseWriter, r *http.Request) {
+// handleRulesPage renders the rules page.
+func (h *Handlers) handleRulesPage(w http.ResponseWriter, r *http.Request) {
 	data := h.getUserInfo(r)
-	data["Page"] = "triggers"
-	data["Triggers"] = h.getTriggersData()
-	h.renderTemplate(w, "triggers.html", data)
+	data["Page"] = "rules"
+	data["Rules"] = h.getRulesData()
+
+	// Provide PLC names for condition/action dropdowns
+	cfg := h.managers.GetConfig()
+	plcNames := make([]string, 0, len(cfg.PLCs))
+	for _, p := range cfg.PLCs {
+		plcNames = append(plcNames, p.Name)
+	}
+	data["PLCNames"] = plcNames
+
+	h.renderTemplate(w, "rules.html", data)
 }
 
 // handleRESTPage renders the REST API status page.
@@ -515,12 +523,13 @@ type RepublisherTag struct {
 	DisplayName       string                    // Short name for tree display
 	TreeDisplay       string                    // Full display string: Name (Type) [N fields]
 	Enabled           bool                      // Whether tag is monitored/enabled
-	HasIgnores        bool                      // Whether tag has IgnoreChanges entries
-	IgnoreCount       int                       // Number of ignored members
-	IgnoreList        []string                  // List of ignored member names
-	LastPoll          string                    // Formatted timestamp of last poll
-	LastChanged       string                    // Formatted timestamp of last value change
-	PublishedChildren map[string]PublishedChild // Map of child paths to their published status
+	HasIgnores          bool                      // Whether tag has IgnoreChanges entries
+	IgnoreCount         int                       // Number of ignored members
+	IgnoreList          []string                  // List of ignored member names
+	LastPoll            string                    // Formatted timestamp of last poll
+	LastChanged         string                    // Formatted timestamp of last value change
+	PublishedChildren   map[string]PublishedChild // Map of child paths to their published status
+	PublishedChildCount int                       // Number of published (enabled) children
 }
 
 func (h *Handlers) getRepublisherData() []RepublisherPLC {
@@ -779,16 +788,24 @@ func (h *Handlers) buildRepublisherTag(
 	// Get published children for this tag
 	if children, ok := childTagsMap[tagName]; ok {
 		rt.PublishedChildren = children
+		for _, child := range children {
+			if child.Enabled {
+				rt.PublishedChildCount++
+			}
+		}
 	}
+
+	// Determine struct type from type name (works even without values)
+	rt.IsStruct = isStructType(rt.Type)
 
 	// Get value data if available
 	if v, ok := values[tagName]; ok && v != nil {
 		goVal := v.GoValue()
 		rt.Value = formatTagValue(goVal)
-		rt.IsStruct = isStructType(rt.Type)
 
-		// Count fields for struct types
+		// Upgrade to struct if value is a map (catches cases where type name alone isn't sufficient)
 		if m, ok := goVal.(map[string]interface{}); ok {
+			rt.IsStruct = true
 			rt.FieldCount = len(m)
 		}
 
@@ -1119,164 +1136,52 @@ func (h *Handlers) getTagPacksData() []TagPackData {
 	return result
 }
 
-// PushData holds Push display data.
-type PushData struct {
-	Name         string
-	URL          string
-	Method       string
-	Status       string
-	StatusClass  string
-	Enabled      bool
-	SendCount    int64
-	LastSend     string
-	LastHTTPCode int
-	Conditions   []PushConditionDisplay
-}
-
-// PushConditionDisplay holds display data for a push condition.
-type PushConditionDisplay struct {
-	PLC      string
-	Tag      string
-	Operator string
-	Value    string
-}
-
-// handlePushPage renders the push webhooks page.
-func (h *Handlers) handlePushPage(w http.ResponseWriter, r *http.Request) {
-	data := h.getUserInfo(r)
-	data["Page"] = "push"
-	data["Pushes"] = h.getPushData()
-	h.renderTemplate(w, "push.html", data)
-}
-
-func (h *Handlers) getPushData() []PushData {
-	cfg := h.managers.GetConfig()
-	pushMgr := h.managers.GetPushMgr()
-	result := make([]PushData, 0, len(cfg.Pushes))
-
-	for _, pushCfg := range cfg.Pushes {
-		statusClass := "status-disconnected"
-		status := "Stopped"
-
-		if pushMgr != nil {
-			pStatus, _, _, _, _ := pushMgr.GetPushStatus(pushCfg.Name)
-			status, statusClass = pushStatusDisplay(pStatus)
-		}
-
-		var sendCount int64
-		var lastSend time.Time
-		var lastHTTPCode int
-		if pushMgr != nil {
-			_, _, sendCount, lastSend, lastHTTPCode = pushMgr.GetPushStatus(pushCfg.Name)
-		}
-
-		lastSendStr := ""
-		if !lastSend.IsZero() {
-			lastSendStr = lastSend.Format("2006-01-02 15:04:05")
-		}
-
-		method := pushCfg.Method
-		if method == "" {
-			method = "POST"
-		}
-
-		conditions := make([]PushConditionDisplay, len(pushCfg.Conditions))
-		for i, cond := range pushCfg.Conditions {
-			conditions[i] = PushConditionDisplay{
-				PLC:      cond.PLC,
-				Tag:      cond.Tag,
-				Operator: cond.Operator,
-				Value:    fmt.Sprintf("%v", cond.Value),
-			}
-		}
-
-		result = append(result, PushData{
-			Name:         pushCfg.Name,
-			URL:          pushCfg.URL,
-			Method:       method,
-			Status:       status,
-			StatusClass:  statusClass,
-			Enabled:      pushCfg.Enabled,
-			SendCount:    sendCount,
-			LastSend:     lastSendStr,
-			LastHTTPCode: lastHTTPCode,
-			Conditions:   conditions,
-		})
-	}
-
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
-	})
-
-	return result
-}
-
-func pushStatusDisplay(s push.Status) (string, string) {
-	switch s {
-	case push.StatusArmed:
-		return "Armed", "status-connected"
-	case push.StatusFiring:
-		return "Firing", "status-connecting"
-	case push.StatusWaitingClear:
-		return "Waiting", "status-connecting"
-	case push.StatusMinInterval:
-		return "Cooldown", "status-connecting"
-	case push.StatusError:
-		return "Error", "status-error"
-	default:
-		return "Stopped", "status-disconnected"
-	}
-}
-
-// TriggerData holds Trigger display data.
-type TriggerData struct {
+// RuleData holds Rule display data.
+type RuleData struct {
 	Name        string
-	PLC         string
-	TriggerTag  string
-	Operator    string
-	Value       string
+	LogicMode   string
+	Conditions  int
+	Actions     int
 	Status      string
 	StatusClass string
 	Enabled     bool
-	Tags        []string
+	FireCount   int64
+	LastFire    string
 }
 
-func (h *Handlers) getTriggersData() []TriggerData {
-	cfg := h.managers.GetConfig()
-	triggerMgr := h.managers.GetTriggerMgr()
-	result := make([]TriggerData, 0, len(cfg.Triggers))
+func (h *Handlers) getRulesData() []RuleData {
+	ruleMgr := h.managers.GetRuleMgr()
+	if ruleMgr == nil {
+		return nil
+	}
 
-	for _, triggerCfg := range cfg.Triggers {
-		statusClass := "status-disconnected"
-		status := "Stopped"
+	infos := ruleMgr.GetAllRuleInfo()
+	result := make([]RuleData, 0, len(infos))
 
-		// Get runtime status
-		tStatus, _, _, _ := triggerMgr.GetTriggerStatus(triggerCfg.Name)
-		switch tStatus {
-		case trigger.StatusArmed:
-			statusClass = "status-connected"
-			status = "Armed"
-		case trigger.StatusFiring:
-			statusClass = "status-connecting"
-			status = "Firing"
-		case trigger.StatusCooldown:
-			statusClass = "status-connecting"
-			status = "Cooldown"
-		case trigger.StatusError:
-			statusClass = "status-error"
-			status = "Error"
+	for _, info := range infos {
+		status := info.Status.String()
+		statusClass := ruleStatusClass(info.Status)
+
+		logicMode := string(info.LogicMode)
+		if logicMode == "" {
+			logicMode = string(config.RuleLogicAND)
 		}
 
-		result = append(result, TriggerData{
-			Name:        triggerCfg.Name,
-			PLC:         triggerCfg.PLC,
-			TriggerTag:  triggerCfg.TriggerTag,
-			Operator:    triggerCfg.Condition.Operator,
-			Value:       fmt.Sprintf("%v", triggerCfg.Condition.Value),
+		lastFireStr := ""
+		if !info.LastFire.IsZero() {
+			lastFireStr = info.LastFire.Format("2006-01-02 15:04:05")
+		}
+
+		result = append(result, RuleData{
+			Name:        info.Name,
+			LogicMode:   logicMode,
+			Conditions:  info.Conditions,
+			Actions:     info.Actions,
 			Status:      status,
 			StatusClass: statusClass,
-			Enabled:     triggerCfg.Enabled,
-			Tags:        triggerCfg.Tags,
+			Enabled:     info.Status != rule.StatusDisabled,
+			FireCount:   info.FireCount,
+			LastFire:    lastFireStr,
 		})
 	}
 
@@ -1286,6 +1191,23 @@ func (h *Handlers) getTriggersData() []TriggerData {
 	})
 
 	return result
+}
+
+func ruleStatusClass(s rule.Status) string {
+	switch s {
+	case rule.StatusArmed:
+		return "success"
+	case rule.StatusFiring:
+		return "warning"
+	case rule.StatusWaitingClear:
+		return "warning"
+	case rule.StatusCooldown:
+		return "info"
+	case rule.StatusError:
+		return "danger"
+	default:
+		return "secondary"
+	}
 }
 
 func (h *Handlers) getDebugLogs() []string {

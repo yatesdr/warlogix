@@ -17,34 +17,13 @@ import (
 	"warlink/config"
 	"warlink/engine"
 	"warlink/logging"
-	"warlink/kafka"
-	"warlink/mqtt"
-	"warlink/plcman"
-	"warlink/push"
-	"warlink/tagpack"
-	"warlink/trigger"
-	"warlink/valkey"
 	"warlink/www"
 )
-
-// Managers provides access to shared backend managers.
-// This interface matches the methods available on ssh.SharedManagers.
-type Managers interface {
-	GetConfig() *config.Config
-	GetConfigPath() string
-	GetPLCMan() *plcman.Manager
-	GetMQTTMgr() *mqtt.Manager
-	GetValkeyMgr() *valkey.Manager
-	GetKafkaMgr() *kafka.Manager
-	GetTriggerMgr() *trigger.Manager
-	GetPushMgr() *push.Manager
-	GetPackMgr() *tagpack.Manager
-}
 
 // Server is the unified HTTP server for REST API and browser UI.
 type Server struct {
 	config   *config.WebConfig
-	managers Managers
+	managers engine.Managers
 	engine   *engine.Engine
 	server   *http.Server
 	router   chi.Router
@@ -60,7 +39,7 @@ type Server struct {
 }
 
 // NewServer creates a new unified web server.
-func NewServer(cfg *config.WebConfig, managers Managers) *Server {
+func NewServer(cfg *config.WebConfig, managers engine.Managers) *Server {
 	s := &Server{
 		config:   cfg,
 		managers: managers,

@@ -158,68 +158,27 @@ type KafkaUpdateRequest struct {
 	WriteMaxAge      time.Duration
 }
 
-// TriggerCreateRequest holds fields for creating a trigger.
-type TriggerCreateRequest struct {
-	Name         string
-	Enabled      bool
-	PLC          string
-	TriggerTag   string
-	Condition    config.TriggerCondition
-	AckTag       string
-	DebounceMS   int
-	Tags         []string
-	MQTTBroker   string
-	KafkaCluster string
-	Selector     string
-	Metadata     map[string]string
-	PublishPack  string
+// RuleCreateRequest holds fields for creating a rule.
+type RuleCreateRequest struct {
+	Name           string
+	Enabled        bool
+	Conditions     []config.RuleCondition
+	LogicMode      config.RuleLogicMode
+	DebounceMS     int
+	CooldownMS     int
+	Actions        []config.RuleAction
+	ClearedActions []config.RuleAction
 }
 
-// TriggerUpdateRequest holds fields for updating a trigger.
-type TriggerUpdateRequest struct {
-	Enabled      bool
-	PLC          string
-	TriggerTag   string
-	Condition    config.TriggerCondition
-	AckTag       string
-	DebounceMS   int
-	Tags         []string
-	MQTTBroker   string
-	KafkaCluster string
-	Selector     string
-	Metadata     map[string]string
-	PublishPack  string
-}
-
-// PushCreateRequest holds fields for creating a push webhook.
-type PushCreateRequest struct {
-	Name            string
-	Enabled         bool
-	Conditions      []config.PushCondition
-	URL             string
-	Method          string
-	ContentType     string
-	Headers         map[string]string
-	Body            string
-	Auth            config.PushAuthConfig
-	CooldownMin     time.Duration
-	CooldownPerCond bool
-	Timeout         time.Duration
-}
-
-// PushUpdateRequest holds fields for updating a push webhook.
-type PushUpdateRequest struct {
-	Enabled         bool
-	Conditions      []config.PushCondition
-	URL             string
-	Method          string
-	ContentType     string
-	Headers         map[string]string
-	Body            string
-	Auth            config.PushAuthConfig
-	CooldownMin     time.Duration
-	CooldownPerCond bool
-	Timeout         time.Duration
+// RuleUpdateRequest holds fields for updating a rule.
+type RuleUpdateRequest struct {
+	Enabled        bool
+	Conditions     []config.RuleCondition
+	LogicMode      config.RuleLogicMode
+	DebounceMS     int
+	CooldownMS     int
+	Actions        []config.RuleAction
+	ClearedActions []config.RuleAction
 }
 
 // TagPackCreateRequest holds fields for creating a TagPack.

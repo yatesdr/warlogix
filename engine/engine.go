@@ -8,9 +8,8 @@ import (
 	"warlink/logging"
 	"warlink/mqtt"
 	"warlink/plcman"
-	"warlink/push"
+	"warlink/rule"
 	"warlink/tagpack"
-	"warlink/trigger"
 	"warlink/valkey"
 )
 
@@ -35,8 +34,7 @@ type Engine struct {
 	mqttMgr    *mqtt.Manager
 	valkeyMgr  *valkey.Manager
 	kafkaMgr   *kafka.Manager
-	triggerMgr *trigger.Manager
-	pushMgr    *push.Manager
+	ruleMgr    *rule.Manager
 	packMgr    *tagpack.Manager
 
 	Events *EventBus
@@ -108,18 +106,14 @@ func (e *Engine) Start() {
 		e.logFn(format, args...)
 	})
 
-	// Create trigger manager
-	tagReader := &plcman.TriggerTagReader{Manager: e.plcMan}
-	tagWriter := &plcman.TriggerTagWriter{Manager: e.plcMan}
-	e.triggerMgr = trigger.NewManager(e.kafkaMgr, tagReader, tagWriter)
-	e.triggerMgr.LoadFromConfig(cfg.Triggers)
-	e.triggerMgr.SetPackManager(e.packMgr)
-	e.triggerMgr.SetMQTTManager(e.mqttMgr)
-	e.triggerMgr.SetNamespace(cfg.Namespace)
-
-	// Create push manager
-	e.pushMgr = push.NewManager(tagReader)
-	e.pushMgr.LoadFromConfig(cfg.Pushes)
+	// Create rule manager
+	ruleReader := &plcman.RuleTagReader{Manager: e.plcMan}
+	ruleWriter := &plcman.RuleTagWriter{Manager: e.plcMan}
+	e.ruleMgr = rule.NewManager(e.kafkaMgr, ruleReader, ruleWriter)
+	e.ruleMgr.LoadFromConfig(cfg.Rules)
+	e.ruleMgr.SetPackManager(e.packMgr)
+	e.ruleMgr.SetMQTTManager(e.mqttMgr)
+	e.ruleMgr.SetNamespace(cfg.Namespace)
 
 	// Wire value change handlers
 	setupValueChangeHandlers(e.plcMan, e.mqttMgr, e.valkeyMgr, e.kafkaMgr, e.packMgr)
@@ -163,16 +157,11 @@ func (e *Engine) Start() {
 	// Auto-connect enabled Kafka clusters
 	go e.kafkaMgr.ConnectEnabled()
 
-	// Set up trigger and push logging + auto-start
-	e.triggerMgr.SetLogFunc(func(format string, args ...interface{}) {
+	// Set up rule logging + auto-start
+	e.ruleMgr.SetLogFunc(func(format string, args ...interface{}) {
 		e.logFn(format, args...)
 	})
-	e.triggerMgr.Start()
-
-	e.pushMgr.SetLogFunc(func(format string, args ...interface{}) {
-		e.logFn(format, args...)
-	})
-	e.pushMgr.Start()
+	e.ruleMgr.Start()
 
 	// Start health publishing loop
 	go e.publishHealthLoop()
@@ -186,11 +175,8 @@ func (e *Engine) Stop() {
 		close(e.stopChan)
 	}
 
-	if e.triggerMgr != nil {
-		e.triggerMgr.Stop()
-	}
-	if e.pushMgr != nil {
-		e.pushMgr.Stop()
+	if e.ruleMgr != nil {
+		e.ruleMgr.Stop()
 	}
 	if e.packMgr != nil {
 		e.packMgr.Stop()
@@ -210,7 +196,21 @@ func (e *Engine) Stop() {
 	}
 }
 
-// --- web.Managers interface implementation ---
+// Managers provides access to shared backend managers.
+// *Engine satisfies this interface via its accessor methods.
+type Managers interface {
+	GetConfig() *config.Config
+	GetConfigPath() string
+	GetPLCMan() *plcman.Manager
+	GetMQTTMgr() *mqtt.Manager
+	GetValkeyMgr() *valkey.Manager
+	GetKafkaMgr() *kafka.Manager
+	GetRuleMgr() *rule.Manager
+	GetPackMgr() *tagpack.Manager
+}
+
+// Verify *Engine implements Managers at compile time.
+var _ Managers = (*Engine)(nil)
 
 func (e *Engine) GetConfig() *config.Config       { return e.cfg }
 func (e *Engine) GetConfigPath() string            { return e.configPath }
@@ -218,8 +218,7 @@ func (e *Engine) GetPLCMan() *plcman.Manager       { return e.plcMan }
 func (e *Engine) GetMQTTMgr() *mqtt.Manager        { return e.mqttMgr }
 func (e *Engine) GetValkeyMgr() *valkey.Manager    { return e.valkeyMgr }
 func (e *Engine) GetKafkaMgr() *kafka.Manager      { return e.kafkaMgr }
-func (e *Engine) GetTriggerMgr() *trigger.Manager  { return e.triggerMgr }
-func (e *Engine) GetPushMgr() *push.Manager        { return e.pushMgr }
+func (e *Engine) GetRuleMgr() *rule.Manager         { return e.ruleMgr }
 func (e *Engine) GetPackMgr() *tagpack.Manager     { return e.packMgr }
 
 // saveConfig is a helper that locks, saves, and unlocks.

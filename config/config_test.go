@@ -373,40 +373,52 @@ func TestKafkaOperations(t *testing.T) {
 	})
 }
 
-func TestTriggerOperations(t *testing.T) {
+func TestRuleOperations(t *testing.T) {
 	cfg := DefaultConfig()
 
-	t.Run("AddTrigger and FindTrigger", func(t *testing.T) {
-		trigger := TriggerConfig{Name: "Trigger1", PLC: "MainPLC", TriggerTag: "Ready"}
-		cfg.AddTrigger(trigger)
+	t.Run("AddRule and FindRule", func(t *testing.T) {
+		rule := RuleConfig{
+			Name:    "Rule1",
+			Enabled: true,
+			Conditions: []RuleCondition{
+				{PLC: "MainPLC", Tag: "Ready", Operator: "==", Value: 1},
+			},
+		}
+		cfg.AddRule(rule)
 
-		found := cfg.FindTrigger("Trigger1")
+		found := cfg.FindRule("Rule1")
 		if found == nil {
-			t.Fatal("FindTrigger returned nil")
+			t.Fatal("FindRule returned nil")
 		}
-		if found.TriggerTag != "Ready" {
-			t.Errorf("expected trigger_tag 'Ready', got %s", found.TriggerTag)
-		}
-	})
-
-	t.Run("UpdateTrigger", func(t *testing.T) {
-		updated := TriggerConfig{Name: "Trigger1", PLC: "MainPLC", TriggerTag: "Complete"}
-		if !cfg.UpdateTrigger("Trigger1", updated) {
-			t.Error("UpdateTrigger returned false")
-		}
-
-		found := cfg.FindTrigger("Trigger1")
-		if found.TriggerTag != "Complete" {
-			t.Error("Trigger not updated")
+		if found.Conditions[0].Tag != "Ready" {
+			t.Errorf("expected tag 'Ready', got %s", found.Conditions[0].Tag)
 		}
 	})
 
-	t.Run("RemoveTrigger", func(t *testing.T) {
-		if !cfg.RemoveTrigger("Trigger1") {
-			t.Error("RemoveTrigger returned false")
+	t.Run("UpdateRule", func(t *testing.T) {
+		updated := RuleConfig{
+			Name:    "Rule1",
+			Enabled: true,
+			Conditions: []RuleCondition{
+				{PLC: "MainPLC", Tag: "Complete", Operator: "==", Value: 1},
+			},
 		}
-		if cfg.FindTrigger("Trigger1") != nil {
-			t.Error("Trigger not removed")
+		if !cfg.UpdateRule("Rule1", updated) {
+			t.Error("UpdateRule returned false")
+		}
+
+		found := cfg.FindRule("Rule1")
+		if found.Conditions[0].Tag != "Complete" {
+			t.Error("Rule not updated")
+		}
+	})
+
+	t.Run("RemoveRule", func(t *testing.T) {
+		if !cfg.RemoveRule("Rule1") {
+			t.Error("RemoveRule returned false")
+		}
+		if cfg.FindRule("Rule1") != nil {
+			t.Error("Rule not removed")
 		}
 	})
 }

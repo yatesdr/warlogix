@@ -11,27 +11,7 @@ import (
 
 	"warlink/config"
 	"warlink/engine"
-	"warlink/kafka"
-	"warlink/mqtt"
-	"warlink/plcman"
-	"warlink/push"
-	"warlink/tagpack"
-	"warlink/trigger"
-	"warlink/valkey"
 )
-
-// Managers provides access to shared backend managers.
-type Managers interface {
-	GetConfig() *config.Config
-	GetConfigPath() string
-	GetPLCMan() *plcman.Manager
-	GetMQTTMgr() *mqtt.Manager
-	GetValkeyMgr() *valkey.Manager
-	GetKafkaMgr() *kafka.Manager
-	GetTriggerMgr() *trigger.Manager
-	GetPushMgr() *push.Manager
-	GetPackMgr() *tagpack.Manager
-}
 
 // WebServer provides methods to control the web server from handlers.
 type WebServer interface {
@@ -41,7 +21,7 @@ type WebServer interface {
 // Handlers holds all HTTP handlers for the web UI.
 type Handlers struct {
 	cfg       *config.WebUIConfig
-	managers  Managers
+	managers  engine.Managers
 	engine    *engine.Engine
 	webServer WebServer
 	sessions  *sessionStore
@@ -50,7 +30,7 @@ type Handlers struct {
 }
 
 // newHandlers creates a new handlers instance.
-func newHandlers(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, ws WebServer) *Handlers {
+func newHandlers(cfg *config.WebUIConfig, managers engine.Managers, eng *engine.Engine, ws WebServer) *Handlers {
 	h := &Handlers{
 		cfg:       cfg,
 		managers:  managers,
@@ -84,7 +64,7 @@ func newHandlers(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine,
 }
 
 // NewRouter creates the web UI router and returns a stop function for cleanup.
-func NewRouter(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, ws WebServer) (chi.Router, func()) {
+func NewRouter(cfg *config.WebUIConfig, managers engine.Managers, eng *engine.Engine, ws WebServer) (chi.Router, func()) {
 	h := newHandlers(cfg, managers, eng, ws)
 
 	r := chi.NewRouter()
@@ -122,8 +102,7 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, w
 		r.Get("/plcs", h.handlePLCsPage)
 		r.Get("/republisher", h.handleRepublisherPage)
 		r.Get("/tagpacks", h.handleTagPacksPage)
-		r.Get("/triggers", h.handleTriggersPage)
-		r.Get("/push", h.handlePushPage)
+		r.Get("/rules", h.handleRulesPage)
 		r.Get("/rest", h.handleRESTPage)
 		r.Get("/mqtt", h.handleMQTTPage)
 		r.Get("/valkey", h.handleValkeyPage)
@@ -137,8 +116,7 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, w
 		r.Get("/htmx/valkey", h.handleValkeyPartial)
 		r.Get("/htmx/kafka", h.handleKafkaPartial)
 		r.Get("/htmx/tagpacks", h.handleTagPacksPartial)
-		r.Get("/htmx/triggers", h.handleTriggersPartial)
-		r.Get("/htmx/push", h.handlePushPartial)
+		r.Get("/htmx/rules", h.handleRulesPartial)
 		r.Get("/htmx/debug", h.handleDebugPartial)
 
 		// Actions (admin only)
@@ -191,25 +169,14 @@ func NewRouter(cfg *config.WebUIConfig, managers Managers, eng *engine.Engine, w
 			r.Delete("/htmx/tagpacks/{name}/members/{index}", h.handleTagPackRemoveMember)
 			r.Patch("/htmx/tagpacks/{name}/members/{index}", h.handleTagPackToggleMemberIgnore)
 
-			// Trigger actions
-			r.Post("/htmx/triggers", h.handleTriggerCreate)
-			r.Get("/htmx/triggers/{name}", h.handleTriggerGet)
-			r.Put("/htmx/triggers/{name}", h.handleTriggerUpdate)
-			r.Delete("/htmx/triggers/{name}", h.handleTriggerDelete)
-			r.Post("/htmx/triggers/{name}/start", h.handleTriggerStart)
-			r.Post("/htmx/triggers/{name}/stop", h.handleTriggerStop)
-			r.Post("/htmx/triggers/{name}/test", h.handleTriggerTestFire)
-			r.Post("/htmx/triggers/{name}/tags", h.handleTriggerAddTag)
-			r.Delete("/htmx/triggers/{name}/tags/{index}", h.handleTriggerRemoveTag)
-
-			// Push actions
-			r.Post("/htmx/push", h.handlePushCreate)
-			r.Get("/htmx/push/{name}", h.handlePushGet)
-			r.Put("/htmx/push/{name}", h.handlePushUpdate)
-			r.Delete("/htmx/push/{name}", h.handlePushDelete)
-			r.Post("/htmx/push/{name}/start", h.handlePushStart)
-			r.Post("/htmx/push/{name}/stop", h.handlePushStop)
-			r.Post("/htmx/push/{name}/test", h.handlePushTestFire)
+			// Rule actions
+			r.Post("/htmx/rules", h.handleRuleCreate)
+			r.Get("/htmx/rules/{name}", h.handleRuleGet)
+			r.Put("/htmx/rules/{name}", h.handleRuleUpdate)
+			r.Delete("/htmx/rules/{name}", h.handleRuleDelete)
+			r.Post("/htmx/rules/{name}/start", h.handleRuleStart)
+			r.Post("/htmx/rules/{name}/stop", h.handleRuleStop)
+			r.Post("/htmx/rules/{name}/test", h.handleRuleTestFire)
 
 			// Tag picker data
 			r.Get("/htmx/available-tags", h.handleAvailableTags)

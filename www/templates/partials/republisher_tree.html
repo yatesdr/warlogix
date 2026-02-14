@@ -53,6 +53,7 @@
                             <input type="checkbox" {{if .Enabled}}checked{{end}} onchange="quickTogglePublish(this)">
                         </label>
                         <span class="tag-name" title="{{.Name}}">{{.TreeDisplay}}</span>
+                        {{if .IsStruct}}<span class="published-child-count" data-published-count="{{.PublishedChildCount}}">({{.PublishedChildCount}} published children)</span>{{end}}
                         {{if not .IsStruct}}<span class="tag-value">{{.Value}}</span>{{end}}
                     </div>
                     {{if .IsStruct}}<div class="tag-children"></div>{{end}}

@@ -43,9 +43,9 @@ func (b *Builder) MQTTPackTopic(pack string) string {
 	return b.mqttBase() + "/packs/" + pack
 }
 
-// MQTTTriggerTopic returns the topic for a trigger message: {ns}[/{sel}]/triggers/{trigger}
-func (b *Builder) MQTTTriggerTopic(trigger string) string {
-	return b.mqttBase() + "/triggers/" + trigger
+// MQTTRuleTopic returns the topic for a rule message: {ns}/{userTopic}
+func (b *Builder) MQTTRuleTopic(userTopic string) string {
+	return b.mqttBase() + "/" + userTopic
 }
 
 // MQTTBase returns the base topic for JSON messages: {ns}[/{sel}]
@@ -137,14 +137,9 @@ func (b *Builder) KafkaPackTopic(pack string) string {
 	return b.kafkaBase()
 }
 
-// KafkaTriggerTopic returns the topic for trigger messages.
-// With selector: {ns}-{sel} (selector IS the topic)
-// Without selector: {ns}-triggers
-func (b *Builder) KafkaTriggerTopic() string {
-	if b.selector != "" {
-		return b.namespace + "-" + b.selector
-	}
-	return b.namespace + "-triggers"
+// KafkaRuleTopic returns the topic for a rule message: {ns}-{userTopic}
+func (b *Builder) KafkaRuleTopic(userTopic string) string {
+	return b.kafkaBase() + "-" + userTopic
 }
 
 func (b *Builder) kafkaBase() string {
