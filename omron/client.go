@@ -1208,6 +1208,8 @@ func (c *Client) writeFINS(address string, value interface{}, typeHint string) e
 			bitVal = v != 0
 		case int64:
 			bitVal = v != 0
+		case float64:
+			bitVal = v != 0
 		default:
 			logging.DebugLog("Omron", "Write type conversion error: cannot convert %T to BOOL", value)
 			return fmt.Errorf("cannot convert %T to BOOL", value)

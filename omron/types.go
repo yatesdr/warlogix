@@ -563,6 +563,10 @@ func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([
 			if b != 0 {
 				v = 1
 			}
+		case float64:
+			if b != 0 {
+				v = 1
+			}
 		default:
 			return nil, fmt.Errorf("cannot convert %T to BOOL", value)
 		}
@@ -578,6 +582,8 @@ func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([
 			return []byte{byte(v)}, nil
 		case int64:
 			return []byte{byte(v)}, nil
+		case float64:
+			return []byte{byte(int64(v))}, nil
 		default:
 			return nil, fmt.Errorf("cannot convert %T to BYTE", value)
 		}
@@ -590,6 +596,8 @@ func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([
 			return []byte{byte(v)}, nil
 		case int64:
 			return []byte{byte(v)}, nil
+		case float64:
+			return []byte{byte(int8(v))}, nil
 		default:
 			return nil, fmt.Errorf("cannot convert %T to SINT", value)
 		}
@@ -603,6 +611,8 @@ func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([
 			order.PutUint16(buf, uint16(v))
 		case int64:
 			order.PutUint16(buf, uint16(v))
+		case float64:
+			order.PutUint16(buf, uint16(int64(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to WORD", value)
 		}
@@ -617,6 +627,8 @@ func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([
 			order.PutUint16(buf, uint16(v))
 		case int64:
 			order.PutUint16(buf, uint16(v))
+		case float64:
+			order.PutUint16(buf, uint16(int16(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to INT", value)
 		}
@@ -631,6 +643,8 @@ func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([
 			order.PutUint32(buf, uint32(v))
 		case int64:
 			order.PutUint32(buf, uint32(v))
+		case float64:
+			order.PutUint32(buf, uint32(int64(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to DWORD", value)
 		}
@@ -645,6 +659,8 @@ func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([
 			order.PutUint32(buf, uint32(v))
 		case int64:
 			order.PutUint32(buf, uint32(v))
+		case float64:
+			order.PutUint32(buf, uint32(int32(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to DINT", value)
 		}
@@ -659,6 +675,8 @@ func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([
 			order.PutUint64(buf, uint64(v))
 		case int64:
 			order.PutUint64(buf, uint64(v))
+		case float64:
+			order.PutUint64(buf, uint64(int64(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to LWORD", value)
 		}
@@ -671,6 +689,8 @@ func encodeScalar(value interface{}, typeCode uint16, order binary.ByteOrder) ([
 			order.PutUint64(buf, uint64(v))
 		case int:
 			order.PutUint64(buf, uint64(v))
+		case float64:
+			order.PutUint64(buf, uint64(int64(v)))
 		default:
 			return nil, fmt.Errorf("cannot convert %T to LINT", value)
 		}

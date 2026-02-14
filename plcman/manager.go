@@ -729,6 +729,7 @@ func (w *PLCWorker) poll() {
 						break
 					}
 					plc.ManualTags[i].TypeCode = v.DataType
+					plc.ManualTagGen++
 					var resolvedName string
 					switch family {
 					case config.FamilyS7:
