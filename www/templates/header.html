@@ -21,21 +21,28 @@
         </div>
         <div class="nav-links">
             <a href="/plcs" class="{{if eq .Page "plcs"}}active{{end}}">PLCs</a>
-            <a href="/republisher" class="{{if eq .Page "republisher"}}active{{end}}">Republisher</a>
+            <a href="/republisher" class="{{if eq .Page "republisher"}}active{{end}}">Tags</a>
             <a href="/tagpacks" class="{{if eq .Page "tagpacks"}}active{{end}}">TagPacks</a>
-            <a href="/rules" class="{{if eq .Page "rules"}}active{{end}}">Rules</a>
+            <span class="nav-divider"></span>
             <a href="/rest" class="{{if eq .Page "rest"}}active{{end}}">REST</a>
             <a href="/mqtt" class="{{if eq .Page "mqtt"}}active{{end}}">MQTT</a>
             <a href="/valkey" class="{{if eq .Page "valkey"}}active{{end}}">Valkey</a>
             <a href="/kafka" class="{{if eq .Page "kafka"}}active{{end}}">Kafka</a>
+            <span class="nav-divider"></span>
+            <a href="/rules" class="{{if eq .Page "rules"}}active{{end}}">Events</a>
+            <span class="nav-divider"></span>
             <a href="/debug" class="{{if eq .Page "debug"}}active{{end}}">Debug</a>
-            {{if .IsAdmin}}
-            <a href="/users" class="{{if eq .Page "users"}}active{{end}}">Users</a>
-            {{end}}
         </div>
         <div class="nav-user">
             <button class="theme-toggle" onclick="WarLink.toggleTheme()" title="Toggle theme"></button>
-            <span class="username">{{.Username}} ({{.Role}})</span>
+            {{if .IsAdmin}}
+            <a href="/users" class="nav-icon-btn{{if eq .Page "users"}} active{{end}}" title="Manage Users">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 8a3 3 0 100-6 3 3 0 000 6zM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2z"/>
+                </svg>
+            </a>
+            {{end}}
+            <span class="username">{{.Username}}</span>
             <form action="/logout" method="post" style="display:inline">
                 <button type="submit" class="btn btn-sm">Logout</button>
             </form>

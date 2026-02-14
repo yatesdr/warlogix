@@ -1,7 +1,7 @@
 {{template "header" .}}
 
 <div class="page-header">
-    <h1>Rules</h1>
+    <h1>Events</h1>
 </div>
 
 {{if .IsAdmin}}
@@ -37,15 +37,6 @@
                         <input type="text" id="rule-name" required pattern="[a-zA-Z0-9_-]+" title="Letters, numbers, underscore, dash only">
                     </div>
                     <div class="form-group">
-                        <label for="rule-logic-mode">Logic Mode</label>
-                        <select id="rule-logic-mode">
-                            <option value="and">AND (all conditions)</option>
-                            <option value="or">OR (any condition)</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
                         <label for="rule-debounce">Debounce (ms)</label>
                         <input type="number" id="rule-debounce" min="0" value="0">
                     </div>
@@ -65,7 +56,13 @@
                 <div class="rule-section">
                     <div class="rule-section-header">
                         <h4>Conditions</h4>
-                        <button type="button" class="btn btn-sm" onclick="addConditionRow()">+ Add</button>
+                        <div style="display:flex;align-items:center;gap:0.5rem">
+                            <select id="rule-logic-mode" style="font-size:0.75rem;padding:0.25rem 0.5rem">
+                                <option value="and">AND (all)</option>
+                                <option value="or">OR (any)</option>
+                            </select>
+                            <button type="button" class="btn btn-sm" onclick="addConditionRow()">+ Add</button>
+                        </div>
                     </div>
                     <div id="conditions-list"></div>
                 </div>
@@ -97,8 +94,10 @@
 </div>
 
 <script>
-// PLC names from server for condition dropdowns
+// PLC/MQTT/Kafka names from server for dropdowns
 var plcNames = [{{range $i, $name := .PLCNames}}{{if $i}},{{end}}"{{$name}}"{{end}}];
+var mqttNames = [{{range $i, $name := .MQTTNames}}{{if $i}},{{end}}"{{$name}}"{{end}}];
+var kafkaNames = [{{range $i, $name := .KafkaNames}}{{if $i}},{{end}}"{{$name}}"{{end}}];
 
 // Tag cache per PLC
 var plcTagCache = {};
@@ -195,8 +194,11 @@ function populateTagSelect(selectId, tags, selectedName) {
     var html = '<option value="">Select tag</option>';
     tags.forEach(function(t) {
         var name = t.name || t.Name || t;
+        var type = t.type || t.Type || '';
         var s = name === selectedName ? ' selected' : '';
-        html += '<option value="' + WarLink.escapeHtml(name) + '"' + s + '>' + WarLink.escapeHtml(name) + '</option>';
+        var label = WarLink.escapeHtml(name);
+        if (type) label += '  (' + WarLink.escapeHtml(type) + ')';
+        html += '<option value="' + WarLink.escapeHtml(name) + '"' + s + '>' + label + '</option>';
     });
     sel.innerHTML = html;
 }
@@ -248,6 +250,18 @@ function renderActionFields(prefix, idx, data) {
     var container = document.getElementById(prefix + '-fields-' + idx);
 
     if (type === 'publish') {
+        var mqttVal = (data && data.MQTTBroker) || '';
+        var mqttOpts = '<option value="">None</option><option value="all"' + (mqttVal === 'all' ? ' selected' : '') + '>All brokers</option>';
+        mqttNames.forEach(function(n) {
+            mqttOpts += '<option value="' + WarLink.escapeHtml(n) + '"' + (n === mqttVal ? ' selected' : '') + '>' + WarLink.escapeHtml(n) + '</option>';
+        });
+
+        var kafkaVal = (data && data.KafkaCluster) || '';
+        var kafkaOpts = '<option value="">None</option><option value="all"' + (kafkaVal === 'all' ? ' selected' : '') + '>All clusters</option>';
+        kafkaNames.forEach(function(n) {
+            kafkaOpts += '<option value="' + WarLink.escapeHtml(n) + '"' + (n === kafkaVal ? ' selected' : '') + '>' + WarLink.escapeHtml(n) + '</option>';
+        });
+
         container.innerHTML =
             '<div class="form-row">' +
                 '<div class="form-group">' +
@@ -261,7 +275,7 @@ function renderActionFields(prefix, idx, data) {
             '<div class="form-row">' +
                 '<div class="form-group">' +
                     '<label>MQTT Broker</label>' +
-                    '<input type="text" id="' + prefix + '-mqttbroker-' + idx + '" value="' + esc(data, 'MQTTBroker') + '" placeholder="all, none, or name">' +
+                    '<select id="' + prefix + '-mqttbroker-' + idx + '">' + mqttOpts + '</select>' +
                 '</div>' +
                 '<div class="form-group">' +
                     '<label>MQTT Topic</label>' +
@@ -271,7 +285,7 @@ function renderActionFields(prefix, idx, data) {
             '<div class="form-row">' +
                 '<div class="form-group">' +
                     '<label>Kafka Cluster</label>' +
-                    '<input type="text" id="' + prefix + '-kafkacluster-' + idx + '" value="' + esc(data, 'KafkaCluster') + '" placeholder="all, none, or name">' +
+                    '<select id="' + prefix + '-kafkacluster-' + idx + '">' + kafkaOpts + '</select>' +
                 '</div>' +
                 '<div class="form-group">' +
                     '<label>Kafka Topic</label>' +

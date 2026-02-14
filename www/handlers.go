@@ -337,13 +337,25 @@ func (h *Handlers) handleRulesPage(w http.ResponseWriter, r *http.Request) {
 	data["Page"] = "rules"
 	data["Rules"] = h.getRulesData()
 
-	// Provide PLC names for condition/action dropdowns
+	// Provide PLC/MQTT/Kafka names for condition/action dropdowns
 	cfg := h.managers.GetConfig()
 	plcNames := make([]string, 0, len(cfg.PLCs))
 	for _, p := range cfg.PLCs {
 		plcNames = append(plcNames, p.Name)
 	}
 	data["PLCNames"] = plcNames
+
+	mqttNames := make([]string, 0, len(cfg.MQTT))
+	for _, m := range cfg.MQTT {
+		mqttNames = append(mqttNames, m.Name)
+	}
+	data["MQTTNames"] = mqttNames
+
+	kafkaNames := make([]string, 0, len(cfg.Kafka))
+	for _, k := range cfg.Kafka {
+		kafkaNames = append(kafkaNames, k.Name)
+	}
+	data["KafkaNames"] = kafkaNames
 
 	h.renderTemplate(w, "rules.html", data)
 }
