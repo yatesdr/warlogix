@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.7] - 2026-02-13
+
+### Fixed
+- **Omron Write Type Conversion**: Fix "cannot convert float64 to DINT" error when writing to Omron PLCs via web UI or REST API. Added float64 handling for all integer types (BOOL, BYTE, SINT, WORD, INT, DWORD, DINT, LWORD, LINT) in both EIP and FINS write paths.
+- **TUI Stale Type Display**: Fix tag types showing stale values (e.g., INT instead of DINT) after the poll loop corrects them from CIP response. The inline type update now triggers a tree rebuild so corrected types are immediately visible.
+
 ## [0.2.6] - 2026-02-13
 
 ### Added
@@ -15,6 +21,7 @@ All notable changes to this project will be documented in this file.
 - **Republisher PLC Picker**: Select PLCs directly from the republisher tree in the web UI
 
 ### Changed
+- **CLI Flag Renames**: `-p` is now HTTP port (was SSH port), `--ssh-port` for SSH, `--ssh-pass` (was `--ssh-password`), `--admin-user`/`--admin-pass` (was `--web-admin-user`/`--web-admin-pass`), `--host` (was `--web-host`), `--no-api`/`--no-webui` for selective disabling
 - **Web Server Consolidation**: Replaced standalone API server with consolidated web server, removing `api/server.go` in favor of unified `web/server.go` + `www/` handlers
 - **Expanded Web API**: Significantly expanded REST API handlers for PLC management, tag operations, and service control
 - **SSE Enhancements**: Additional server-sent event types for real-time web UI updates
