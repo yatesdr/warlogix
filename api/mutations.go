@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -511,4 +512,83 @@ func (h *handlers) handleAddTagPackMember(w http.ResponseWriter, r *http.Request
 	}
 	w.WriteHeader(http.StatusCreated)
 	h.writeJSON(w, map[string]string{"status": "added"})
+}
+
+func (h *handlers) handleGetTagPack(w http.ResponseWriter, r *http.Request) {
+	name, _ := url.PathUnescape(chi.URLParam(r, "name"))
+	cfg := h.managers.GetConfig()
+	pc := cfg.FindTagPack(name)
+	if pc == nil {
+		h.writeError(w, http.StatusNotFound, "TagPack not found")
+		return
+	}
+
+	members := make([]map[string]interface{}, len(pc.Members))
+	for i, m := range pc.Members {
+		members[i] = map[string]interface{}{
+			"plc":            m.PLC,
+			"tag":            m.Tag,
+			"ignore_changes": m.IgnoreChanges,
+		}
+	}
+
+	h.writeJSON(w, map[string]interface{}{
+		"name":           pc.Name,
+		"enabled":        pc.Enabled,
+		"mqtt_enabled":   pc.MQTTEnabled,
+		"kafka_enabled":  pc.KafkaEnabled,
+		"valkey_enabled": pc.ValkeyEnabled,
+		"members":        members,
+	})
+}
+
+func (h *handlers) handleToggleTagPackService(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEngine(w) {
+		return
+	}
+	name, _ := url.PathUnescape(chi.URLParam(r, "name"))
+	service := chi.URLParam(r, "service")
+	enabled, err := h.engine.ToggleTagPackService(name, service)
+	if err != nil {
+		h.writeEngineError(w, err)
+		return
+	}
+	h.writeJSON(w, map[string]bool{"enabled": enabled})
+}
+
+func (h *handlers) handleRemoveTagPackMember(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEngine(w) {
+		return
+	}
+	name, _ := url.PathUnescape(chi.URLParam(r, "name"))
+	indexStr := chi.URLParam(r, "index")
+	index, err := strconv.Atoi(indexStr)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid member index")
+		return
+	}
+	if err := h.engine.RemoveTagPackMember(name, index); err != nil {
+		h.writeEngineError(w, err)
+		return
+	}
+	h.writeJSON(w, map[string]string{"status": "removed"})
+}
+
+func (h *handlers) handleToggleTagPackMemberIgnore(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEngine(w) {
+		return
+	}
+	name, _ := url.PathUnescape(chi.URLParam(r, "name"))
+	indexStr := chi.URLParam(r, "index")
+	index, err := strconv.Atoi(indexStr)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, "invalid member index")
+		return
+	}
+	ignoreChanges, err := h.engine.ToggleTagPackMemberIgnore(name, index)
+	if err != nil {
+		h.writeEngineError(w, err)
+		return
+	}
+	h.writeJSON(w, map[string]bool{"ignore_changes": ignoreChanges})
 }

@@ -12,9 +12,9 @@ import (
 	"github.com/rivo/tview"
 
 	"warlink/config"
-	"warlink/driver"
+	"plcio/driver"
 	"warlink/engine"
-	"warlink/logging"
+	"plcio/logging"
 	"warlink/plcman"
 )
 

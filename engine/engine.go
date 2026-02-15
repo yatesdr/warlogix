@@ -5,7 +5,7 @@ import (
 
 	"warlink/config"
 	"warlink/kafka"
-	"warlink/logging"
+	"plcio/logging"
 	"warlink/mqtt"
 	"warlink/plcman"
 	"warlink/rule"

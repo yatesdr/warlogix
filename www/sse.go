@@ -9,7 +9,7 @@ import (
 
 	"warlink/engine"
 	"warlink/kafka"
-	"warlink/logging"
+	"plcio/logging"
 	"warlink/plcman"
 	"warlink/tui"
 )

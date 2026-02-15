@@ -9,14 +9,14 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"warlink/ads"
+	"plcio/ads"
 	"warlink/config"
-	"warlink/driver"
+	"plcio/driver"
 	"warlink/engine"
-	"warlink/logix"
-	"warlink/omron"
+	"plcio/logix"
+	"plcio/omron"
 	"warlink/plcman"
-	"warlink/s7"
+	"plcio/s7"
 )
 
 // BrowserTab handles the tag browser tab.

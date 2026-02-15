@@ -11,7 +11,7 @@ import (
 	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"
 	"github.com/segmentio/kafka-go/sasl/scram"
-	"warlink/logging"
+	"plcio/logging"
 	"warlink/namespace"
 )
 

@@ -9,13 +9,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"warlink/ads"
+	"plcio/ads"
 	"warlink/config"
-	"warlink/driver"
-	"warlink/logging"
-	"warlink/logix"
-	"warlink/omron"
-	"warlink/s7"
+	"plcio/driver"
+	"plcio/logging"
+	"plcio/logix"
+	"plcio/omron"
+	"plcio/s7"
 )
 
 // ConnectionStatus represents the state of a PLC connection.

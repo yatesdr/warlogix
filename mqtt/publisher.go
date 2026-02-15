@@ -12,7 +12,7 @@ import (
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 
 	"warlink/config"
-	"warlink/logging"
+	"plcio/logging"
 	"warlink/namespace"
 )
 

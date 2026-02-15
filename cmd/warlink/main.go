@@ -22,7 +22,7 @@ import (
 	"warlink/brokertest"
 	"warlink/config"
 	"warlink/engine"
-	"warlink/logging"
+	"plcio/logging"
 	"warlink/ssh"
 	"warlink/tui"
 	"warlink/web"

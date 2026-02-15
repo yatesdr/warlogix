@@ -16,7 +16,7 @@ import (
 	"warlink/api"
 	"warlink/config"
 	"warlink/engine"
-	"warlink/logging"
+	"plcio/logging"
 	"warlink/www"
 )
 

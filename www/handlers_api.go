@@ -11,14 +11,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"warlink/ads"
+	"plcio/ads"
 	"warlink/config"
-	"warlink/driver"
+	"plcio/driver"
 	"warlink/engine"
-	"warlink/logix"
-	"warlink/omron"
+	"plcio/logix"
+	"plcio/omron"
 	"warlink/rule"
-	"warlink/s7"
+	"plcio/s7"
 	"warlink/tui"
 )
 

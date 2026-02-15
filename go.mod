@@ -2,6 +2,8 @@ module warlink
 
 go 1.24.0
 
+require plcio v0.0.0
+
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gdamore/tcell/v2 v2.8.1
@@ -35,3 +37,5 @@ require (
 	golang.org/x/term v0.35.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
 )
+
+replace plcio => ../plcio

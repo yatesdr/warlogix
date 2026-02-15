@@ -139,10 +139,14 @@ func NewRouter(managers engine.Managers) chi.Router {
 	})
 	r.Route("/tagpacks", func(r chi.Router) {
 		r.Post("/", h.handleCreateTagPack)
+		r.Get("/{name}", h.handleGetTagPack)
 		r.Put("/{name}", h.handleUpdateTagPack)
 		r.Delete("/{name}", h.handleDeleteTagPack)
 		r.Patch("/{name}", h.handleToggleTagPack)
+		r.Post("/{name}/service/{service}", h.handleToggleTagPackService)
 		r.Post("/{name}/members", h.handleAddTagPackMember)
+		r.Delete("/{name}/members/{index}", h.handleRemoveTagPackMember)
+		r.Patch("/{name}/members/{index}", h.handleToggleTagPackMemberIgnore)
 	})
 
 	return r

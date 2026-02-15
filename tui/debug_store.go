@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"warlink/logging"
+	"plcio/logging"
 )
 
 // LogMessage represents a single log entry in the debug store.
