@@ -132,6 +132,11 @@ kafka:
     max_retries: 3
     retry_backoff: 100ms
 
+warcry:
+  enabled: true
+  listen: "127.0.0.1:9999"            # TCP listen address for warcry clients
+  buffer_size: 10000                   # Ring buffer entries for replay
+
 triggers:
   - name: ProductComplete
     enabled: true
@@ -392,6 +397,25 @@ See the [Web UI Guide](web-ui.md) for details on using the browser interface.
 | `enable_writeback` | bool | No | Enable consuming write requests |
 | `consumer_group` | string | No | Consumer group ID (default: warlink-{name}-writers) |
 | `write_max_age` | duration | No | Max age of write requests to process (default: 2s) |
+
+## Warcry Configuration
+
+The warcry connector streams PLC events to [warcry](warcry.md) notification clients over TCP.
+
+```yaml
+warcry:
+  enabled: true
+  listen: "127.0.0.1:9999"
+  buffer_size: 10000
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | bool | No | Enable the warcry TCP server (default: false) |
+| `listen` | string | Yes (if enabled) | TCP listen address (e.g. `"127.0.0.1:9999"`, `":9999"`) |
+| `buffer_size` | int | No | Ring buffer size for event replay (default: 10000) |
+
+See [Warcry Connector](warcry.md) for the full protocol reference.
 
 ## TagPack Configuration
 

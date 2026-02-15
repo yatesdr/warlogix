@@ -33,16 +33,16 @@ This document describes WarLink's internal architecture and data flow.
 │          │                 │                │                                │
 │  ┌───────┼─────────────────┼────────────────┼──────────────────────────┐    │
 │  │       │           Service Publishers     │                          │    │
-│  │  ┌────▼────┐      ┌─────▼─────┐     ┌────▼────┐                    │    │
-│  │  │  MQTT   │      │   Kafka   │     │  Valkey │                    │    │
-│  │  │Publisher│      │  Manager  │     │ Manager │                    │    │
-│  │  └────┬────┘      └─────┬─────┘     └────┬────┘                    │    │
-│  └───────┼─────────────────┼────────────────┼──────────────────────────┘    │
-│          │                 │                │                                │
-└──────────┼─────────────────┼────────────────┼────────────────────────────────┘
-           │                 │                │
-           ▼                 ▼                ▼
-      MQTT Brokers     Kafka Clusters    Valkey/Redis
+│  │  ┌────▼────┐      ┌─────▼─────┐     ┌────▼────┐ ┌────▼────┐        │    │
+│  │  │  MQTT   │      │   Kafka   │     │  Valkey │ │ Warcry  │        │    │
+│  │  │Publisher│      │  Manager  │     │ Manager │ │ Server  │        │    │
+│  │  └────┬────┘      └─────┬─────┘     └────┬────┘ └────┬────┘        │    │
+│  └───────┼─────────────────┼────────────────┼───────────┼──────────────┘    │
+│          │                 │                │           │                    │
+└──────────┼─────────────────┼────────────────┼───────────┼────────────────────┘
+           │                 │                │           │
+           ▼                 ▼                ▼           ▼
+      MQTT Brokers     Kafka Clusters    Valkey/Redis  Warcry Clients
 ```
 
 ## Data Flow
@@ -126,6 +126,7 @@ Constructs consistent topic/key names across services:
 | MQTT | `{ns}[/{sel}]/{plc}/tags/{tag}` | `factory/line1/PLC1/tags/Counter` |
 | Kafka | `{ns}[-{sel}]` | `factory-line1` |
 | Valkey | `{ns}[:{sel}]:{plc}:tags:{tag}` | `factory:line1:PLC1:tags:Counter` |
+| Warcry | N/A (flat JSON, namespace in config msg) | `{"type":"tag","plc":"PLC1",...}` |
 
 ---
 
@@ -370,6 +371,11 @@ Main Goroutine
     │
     ├── Web Server (REST API + Browser UI + SSE)
     │
+    ├── Warcry Server
+    │   ├── Accept Loop (single goroutine)
+    │   ├── Client 1 Writer + Reader (2 goroutines per client)
+    │   └── Client N Writer + Reader
+    │
     └── Health Publisher (periodic timer)
 ```
 
@@ -398,3 +404,5 @@ Main Goroutine
 | MQTT queue depth | 1000 messages | No |
 | Kafka batch size | 100 messages | No |
 | HTTP connections | 100 concurrent | No |
+| Warcry ring buffer | 10,000 events | Yes (`buffer_size`) |
+| Warcry client buffer | 256 messages | No |

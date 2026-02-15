@@ -74,6 +74,7 @@ type Config struct {
 	TagPacks  []TagPackConfig  `yaml:"tag_packs,omitempty"`
 	PollRate  time.Duration    `yaml:"poll_rate"`
 	UI        UIConfig         `yaml:"ui,omitempty"`
+	Warcry    WarcryConfig     `yaml:"warcry,omitempty"`
 
 	// Data mutex protects all config fields against concurrent access.
 	// Callers that modify config should Lock(), modify, then call UnlockAndSave().
@@ -107,6 +108,13 @@ type TagPackMember struct {
 type UIConfig struct {
 	Theme     string `yaml:"theme,omitempty"`      // Theme name: default, retro, mono, amber, highcontrast
 	ASCIIMode bool   `yaml:"ascii_mode,omitempty"` // Use ASCII characters for borders (for terminals without Unicode)
+}
+
+// WarcryConfig holds configuration for the warcry TCP connector.
+type WarcryConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	Listen     string `yaml:"listen"`      // e.g. "127.0.0.1:9999"
+	BufferSize int    `yaml:"buffer_size"` // ring buffer entries, default 10000
 }
 
 // PLCConfig stores configuration for a single PLC connection.

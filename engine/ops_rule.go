@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"warlink/config"
+	"warlink/rule"
 )
 
 // CreateRule creates a new rule, saves config, and adds to the manager.
@@ -16,6 +17,11 @@ func (e *Engine) CreateRule(req RuleCreateRequest) error {
 	}
 	if e.cfg.FindRule(req.Name) != nil {
 		return fmt.Errorf("%w: rule '%s'", ErrAlreadyExists, req.Name)
+	}
+	for i, cond := range req.Conditions {
+		if _, err := rule.ParseOperator(cond.Operator); err != nil {
+			return fmt.Errorf("%w: condition %d: %v", ErrInvalidInput, i, err)
+		}
 	}
 
 	ruleCfg := config.RuleConfig{
@@ -36,7 +42,9 @@ func (e *Engine) CreateRule(req RuleCreateRequest) error {
 	}
 
 	if e.ruleMgr != nil {
-		e.ruleMgr.AddRule(e.cfg.FindRule(req.Name))
+		if err := e.ruleMgr.AddRule(e.cfg.FindRule(req.Name)); err != nil {
+			return fmt.Errorf("failed to initialize rule: %w", err)
+		}
 		if req.Enabled {
 			e.ruleMgr.StartRule(req.Name)
 		}
@@ -50,6 +58,11 @@ func (e *Engine) CreateRule(req RuleCreateRequest) error {
 func (e *Engine) UpdateRule(name string, req RuleUpdateRequest) error {
 	if e.cfg.FindRule(name) == nil {
 		return fmt.Errorf("%w: rule '%s'", ErrNotFound, name)
+	}
+	for i, cond := range req.Conditions {
+		if _, err := rule.ParseOperator(cond.Operator); err != nil {
+			return fmt.Errorf("%w: condition %d: %v", ErrInvalidInput, i, err)
+		}
 	}
 
 	updated := config.RuleConfig{
@@ -70,7 +83,9 @@ func (e *Engine) UpdateRule(name string, req RuleUpdateRequest) error {
 	}
 
 	if e.ruleMgr != nil {
-		e.ruleMgr.UpdateRule(e.cfg.FindRule(name))
+		if err := e.ruleMgr.UpdateRule(e.cfg.FindRule(name)); err != nil {
+			return fmt.Errorf("failed to initialize rule: %w", err)
+		}
 		if req.Enabled {
 			e.ruleMgr.StartRule(name)
 		}

@@ -43,3 +43,6 @@ Thumbs.db
 # Debug/log files
 *.log
 /tmp/
+
+# Internal test scripts
+auto-test/
