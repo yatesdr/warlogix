@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
-	"plcio/logging"
+	"github.com/yatesdr/plcio/logging"
 	"warlink/namespace"
 )
 

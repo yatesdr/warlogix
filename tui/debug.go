@@ -7,7 +7,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-	"plcio/logging"
+	"github.com/yatesdr/plcio/logging"
 )
 
 // DebugTab displays debug log messages.

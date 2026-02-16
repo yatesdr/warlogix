@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"warlink/config"
-	"plcio/logging"
+	"github.com/yatesdr/plcio/logging"
 	"warlink/namespace"
 )
 

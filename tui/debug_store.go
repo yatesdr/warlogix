@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"plcio/logging"
+	"github.com/yatesdr/plcio/logging"
 )
 
 // LogMessage represents a single log entry in the debug store.

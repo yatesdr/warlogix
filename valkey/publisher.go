@@ -11,7 +11,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"warlink/config"
-	"plcio/logging"
+	"github.com/yatesdr/plcio/logging"
 	"warlink/namespace"
 )
 

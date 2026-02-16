@@ -12,7 +12,7 @@ import (
 	"github.com/segmentio/kafka-go/sasl/plain"
 	"github.com/segmentio/kafka-go/sasl/scram"
 
-	"plcio/logging"
+	"github.com/yatesdr/plcio/logging"
 )
 
 // ConnectionStatus represents the state of a Kafka connection.

@@ -1,11 +1,11 @@
 package plcman
 
 import (
-	"plcio/ads"
-	"plcio/driver"
-	"plcio/logix"
-	"plcio/omron"
-	"plcio/s7"
+	"github.com/yatesdr/plcio/ads"
+	"github.com/yatesdr/plcio/driver"
+	"github.com/yatesdr/plcio/logix"
+	"github.com/yatesdr/plcio/omron"
+	"github.com/yatesdr/plcio/s7"
 )
 
 // TagValue is a unified wrapper that holds tag data from any PLC family.

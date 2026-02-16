@@ -9,7 +9,7 @@ import (
 
 	"warlink/engine"
 	"warlink/kafka"
-	"plcio/logging"
+	"github.com/yatesdr/plcio/logging"
 	"warlink/plcman"
 	"warlink/tui"
 )

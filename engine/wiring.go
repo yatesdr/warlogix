@@ -5,7 +5,7 @@ import (
 
 	"warlink/config"
 	"warlink/kafka"
-	"plcio/logging"
+	"github.com/yatesdr/plcio/logging"
 	"warlink/mqtt"
 	"warlink/plcman"
 	"warlink/tagpack"

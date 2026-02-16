@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"plcio/driver"
+	"github.com/yatesdr/plcio/driver"
 
 	"gopkg.in/yaml.v3"
 )
