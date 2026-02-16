@@ -24,10 +24,10 @@ This document describes WarLink's internal architecture and data flow.
 │  │                    Publish Engine                                    │    │
 │  │       ┌─────────────────┼─────────────────┐                         │    │
 │  │       │                 │                 │                         │    │
-│  │  ┌────▼────┐ ┌─────▼─────┐ ┌────▼────┐ ┌────▼────┐                │    │
-│  │  │ TagPack │ │  Trigger  │ │  Push   │ │  REST   │                │    │
-│  │  │ Manager │ │  Manager  │ │ Manager │ │  API    │                │    │
-│  │  └────┬────┘ └─────┬─────┘ └────┬────┘ └────┬────┘                │    │
+│  │  ┌────▼────┐    ┌─────▼─────┐    ┌────▼────┐                      │    │
+│  │  │ TagPack │    │   Rule    │    │  REST   │                      │    │
+│  │  │ Manager │    │  Manager  │    │  API    │                      │    │
+│  │  └────┬────┘    └─────┬─────┘    └────┬────┘                      │    │
 │  │       │            │            │           │                      │    │
 │  └───────┼────────────┼────────────┼───────────┼─────────────────────┘    │
 │          │                 │                │                                │
@@ -178,64 +178,65 @@ Constructs consistent topic/key names across services:
 
 ---
 
-## Trigger Architecture
+## Rules Engine Architecture
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│                      Trigger Engine                             │
+│                       Rule Engine                               │
 │                                                                 │
 │  ┌───────────────┐                                             │
 │  │ Monitor Loop  │◀──────── 100ms poll interval               │
-│  │ (per trigger) │                                             │
+│  │  (per rule)   │                                             │
 │  └───────┬───────┘                                             │
 │          │                                                      │
-│          │ Read trigger tag                                     │
+│          │ Read condition tags                                  │
 │          ▼                                                      │
 │  ┌───────────────┐                                             │
-│  │   Condition   │                                             │
-│  │   Evaluator   │                                             │
+│  │  Aggregate    │  AND/OR logic across conditions             │
+│  │  Evaluator    │                                             │
 │  └───────┬───────┘                                             │
 │          │                                                      │
 │          │ Rising edge detected (false → true)                 │
 │          ▼                                                      │
-│  ┌───────────────┐        ┌──────────────┐                    │
-│  │   Debounce    │───────▶│  Read Data   │                    │
-│  │    Check      │        │    Tags      │                    │
-│  └───────────────┘        └──────┬───────┘                    │
-│                                  │                              │
-│                                  │ Collect pack data (if any)  │
-│                                  ▼                              │
-│                          ┌──────────────┐                      │
-│                          │   Serialize  │                      │
-│                          │     JSON     │                      │
-│                          └──────┬───────┘                      │
-│                                 │                               │
-│              ┌──────────────────┼──────────────────┐           │
-│              ▼                  ▼                  ▼           │
-│        ┌──────────┐      ┌──────────┐      ┌──────────┐       │
-│        │   MQTT   │      │  Kafka   │      │   Ack    │       │
-│        │  QoS 2   │      │ Produce  │      │  Write   │       │
-│        └──────────┘      └──────────┘      └──────────┘       │
+│  ┌───────────────┐                                             │
+│  │   Debounce    │                                             │
+│  │    Check      │                                             │
+│  └───────┬───────┘                                             │
+│          │                                                      │
+│          │ Execute actions in parallel                          │
+│          ▼                                                      │
+│  ┌──────────────────────────────────────────────────┐          │
+│  │              Actions (parallel)                   │          │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐       │          │
+│  │  │ Publish  │  │ Webhook  │  │Writeback │       │          │
+│  │  │MQTT/Kafka│  │   HTTP   │  │ PLC Tag  │       │          │
+│  │  └──────────┘  └──────────┘  └──────────┘       │          │
+│  └──────────────────────────────────────────────────┘          │
+│                                                                 │
+│  On falling edge (conditions go false):                        │
+│  → Execute cleared_actions (same action types)                 │
 │                                                                 │
 │  State Machine:                                                 │
-│  ┌──────────┐    trigger    ┌──────────┐   condition   ┌──────┐│
-│  │  Armed   │──────────────▶│  Firing  │──────────────▶│Cooldown│
-│  └──────────┘               └──────────┘    false      └───┬───┘│
-│       ▲                                                    │    │
-│       └────────────────────────────────────────────────────┘    │
-│                        condition false                          │
+│  ┌──────────┐   rising     ┌──────────┐  actions   ┌─────────┐│
+│  │  Armed   │─────────────▶│  Firing  │──────────▶│  Wait   ││
+│  └──────────┘   edge       └──────────┘  done     │  Clear  ││
+│       ▲                                            └────┬────┘│
+│       │              ┌──────────┐                       │     │
+│       └──────────────│ Cooldown │◀──────────────────────┘     │
+│        elapsed       └──────────┘     falling edge            │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### Trigger States
+### Rule States
 
 | State | Description | Transitions |
 |-------|-------------|-------------|
-| Disabled | Trigger not running | → Armed (Start) |
-| Armed | Monitoring for condition | → Firing (condition met) |
-| Firing | Capturing and publishing | → Cooldown (complete) |
-| Cooldown | Waiting for condition reset | → Armed (condition false) |
-| Error | Publish failed | → Cooldown (auto), Armed (Reset) |
+| Disabled | Rule not running | → Armed (Start) |
+| Armed | Monitoring conditions | → Firing (rising edge) |
+| Firing | Executing actions | → Waiting Clear (actions done) |
+| Waiting Clear | Waiting for conditions to go false | → Cooldown (falling edge) |
+| Cooldown | Waiting minimum interval | → Armed (elapsed) |
+| Error | Action failed | → Armed (Reset) |
 
 ---
 
@@ -262,7 +263,7 @@ Constructs consistent topic/key names across services:
 │                    ▼                                 │
 │  QoS Levels:                                        │
 │   - Tags/Health: QoS 1 (at least once)             │
-│   - Triggers: QoS 2 (exactly once)                 │
+│   - Rules: QoS 2 (exactly once)                    │
 │   - TagPacks: QoS 1, retained                      │
 └──────────────────────────────────────────────────────┘
 ```
@@ -292,7 +293,7 @@ Constructs consistent topic/key names across services:
 │  Message Keys:                                       │
 │   - Tags: {plc}.{tag}                               │
 │   - Packs: pack:{packname}                          │
-│   - Triggers: {trigger-name}                        │
+│   - Rules: {rule-name}                              │
 │   - Health: {plc}                                   │
 └──────────────────────────────────────────────────────┘
 ```
@@ -348,14 +349,10 @@ Main Goroutine
     ├── TagPack Manager
     │   └── Debounce Loop (single goroutine)
     │
-    ├── Trigger Manager
-    │   ├── Trigger1 Monitor Loop (goroutine per trigger)
-    │   ├── Trigger2 Monitor Loop
-    │   └── Trigger3 Monitor Loop
-    │
-    ├── Push Manager
-    │   ├── Push1 Monitor Loop (goroutine per push)
-    │   └── Push2 Monitor Loop
+    ├── Rule Manager
+    │   ├── Rule1 Monitor Loop (goroutine per rule)
+    │   ├── Rule2 Monitor Loop
+    │   └── Rule3 Monitor Loop
     │
     ├── MQTT Publishers
     │   ├── Broker1 Client (goroutine per broker)

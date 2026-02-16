@@ -34,9 +34,9 @@ def on_message(client, userdata, msg):
             for key, data in payload['tags'].items():
                 print(f"  {key} = {data['value']}")
 
-        # Trigger message
-        elif "/triggers/" in msg.topic:
-            print(f"Trigger: {payload['trigger']} fired (seq: {payload['sequence']})")
+        # Rule message
+        elif "/rules/" in msg.topic:
+            print(f"Rule: {payload['rule']} fired (seq: {payload['sequence']})")
             for tag, value in payload['data'].items():
                 print(f"  {tag} = {value}")
 
@@ -95,8 +95,8 @@ for message in consumer:
     data = message.value
 
     # Check message type by fields present
-    if 'trigger' in data:
-        print(f"Trigger: {data['trigger']} seq={data['sequence']}")
+    if 'rule' in data:
+        print(f"Rule: {data['rule']} seq={data['sequence']}")
     elif 'online' in data:
         print(f"Health: {data['plc']} online={data['online']}")
     elif 'name' in data and 'tags' in data:
@@ -205,8 +205,8 @@ client.on('message', (topic, message) => {
             Object.entries(payload.tags).forEach(([key, data]) => {
                 console.log(`  ${key} = ${data.value}`);
             });
-        } else if (topic.includes('/triggers/')) {
-            console.log(`Trigger: ${payload.trigger} seq=${payload.sequence}`);
+        } else if (topic.includes('/rules/')) {
+            console.log(`Rule: ${payload.rule} seq=${payload.sequence}`);
         }
     } catch (e) {
         console.error('Invalid JSON:', e.message);
@@ -234,8 +234,8 @@ async function run() {
         eachMessage: async ({ topic, partition, message }) => {
             const data = JSON.parse(message.value.toString());
 
-            if (data.trigger) {
-                console.log(`Trigger: ${data.trigger}`);
+            if (data.rule) {
+                console.log(`Rule: ${data.rule}`);
             } else if (data.online !== undefined) {
                 console.log(`Health: ${data.plc} online=${data.online}`);
             } else {
@@ -624,17 +624,14 @@ curl http://localhost:8080/tagpack/ProductionMetrics
 }
 ```
 
-### Trigger Message
+### Rule Message
 
 ```json
 {
-  "trigger": "PartComplete",
+  "rule": "PartComplete",
   "timestamp": "2024-01-15T10:30:00.123456789Z",
   "sequence": 42,
   "plc": "Line1_PLC",
-  "metadata": {
-    "line": "Line1"
-  },
   "data": {
     "SerialNumber": "ABC123",
     "Weight": 1.5

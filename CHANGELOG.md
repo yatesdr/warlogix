@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.8] - 2026-02-15
+
+### Added
+- **Rules Engine**: Unified automation system replacing separate Triggers and Push systems. Rules support multiple conditions (AND/OR logic), multiple action types per rule, and both rising-edge and falling-edge (cleared) actions.
+  - **Publish actions**: Capture tags or TagPacks and publish to MQTT (QoS 2) and/or Kafka
+  - **Webhook actions**: Send HTTP requests to external endpoints with body templates and authentication
+  - **Writeback actions**: Write values to PLC tags on fire or clear
+- **Engine Package**: Extracted `engine/` package that orchestrates all managers (PLC, MQTT, Valkey, Kafka, Rules, TagPacks, Warcry) with a clean request/response API
+- **Warcry Server**: New TCP streaming server for real-time PLC event notifications with ring buffer replay
+- **Rule Manager Web UI**: Create, edit, and manage rules from the browser with a form-based editor
+
+### Changed
+- **PLC Drivers Refactored**: All PLC driver code (Logix, S7, ADS, FINS, Omron EIP) extracted to separate [`plcio`](https://github.com/yatesdr/plcio) module for reuse in other projects
+- **Config Simplification**: Removed legacy `triggers`, `pushes`, and `rest` config sections; replaced with unified `rules` section
+- **Web UI Navigation**: Improved sidebar navigation and renamed Events page to Rule Manager
+- **TUI Tab**: Triggers and Push tabs replaced with unified Rules tab (`R` hotkey)
+
+### Removed
+- **Trigger Package**: Replaced by Rules engine (`rule/` package)
+- **Push Package**: Replaced by Rules engine webhook actions
+- **Standalone PLC Drivers**: Moved to `plcio` module (ads, cip, eip, logix, omron, s7, driver packages)
+- **Logging Package**: Removed in favor of standard library logging
+- **Brokertest Package**: Removed unused test helper
+- Dead code identified by static analysis
+
 ## [0.2.7] - 2026-02-13
 
 ### Fixed

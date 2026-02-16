@@ -148,18 +148,18 @@ kcat -b localhost:9092 -t warlink1 -C -o end  # Consume new messages
 
 ---
 
-## Trigger Issues
+## Rule Issues
 
 | Symptom | Likely Cause | Solution |
 |---------|--------------|----------|
-| Trigger not firing | Condition not met | Verify trigger tag value meets condition |
-| Trigger stuck in "Cooldown" | Condition still true | Condition must go false before re-arming |
-| Trigger stuck in "Error" | Previous fire failed | Check logs, press Reset or fix underlying issue |
-| Wrong data captured | Tags read at wrong time | Triggers read directly from PLC at fire time |
-| Ack tag not written | Tag not marked writable | Enable writable flag on ack tag |
-| Test fire works, normal doesn't | Condition edge detection | Trigger fires on rising edge only (false→true) |
+| Rule not firing | Condition not met | Verify condition tag values meet the configured operator/value |
+| Rule stuck in "Waiting Clear" | Conditions still true | All conditions must go false before re-arming |
+| Rule stuck in "Cooldown" | Cooldown interval not elapsed | Wait for `cooldown_ms` to elapse after conditions clear |
+| Rule stuck in "Error" | Previous action failed | Check logs, press Reset or fix underlying issue |
+| Writeback tag not written | Tag not marked writable | Enable writable flag on the target tag |
+| Test fire works, normal doesn't | Edge detection | Rules fire on rising edge only (false→true) |
 
-**Debug triggers:**
+**Debug rules:**
 ```bash
 ./warlink --log-debug=kafka,mqtt
 ```

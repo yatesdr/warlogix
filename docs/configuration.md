@@ -137,42 +137,30 @@ warcry:
   listen: "127.0.0.1:9999"            # TCP listen address for warcry clients
   buffer_size: 10000                   # Ring buffer entries for replay
 
-triggers:
+rules:
   - name: ProductComplete
-    enabled: true
-    plc: MainPLC
-    trigger_tag: Program:MainProgram.ProductReady
-    condition:
-      operator: "=="                  # ==, !=, >, <, >=, <=
-      value: true
-    ack_tag: Program:MainProgram.ProductAck  # Optional acknowledgment
-    debounce_ms: 100                  # Debounce time
-    tags:                             # Tags to capture
-      - ProductID
-      - BatchNumber
-      - Quantity
-    kafka_cluster: LocalKafka
-    topic: production-events
-    metadata:                         # Static metadata
-      line: Line1
-      station: Assembly
-
-pushes:
-  - name: AlarmWebhook
     enabled: true
     conditions:
       - plc: MainPLC
-        tag: Program:MainProgram.AlarmActive
+        tag: Program:MainProgram.ProductReady
         operator: "=="
         value: true
-    url: https://api.example.com/alarm
-    method: POST
-    content_type: application/json
-    body: '{"alarm": true, "temp": #MainPLC.Temperature}'
-    auth:
-      type: bearer
-      token: "your-api-token"
-    cooldown_min: 15m
+    logic_mode: and                   # "and" (default) or "or"
+    debounce_ms: 100
+    cooldown_ms: 1000
+    actions:
+      - type: publish
+        tag_or_pack: pack:ProductionMetrics
+        include_trigger: true
+        kafka_cluster: LocalKafka
+        kafka_topic: production-events
+      - type: writeback
+        write_tag: Program:MainProgram.ProductAck
+        write_value: 1
+    cleared_actions:
+      - type: writeback
+        write_tag: Program:MainProgram.ProductAck
+        write_value: 0
 
 poll_rate: 1s                         # Global default poll rate
 
@@ -453,96 +441,22 @@ tag_packs:
 | `tag` | string | Yes | Tag name (uses alias if set) |
 | `ignore_changes` | bool | No | If true, changes don't trigger pack publish |
 
-## Trigger Configuration
+## Rule Configuration
+
+Rules monitor PLC tag conditions and execute actions when conditions are met. Each rule supports multiple conditions (AND/OR logic), multiple action types, and optional cleared actions on falling edge.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique identifier |
-| `enabled` | bool | No | Enable this trigger (default: false) |
-| `plc` | string | Yes | PLC name to monitor |
-| `trigger_tag` | string | Yes | Tag to watch for condition |
-| `condition` | object | Yes | Condition to fire trigger |
-| `ack_tag` | string | No | Tag to write acknowledgment (1=success, -1=error) |
-| `debounce_ms` | int | No | Debounce time in milliseconds (default: 100) |
-| `tags` | list | Yes | Tags to capture (use `pack:Name` for TagPacks) |
-| `mqtt_broker` | string | No | MQTT broker: "all", "none", or specific name |
-| `kafka_cluster` | string | No | Kafka cluster: "all", "none", or specific name |
-| `selector` | string | No | Optional sub-namespace for topic |
-| `publish_pack` | string | No | Legacy: TagPack name to include |
-| `metadata` | map | No | Static metadata to include in messages |
+| `enabled` | bool | No | Enable this rule (default: false) |
+| `conditions` | list | Yes | One or more conditions |
+| `logic_mode` | string | No | `and` (default) or `or` |
+| `debounce_ms` | int | No | Debounce time in milliseconds |
+| `cooldown_ms` | int | No | Minimum interval before re-arming (milliseconds) |
+| `actions` | list | Yes | Actions to execute on rising edge |
+| `cleared_actions` | list | No | Actions to execute on falling edge |
 
-### Condition Object
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `operator` | string | Comparison: `==`, `!=`, `>`, `<`, `>=`, `<=` |
-| `value` | any | Value to compare against |
-
-### Trigger Example
-
-```yaml
-triggers:
-  - name: ProductComplete
-    enabled: true
-    plc: MainPLC
-    trigger_tag: Program:MainProgram.ProductReady
-    condition:
-      operator: "=="
-      value: true
-    ack_tag: Program:MainProgram.ProductAck
-    debounce_ms: 100
-    tags:
-      - ProductID
-      - BatchNumber
-      - Quantity
-      - pack:ProductionMetrics    # Include TagPack data
-    mqtt_broker: all              # Publish to all MQTT brokers (QoS 2)
-    kafka_cluster: ProductionKafka
-    metadata:
-      line: Line1
-      station: Assembly
-```
-
-## Push Configuration
-
-Push targets monitor PLC tag conditions and send HTTP requests to external endpoints when conditions are met.
-
-```yaml
-pushes:
-  - name: NotifyAPI
-    enabled: true
-    conditions:
-      - plc: MainPLC
-        tag: Program:MainProgram.AlarmActive
-        operator: "=="
-        value: true
-    url: https://api.example.com/webhook
-    method: POST
-    content_type: application/json
-    body: '{"alarm": true, "temp": #MainPLC.Temperature}'
-    auth:
-      type: bearer
-      token: "your-api-token"
-    cooldown_min: 15m
-    timeout: 30s
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | Yes | Unique identifier |
-| `enabled` | bool | No | Enable this push (default: false) |
-| `conditions` | list | Yes | One or more conditions (OR logic — any condition triggers the push) |
-| `url` | string | Yes | Target HTTP endpoint |
-| `method` | string | No | HTTP method: GET, POST, PUT, PATCH (default: POST) |
-| `content_type` | string | No | Request Content-Type (default: application/json) |
-| `headers` | map | No | Custom HTTP headers |
-| `body` | string | No | Request body template with `#PLCName.tagName` references |
-| `auth` | object | No | Authentication configuration |
-| `cooldown_min` | duration | No | Minimum interval between sends |
-| `cooldown_per_condition` | bool | No | Track cooldown per condition instead of globally (default: false) |
-| `timeout` | duration | No | HTTP request timeout (default: 30s) |
-
-### Push Condition Fields
+### Condition Fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -550,8 +464,47 @@ pushes:
 | `tag` | string | Yes | Tag to monitor |
 | `operator` | string | Yes | Comparison: `==`, `!=`, `>`, `<`, `>=`, `<=` |
 | `value` | any | Yes | Value to compare against |
+| `not` | bool | No | Invert the condition result |
 
-### Push Authentication
+### Action Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | Yes | Action type: `publish`, `webhook`, or `writeback` |
+| `name` | string | No | Label for logging/UI |
+
+**Publish action fields (`type: publish`):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tag_or_pack` | string | Tag name or `pack:Name` for TagPacks |
+| `include_trigger` | bool | Include condition tag values in message |
+| `mqtt_broker` | string | MQTT broker: `all`, `none`, or specific name |
+| `mqtt_topic` | string | Custom MQTT sub-topic (default: `rules/{rule-name}`) |
+| `kafka_cluster` | string | Kafka cluster: `all`, `none`, or specific name |
+| `kafka_topic` | string | Custom Kafka topic suffix (default: `rules`) |
+
+**Webhook action fields (`type: webhook`):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | string | Target HTTP endpoint |
+| `method` | string | HTTP method: GET, POST, PUT, PATCH (default: POST) |
+| `content_type` | string | Request Content-Type (default: application/json) |
+| `headers` | map | Custom HTTP headers |
+| `body` | string | Request body template with `#PLCName.tagName` references |
+| `auth` | object | Authentication configuration |
+| `timeout` | duration | HTTP request timeout (default: 30s) |
+
+**Writeback action fields (`type: writeback`):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `write_plc` | string | PLC name (defaults to first condition's PLC) |
+| `write_tag` | string | Tag to write to |
+| `write_value` | any | Value to write |
+
+### Authentication
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -562,15 +515,36 @@ pushes:
 | `header_name` | string | Header name for custom_header auth |
 | `header_value` | string | Header value for custom_header auth |
 
-### Body Templates
+### Rule Example
 
-Use `#PLCName.tagName` references in the body to include live tag values:
-
-```json
-{"temperature": #MainPLC.Temperature, "count": #MainPLC.Counter}
+```yaml
+rules:
+  - name: ProductComplete
+    enabled: true
+    conditions:
+      - plc: MainPLC
+        tag: Program:MainProgram.ProductReady
+        operator: "=="
+        value: true
+    debounce_ms: 100
+    cooldown_ms: 1000
+    actions:
+      - type: publish
+        tag_or_pack: pack:ProductionMetrics
+        include_trigger: true
+        mqtt_broker: all
+        kafka_cluster: ProductionKafka
+        kafka_topic: production-events
+      - type: writeback
+        write_tag: Program:MainProgram.ProductAck
+        write_value: 1
+    cleared_actions:
+      - type: writeback
+        write_tag: Program:MainProgram.ProductAck
+        write_value: 0
 ```
 
-References are resolved at send time. If a tag cannot be read, the reference is left as-is.
+See [Rules Engine](rules.md) for the full rules documentation.
 
 ## UI Configuration
 

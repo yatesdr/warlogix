@@ -134,26 +134,15 @@ Create and manage TagPacks — groups of tags that publish together as a single 
 > ![TagPacks page](screenshots/web-tagpacks.png)
 > *Screenshot: TagPack editor showing members and per-service publishing toggles*
 
-### Triggers
+### Rule Manager
 
-Configure event-driven data capture triggers. From this page you can:
+Configure automation rules that monitor PLC tag conditions and execute actions. From this page you can:
 
-- Create new triggers or edit existing ones
-- Arm or disarm triggers
-- Test fire a trigger manually to verify capture behavior
-- Add or remove capture tags from the trigger's tag list
-
-> ![Triggers page](screenshots/web-triggers.png)
-> *Screenshot: Trigger configuration with condition settings and capture tag list*
-
-### Push
-
-Configure HTTP webhook pushes that fire when PLC tag conditions are met. From this page you can:
-
-- View configured push targets with their status (Armed, Firing, Cooldown, Error)
-- Add, edit, or delete push configurations
-- Start or stop individual pushes
-- Test fire a push manually to verify endpoint connectivity
+- Create new rules or edit existing ones
+- Enable or disable rules
+- Test fire a rule manually to verify action behavior
+- Configure multiple conditions with AND/OR logic
+- Add publish, webhook, and writeback actions
 
 ### REST API
 

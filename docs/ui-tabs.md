@@ -1,6 +1,6 @@
 # User Interface Guide
 
-WarLink uses a tabbed terminal interface (TUI) for managing PLCs, tags, and data brokers. Each tab displays its hotkey integrated into the name (e.g., **P**LCs, Repu**B**lisher, Tri**G**gers). Press `?` on any tab to see available keyboard shortcuts.
+WarLink uses a tabbed terminal interface (TUI) for managing PLCs, tags, and data brokers. Each tab displays its hotkey integrated into the name (e.g., **P**LCs, Repu**B**lisher, **R**ules). Press `?` on any tab to see available keyboard shortcuts.
 
 ## Global Shortcuts
 
@@ -9,8 +9,7 @@ WarLink uses a tabbed terminal interface (TUI) for managing PLCs, tags, and data
 | `P` | Jump to **P**LCs tab |
 | `B` | Jump to Repu**B**lisher tab |
 | `T` | Jump to **T**agPacks tab |
-| `G` | Jump to Tri**G**gers tab |
-| `U` | Jump to P**U**sh tab |
+| `R` | Jump to **R**ules tab |
 | `E` | Jump to R**E**ST tab |
 | `M` | Jump to **M**QTT tab |
 | `V` | Jump to **V**alkey tab |
@@ -283,138 +282,66 @@ When adding tags, use the filter to quickly find tags across all PLCs:
 
 ---
 
-## Triggers Tab
+## Rules Tab
 
-Event triggers capture data snapshots when PLC conditions are met and publish to MQTT and/or Kafka.  Event triggers are considered captured items and will not publish to Redis/Valkey services.  Triggers are typically used to capture all values at a particular moment, and most often interact with the PLC.   For example, if quality data is assembled into a bundle and then the PLC sets the "read_data" flag high, it can be monitored and then the Trigger pack will be assembled with the data.   Optional write-back is supported for PLC confirmation flags or status codes which need to be communicated back into the process.
-
-
-<img width="963" height="590" alt="image" src="https://github.com/user-attachments/assets/36b2a192-94d2-4482-90f6-c5d50114210f" />
-
+The Rules tab configures automation rules that monitor PLC tag conditions and execute actions when conditions are met. Rules unify the previous Triggers and Push functionality into a single, more flexible system. Each rule can have multiple conditions (combined with AND or OR logic) and multiple actions (publish to MQTT/Kafka, send HTTP webhooks, or write values to PLC tags).
 
 ### Display Columns
 
 | Column | Description |
 |--------|-------------|
-| Status | Armed (green), Firing (yellow), Cooldown (blue), Error (red), Stopped (gray) |
-| Name | Trigger identifier |
-| PLC | Source PLC |
-| Trigger | Tag being monitored |
-| Condition | Comparison operator and value |
-| Pack | Optional TagPack to publish on fire |
+| Status | Armed (green), Firing (yellow), Cooldown (orange), Error (red), Stopped (gray) |
+| Name | Rule identifier |
+| Logic | AND or OR (how conditions are combined) |
+| Conds | Number of conditions |
+| Actions | Number of actions |
 | Fires | Total fire count since startup |
 | Status | Current state text |
 
 ### Keyboard Shortcuts
 
-The Triggers tab uses context-sensitive hotkeys based on which pane has focus:
+The Rules tab uses context-sensitive hotkeys based on which pane has focus:
 
-**Trigger list (left pane):**
-
-| Key | Action |
-|-----|--------|
-| `a` | **Add** new trigger |
-| `x` | **Remove** selected trigger (with confirmation) |
-| `e` | **Edit** selected trigger |
-| `s` | **Start** (arm) trigger |
-| `S` | **Stop** (disarm) trigger |
-| `T` | **Test** fire trigger manually (does not enter cooldown) |
-| `Tab` | Switch focus to data tags list |
-
-**Data tags list (right pane):**
+**Rule list (left pane):**
 
 | Key | Action |
 |-----|--------|
-| `a` | **Add** tag or pack to capture list |
-| `x` | **Remove** selected tag (with confirmation) |
+| `a` | **Add** new rule |
+| `x` | **Remove** selected rule (with confirmation) |
+| `e` | **Edit** selected rule |
+| `Space` | Toggle rule enabled/disabled |
+| `F` | **Test fire** rule manually (does not enter cooldown) |
+| `Tab` | Switch focus to conditions list |
 
-### Creating a Trigger
-
-<img width="457" height="340" alt="image" src="https://github.com/user-attachments/assets/93f47185-c674-4527-9b8f-e3c13f8dfb75" />
+### Creating a Rule
 
 1. Press `a` to open the Add dialog
 2. Configure:
    - **Name** - Unique identifier
-   - **PLC** - Source PLC
-   - **Trigger Tag** - Tag to monitor (from published tags)
-   - **Operator** - Comparison (==, !=, >, <, >=, <=)
-   - **Value** - Threshold value
-   - **Ack Tag** - Optional tag to write acknowledgment (1=success, -1=error)
-   - **MQTT Broker** - Select "All", "None", or a specific broker (publishes with QoS 2)
-   - **Kafka Cluster** - Select "All", "None", or a specific cluster
-   - **Publish Pack** - Optional TagPack to publish on fire
-3. Use `a` in the data tags pane to add tags or packs to capture when triggered
+   - **Logic Mode** - AND (all conditions must be true) or OR (any condition fires)
+   - **Conditions** - One or more PLC tag conditions with operator and value
+   - **Debounce** - Minimum interval between edge detections
+   - **Cooldown** - Minimum interval between fires
+   - **Actions** - One or more actions to execute on rising edge (publish, webhook, writeback)
+   - **Cleared Actions** - Optional actions to execute on falling edge
+
+### Action Types
+
+| Type | Description |
+|------|-------------|
+| **Publish** | Capture tags or TagPacks, publish to MQTT (QoS 2) and/or Kafka |
+| **Webhook** | Send HTTP request to external URL with body templates |
+| **Writeback** | Write a value to a PLC tag |
 
 ### Test Firing
 
-Press `T` to manually test fire a trigger. This:
-- Bypasses the condition check
-- Captures configured data tags
-- Publishes to configured MQTT brokers and Kafka clusters
-- Does **not** enter cooldown state (trigger remains armed)
-- Works even when the trigger is disabled
+Press `F` to manually test fire a rule. This:
+- Bypasses all condition checks
+- Executes all configured actions
+- Does **not** enter cooldown state (rule remains armed)
+- Works even when the rule is disabled
 
----
-
-## Push Tab
-
-The Push tab configures HTTP webhook pushes that fire when PLC tag conditions are met. Push targets monitor one or more PLC tag conditions and send an HTTP request (GET, POST, PUT, or PATCH) to an external URL when a rising edge is detected. This is useful for sending notifications, triggering external workflows, or pushing data to third-party APIs.
-
-### Display Columns
-
-| Column | Description |
-|--------|-------------|
-| Status | Green if armed, yellow if firing, orange if cooldown, red if error, gray if disabled |
-| Name | Push identifier |
-| Conditions | Number of conditions monitored |
-| URL | Target HTTP endpoint |
-| Method | HTTP method (GET, POST, PUT, PATCH) |
-| Sends | Total fire count since startup |
-| Status | Current state text |
-
-### Keyboard Shortcuts
-
-**Push list (left pane):**
-
-| Key | Action |
-|-----|--------|
-| `a` | **Add** new push |
-| `x` | **Remove** selected push (with confirmation) |
-| `e` | **Edit** selected push |
-| `Space` | Toggle push enabled/disabled |
-| `F` | **Test fire** push manually |
-| `Tab` | Switch focus to conditions list |
-
-### Creating a Push
-
-1. Press `a` to open the Add dialog
-2. Configure:
-   - **Name** - Unique identifier
-   - **URL** - Target HTTP endpoint
-   - **Method** - HTTP method (POST, GET, PUT, PATCH)
-   - **Content-Type** - Request content type (default: application/json)
-   - **Body** - Request body template with `#PLCName.tagName` references for live values
-   - **Auth** - Authentication: None, Bearer, Basic, JWT, or Custom Header
-   - **Cooldown** - Minimum interval between sends
-   - **Conditions** - One or more PLC tag conditions (OR logic: any condition fires the push)
-
-### Body Templates
-
-The body field supports `#PLCName.tagName` references that are replaced with live tag values when the push fires:
-
-```json
-{"temperature": #MainPLC.Temperature, "counter": #MainPLC.Counter}
-```
-
-### Push States
-
-| State | Description |
-|-------|-------------|
-| Disabled | Push is not running |
-| Armed | Monitoring conditions for rising edge |
-| Firing | Sending HTTP request |
-| Waiting Clear | Sent, waiting for conditions to go false |
-| Cooldown | Conditions cleared, waiting minimum interval |
-| Error | HTTP request failed (transitions to Waiting Clear) |
+See [Rules Engine](rules.md) for full documentation on conditions, actions, and configuration.
 
 ---
 

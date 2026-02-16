@@ -5,7 +5,7 @@
 
 Factory floors speak their own languages: EtherNet/IP, S7comm, ADS, FINS. Meanwhile, your data platforms expect REST, MQTT, Kafka, and Redis. WarLink translates between these worlds, letting you stream PLC data to dashboards, databases, and analytics pipelines without writing custom integration code.  No expensive middleware. No vendor lock-in. Just a single binary that runs anywhere.
 
-At its heart WarLink is a TUI (Text User Interface) gateway for industrial PLCs, and can connect and read / write data from Allen-Bradley, Siemens, Beckhoff, and Omron PLCs.  It will then republish that data via REST API, MQTT, Kafka, and Redis/Valkey for use in the wider factory infrastructure.   It includes advanced features for grouping tags into 'Soft-UDTs' and for publishing tags or groups of tags when specific trigger condition are met.   It is optimized for high-performance read from PLCs and writing to upstream services, with write-back functionality for discrete types.
+At its heart WarLink is a TUI (Text User Interface) gateway for industrial PLCs, and can connect and read / write data from Allen-Bradley, Siemens, Beckhoff, and Omron PLCs.  It will then republish that data via REST API, MQTT, Kafka, and Redis/Valkey for use in the wider factory infrastructure.   It includes advanced features for grouping tags into 'Soft-UDTs' and a rules engine for executing actions (publish, webhook, writeback) when specific PLC conditions are met.   It is optimized for high-performance read from PLCs and writing to upstream services, with write-back functionality for discrete types.
 
 
 
@@ -66,8 +66,7 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 
 ### Advanced Features
 - [Daemon Mode](docs/daemon-mode.md) - Background service with SSH access
-- [Triggers](docs/triggers.md) - Event-driven data capture to MQTT and Kafka
-- [Push Webhooks](docs/push.md) - HTTP webhooks triggered by PLC conditions
+- [Rules Engine](docs/rules.md) - Automation rules with publish, webhook, and writeback actions
 - [TagPacks](docs/tagpacks.md) - Aggregate tags for atomic publishing
 - [Multi-Instance Deployment](docs/multi-instance.md) - Namespace isolation for multiple sites
 - [Data Types](docs/data-types.md) - Types, byte order, and UDT support
@@ -93,10 +92,9 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 - **REST API** - HTTP endpoints for tag values and writes
 - **MQTT** - Publish tags with optional write-back
 - **Valkey/Redis** - Key storage with Pub/Sub and write-back queue
-- **Kafka** - High-throughput tag changes and event triggers
+- **Kafka** - High-throughput tag changes and rule events
 - **TagPacks** - Group tags within a single PLC or across multiple PLCs for atomic publishing, useful for aggregating related data for upstream IT processes
-- **Push** - Push tag values to external HTTP endpoints on schedule or on change
-- **Triggers** - Event-driven data capture with MQTT (QoS 2) and Kafka publishing
+- **Rules Engine** - Automation rules with publish (MQTT QoS 2, Kafka), webhook, and writeback actions triggered by PLC conditions
 - **Daemon Mode** - Background service with SSH access
 - **Web UI** - Browser-based management interface with dark mode, setup wizard, and real-time SSE updates
 - **High Performance** - Batched reads, optimized publishing, 100K+ messages/sec
@@ -141,7 +139,7 @@ Run `warlink --stress-test-republishing` to benchmark your system.
 
 | Tab | Key | Action |
 |-----|-----|--------|
-| Global | `P/B/T/G/U/E/M/V/K/D` | Jump to tab |
+| Global | `P/B/T/R/E/M/V/K/D` | Jump to tab |
 | Global | `Shift+Tab` | Cycle tabs |
 | Global | `N` | Configure namespace |
 | Global | `F6` | Cycle themes |
@@ -156,8 +154,8 @@ Run `warlink --stress-test-republishing` to benchmark your system.
 | Browser | `a/e/x` | Add/Edit/Delete (manual PLCs) |
 | TagPacks | `a/x` | Add/Remove (context-sensitive) |
 | TagPacks | `Space/e/i` | Toggle enable/Edit/Ignore changes |
-| Triggers | `a/x/e` | Add/Remove/Edit |
-| Triggers | `Space/F` | Toggle arm / Test fire |
+| Rules | `a/x/e` | Add/Remove/Edit |
+| Rules | `Space/F` | Toggle enable / Test fire |
 | Services | `a/e/x/c/C` | Add/Edit/Remove/Connect/Disconnect |
 
 ## Command Line Options

@@ -234,9 +234,9 @@ Response: Full PackValue JSON with current tag values (same flat `plc.tag` key f
 }
 ```
 
-## Integration with Triggers
+## Integration with Rules
 
-Triggers can include TagPack data in their snapshot by adding `pack:PackName` to the trigger's data tags list. When the trigger fires, pack data is embedded directly in the trigger message as a nested object. See [Triggers](triggers.md) for details.
+Rules can include TagPack data in their publish actions by setting `tag_or_pack: pack:PackName`. When the rule fires, pack data is embedded directly in the published message as a nested object. See [Rules Engine](rules.md) for details.
 
 ## Debouncing
 

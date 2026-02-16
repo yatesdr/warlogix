@@ -101,15 +101,24 @@ END_IF
 
 **WarLink Configuration:**
 ```yaml
-triggers:
+rules:
   - name: TraceabilityCapture
-    plc: MainPLC
-    trigger_tag: WarLink_SaveData
-    condition: { operator: "==", value: true }
-    ack_tag: WarLink_DataSaved    # Writes 1 (success) or -1 (error)
-    tags:
-      - TraceData
-    kafka_cluster: all
+    conditions:
+      - plc: MainPLC
+        tag: WarLink_SaveData
+        operator: "=="
+        value: true
+    actions:
+      - type: publish
+        tag_or_pack: TraceData
+        kafka_cluster: all
+      - type: writeback
+        write_tag: WarLink_DataSaved
+        write_value: 1
+    cleared_actions:
+      - type: writeback
+        write_tag: WarLink_DataSaved
+        write_value: 0
 ```
 
 **Why this is correct:**

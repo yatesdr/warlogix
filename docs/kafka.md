@@ -132,19 +132,16 @@ kafkacat -b localhost:9092 -t factory-line1 -C
 kafkacat -b localhost:9092 -t factory-line1 -C | grep '"name":'
 ```
 
-### Trigger Events
+### Rule Events
 
-Event triggers publish to their configured topic (see [Triggers](triggers.md)):
+Rule publish actions send events to their configured topic (see [Rules Engine](rules.md)):
 
 ```json
 {
-  "trigger": "ProductComplete",
+  "rule": "ProductComplete",
   "timestamp": "2024-01-15T10:30:00.123456789Z",
   "sequence": 42,
   "plc": "MainPLC",
-  "metadata": {
-    "line": "Line1"
-  },
   "data": {
     "ProductID": 12345,
     "Quantity": 100

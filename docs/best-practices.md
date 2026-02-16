@@ -192,13 +192,13 @@ tag_packs:
 
 ---
 
-## Trigger Design
+## Rule Design
 
 ### Condition Selection
 
-Choose trigger conditions carefully:
+Choose rule conditions carefully:
 
-**Good trigger conditions:**
+**Good conditions:**
 - Boolean flags set by PLC logic (`PartComplete`, `BatchDone`)
 - Counter increments (`PartCount > LastPartCount`)
 - State transitions (`State == 'Complete'`)
@@ -208,35 +208,52 @@ Choose trigger conditions carefully:
 - Values that oscillate (will fire repeatedly)
 - Values dependent on timing (race conditions)
 
-### Debouncing
+### Debouncing and Cooldown
 
-Set appropriate debounce times:
+Set appropriate debounce and cooldown times:
 
 ```yaml
-triggers:
+rules:
   - name: part_complete
     debounce_ms: 100    # Fast response, minimal debounce
+    cooldown_ms: 1000
 
   - name: batch_complete
     debounce_ms: 500    # Longer debounce for batch operations
+    cooldown_ms: 5000
 
   - name: alarm_capture
     debounce_ms: 1000   # Prevent spam on chattering alarms
+    cooldown_ms: 60000
 ```
 
 ### Acknowledgment Pattern
 
-For reliable handshaking with PLCs:
+For reliable handshaking with PLCs, use writeback actions on both rising and falling edge:
 
 ```yaml
-triggers:
+rules:
   - name: production_event
-    trigger_tag: DataReady
-    ack_tag: DataAck        # WarLink writes 1 (success) or -1 (error)
+    conditions:
+      - plc: MainPLC
+        tag: DataReady
+        operator: "=="
+        value: true
+    actions:
+      - type: publish
+        tag_or_pack: pack:ProductionData
+        kafka_cluster: all
+      - type: writeback
+        write_tag: DataAck
+        write_value: 1
+    cleared_actions:
+      - type: writeback
+        write_tag: DataAck
+        write_value: 0
 ```
 
 PLC logic should:
-1. Set trigger tag when data is ready
+1. Set condition tag when data is ready
 2. Wait for ack tag to become non-zero
 3. Handle success (1) or error (-1)
 4. Reset both tags for next cycle

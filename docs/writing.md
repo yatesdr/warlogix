@@ -6,7 +6,7 @@ This document describes how to write values to PLC tags using WarLink. **Writing
 
 Writing values in WarLink is primarily intended for:
 
-- **Status code write-back** - Confirming trigger execution success/failure
+- **Status code write-back** - Confirming rule execution success/failure
 - **Acknowledgment flags** - Signaling that data was captured or processed
 - **Simple parameter updates** - Occasional configuration changes via dashboard
 

@@ -12,29 +12,32 @@ A packaging line has a CompactLogix PLC that sets `PartComplete` true when a box
 
 ### Implementation
 
-**1. Configure the trigger:**
+**1. Configure the rule:**
 
 ```yaml
-triggers:
+rules:
   - name: box_complete
     enabled: true
-    plc: PackagingPLC
-    trigger_tag: Program:Packaging.PartComplete
-    condition:
-      operator: "=="
-      value: true
-    ack_tag: Program:Packaging.PartAck
+    conditions:
+      - plc: PackagingPLC
+        tag: Program:Packaging.PartComplete
+        operator: "=="
+        value: true
     debounce_ms: 100
-    tags:
-      - Program:Packaging.SerialNumber
-      - Program:Packaging.BoxWeight
-      - Program:Packaging.ProductCode
-      - Program:Packaging.LineNumber
-    kafka_cluster: production
-    mqtt_broker: none
-    metadata:
-      line: packaging-1
-      station: sealer
+    cooldown_ms: 1000
+    actions:
+      - type: publish
+        tag_or_pack: pack:BoxData
+        include_trigger: true
+        kafka_cluster: production
+        mqtt_broker: none
+      - type: writeback
+        write_tag: Program:Packaging.PartAck
+        write_value: 1
+    cleared_actions:
+      - type: writeback
+        write_tag: Program:Packaging.PartAck
+        write_value: 0
 ```
 
 **2. PLC logic pattern:**
@@ -63,14 +66,14 @@ from kafka import KafkaConsumer
 import json
 
 consumer = KafkaConsumer(
-    'factory-production-triggers',
+    'factory-rules',
     bootstrap_servers=['kafka:9092'],
     value_deserializer=lambda m: json.loads(m.decode('utf-8'))
 )
 
 for message in consumer:
     data = message.value
-    if data['trigger'] == 'box_complete':
+    if data['rule'] == 'box_complete':
         serial = data['data']['Program:Packaging.SerialNumber']
         weight = data['data']['Program:Packaging.BoxWeight']
         # Send to MES/ERP...
@@ -300,30 +303,31 @@ Vision system results need to be captured with the part's serial number and sent
 
 ### Implementation
 
-**1. Configure trigger with QoS 2:**
+**1. Configure rule with MQTT QoS 2:**
 
 ```yaml
-triggers:
+rules:
   - name: inspection_complete
     enabled: true
-    plc: VisionPLC
-    trigger_tag: InspectionDone
-    condition:
-      operator: "=="
-      value: true
-    ack_tag: InspectionAck
-    tags:
-      - SerialNumber
-      - PassFail
-      - Measurement1
-      - Measurement2
-      - DefectCode
-    mqtt_broker: quality_broker  # Will use QoS 2
-    kafka_cluster: none
-    selector: quality-data
-    metadata:
-      station: inspection-1
-      type: vision
+    conditions:
+      - plc: VisionPLC
+        tag: InspectionDone
+        operator: "=="
+        value: true
+    debounce_ms: 100
+    actions:
+      - type: publish
+        tag_or_pack: pack:InspectionData
+        include_trigger: true
+        mqtt_broker: quality_broker
+        kafka_cluster: none
+      - type: writeback
+        write_tag: InspectionAck
+        write_value: 1
+    cleared_actions:
+      - type: writeback
+        write_tag: InspectionAck
+        write_value: 0
 ```
 
 **2. MQTT subscriber with QoS 2:**
@@ -339,7 +343,7 @@ def on_message(client, userdata, msg):
 client = mqtt.Client()
 client.on_message = on_message
 client.connect("broker", 1883)
-client.subscribe("factory/quality-data/triggers/inspection_complete", qos=2)
+client.subscribe("factory/rules/inspection_complete", qos=2)
 client.loop_forever()
 ```
 
@@ -449,11 +453,11 @@ Process raw sensor data into features for ML models.
 
 | Use Case | Primary Service | Secondary | Key Features |
 |----------|-----------------|-----------|--------------|
-| Production Tracking | Kafka | - | Triggers, Ack tags |
+| Production Tracking | Kafka | - | Rules, Writeback ack |
 | Alarm Aggregation | MQTT, Valkey | - | TagPacks, Retained messages |
 | Cross-Site Monitoring | Kafka | - | Namespaces, Selectors |
 | Recipe Distribution | MQTT | - | Write-back |
 | Energy Monitoring | Valkey | Kafka | TTL, Time-series |
-| Quality Capture | MQTT (QoS 2) | - | Triggers, Exactly-once |
+| Quality Capture | MQTT (QoS 2) | - | Rules, Exactly-once |
 | OEE Dashboards | Valkey | Kafka | TagPacks, Real-time |
 | Predictive Maintenance | Kafka | - | Fast polling, Streaming |

@@ -151,7 +151,7 @@ When you make changes in one session, they automatically appear in other connect
 - Enabling/disabling tags syncs across all sessions
 - Starting/stopping the REST server updates all sessions
 - Connecting/disconnecting PLCs is visible to all sessions
-- Trigger state changes sync across sessions
+- Rule state changes sync across sessions
 
 The cursor position and current tab are **not** synced - each session maintains its own navigation state.
 
@@ -781,8 +781,7 @@ In daemon mode, WarLink automatically:
 3. Connects to MQTT brokers marked as auto-connect
 4. Connects to Valkey servers marked as auto-connect
 5. Connects to Kafka clusters marked as auto-connect
-6. Arms triggers marked as enabled
-7. Arms push targets marked as enabled
+6. Arms rules marked as enabled
 
 This means a properly configured WarLink can start publishing data immediately on boot without any manual intervention.
 
