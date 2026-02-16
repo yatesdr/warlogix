@@ -1134,10 +1134,59 @@ function writeTagValue(plc, tagPath) {
     var resultDiv = document.getElementById('write-result');
     if (!input) return;
 
-    var rawValue = input.value;
-    // Parse the value: booleans, numbers, or string
+    var rawValue = input.value.trim();
+    // Parse the value: arrays, booleans, numbers, or string
     var value;
-    if (rawValue === 'true') value = true;
+    if (rawValue.charAt(0) === '[') {
+        // Array input: try JSON parse first, then space/comma-delimited
+        try {
+            value = JSON.parse(rawValue);
+        } catch(e) {
+            // Fallback: parse "[1 2 3]" or "[\"one dog\", \"two dogs\"]" etc.
+            var inner = rawValue.slice(1, -1).trim();
+            var parts;
+            if (inner.indexOf(',') >= 0) {
+                // Comma-delimited: split on commas, strip surrounding quotes
+                parts = inner.split(',').map(function(p) {
+                    p = p.trim();
+                    if ((p.charAt(0) === '"' && p.charAt(p.length-1) === '"') ||
+                        (p.charAt(0) === "'" && p.charAt(p.length-1) === "'")) {
+                        p = p.slice(1, -1);
+                    }
+                    return p;
+                });
+            } else {
+                // Space-delimited with quote-aware parsing
+                parts = [];
+                var i = 0;
+                while (i < inner.length) {
+                    // Skip whitespace
+                    while (i < inner.length && (inner[i] === ' ' || inner[i] === '\t')) i++;
+                    if (i >= inner.length) break;
+                    if (inner[i] === '"' || inner[i] === "'") {
+                        // Quoted token: scan to matching close quote
+                        var q = inner[i];
+                        i++;
+                        var start = i;
+                        while (i < inner.length && inner[i] !== q) i++;
+                        parts.push(inner.slice(start, i));
+                        if (i < inner.length) i++; // skip close quote
+                    } else {
+                        // Unquoted token: scan to next whitespace
+                        var start = i;
+                        while (i < inner.length && inner[i] !== ' ' && inner[i] !== '\t') i++;
+                        parts.push(inner.slice(start, i));
+                    }
+                }
+            }
+            value = parts.map(function(p) {
+                if (p === 'true') return true;
+                if (p === 'false') return false;
+                var n = Number(p);
+                return isNaN(n) ? p : n;
+            });
+        }
+    } else if (rawValue === 'true') value = true;
     else if (rawValue === 'false') value = false;
     else if (rawValue !== '' && !isNaN(Number(rawValue))) value = Number(rawValue);
     else value = rawValue;
@@ -1155,9 +1204,46 @@ function writeTagValue(plc, tagPath) {
         }
         resultDiv.innerHTML = '<span class="text-success">Value written successfully</span>';
         setTimeout(function() { resultDiv.innerHTML = ''; }, 3000);
+        // Re-read the tag to refresh tree and details panel
+        if (selectedInfo) {
+            forceReadTag(selectedInfo.plc, selectedInfo.tagName, selectedInfo.path || undefined);
+        }
     })
     .catch(function(err) {
         resultDiv.innerHTML = '<span class="text-danger">Error: ' + WarLink.escapeHtml(err.message) + '</span>';
+    });
+}
+
+// Update visible tree child rows with fresh data from the root value.
+function updateTreeChildValues(tagItem, rootValue) {
+    tagItem.querySelectorAll('.tag-child-row').forEach(function(row) {
+        var path = row.dataset.path;
+        if (!path) return;
+        // Resolve value from root by walking the path
+        var val = rootValue;
+        var parts = path.split('.');
+        for (var i = 0; i < parts.length && val !== undefined && val !== null; i++) {
+            if (typeof val === 'object') {
+                val = Array.isArray(val) ? val[parseInt(parts[i], 10)] : val[parts[i]];
+            } else {
+                val = undefined;
+            }
+        }
+        // Update data-json
+        row.dataset.json = JSON.stringify(val);
+        // Update displayed value
+        var valSpan = row.querySelector('.child-value');
+        if (valSpan) {
+            if (Array.isArray(val) && val.length > 0 && typeof val[0] !== 'object') {
+                valSpan.innerHTML = formatArrayInline(val);
+            } else if (typeof val === 'object' && val !== null) {
+                var isArr = Array.isArray(val);
+                var count = isArr ? val.length : Object.keys(val).length;
+                valSpan.textContent = isArr ? '[' + count + ' items]' : '[' + count + ' fields]';
+            } else {
+                valSpan.innerHTML = formatChildValue(val);
+            }
+        }
     });
 }
 
@@ -1179,6 +1265,11 @@ function forceReadTag(plc, tagName, path) {
             if (data.type) tagItem.dataset.type = data.type;
             if (data.member_types) {
                 tagItem.dataset.memberTypes = JSON.stringify(data.member_types);
+            }
+
+            // Update visible tree child rows
+            if (data.value && typeof data.value === 'object') {
+                updateTreeChildValues(tagItem, data.value);
             }
 
             // Resolve the value for the selected path (child member)

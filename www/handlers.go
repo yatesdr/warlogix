@@ -937,15 +937,33 @@ func formatTagValue(v interface{}) string {
 func isStructType(typeName string) bool {
 	// UDTs typically don't match basic type names
 	basicTypes := map[string]bool{
+		// Logix / Micro800
 		"BOOL": true, "SINT": true, "INT": true, "DINT": true, "LINT": true,
 		"USINT": true, "UINT": true, "UDINT": true, "ULINT": true,
-		"REAL": true, "LREAL": true, "STRING": true, "BYTE": true,
-		"WORD": true, "DWORD": true, "LWORD": true, "TIME": true,
+		"REAL": true, "LREAL": true, "STRING": true, "SHORT_STRING": true,
+		"BYTE": true, "WORD": true, "DWORD": true, "LWORD": true,
+		// S7
+		"WSTRING": true, "CHAR": true, "WCHAR": true,
+		"DATE": true, "TIME": true, "TIME_OF_DAY": true,
+		// Beckhoff/ADS
+		"LTIME": true, "DATE_AND_TIME": true, "VOID": true,
+		// Go native types (from GoValue reflection)
 		"bool": true, "int8": true, "int16": true, "int32": true, "int64": true,
 		"uint8": true, "uint16": true, "uint32": true, "uint64": true,
 		"float32": true, "float64": true, "string": true,
+		// Fallback
+		"UNKNOWN": true,
 	}
-	return !basicTypes[typeName] && typeName != ""
+	// Arrays are always expandable (they have indexed children)
+	if strings.HasSuffix(typeName, "[]") {
+		return true
+	}
+	// Strip length annotation e.g. "STRING(32)" -> "STRING"
+	base := typeName
+	if idx := strings.IndexByte(base, '('); idx >= 0 {
+		base = base[:idx]
+	}
+	return !basicTypes[base] && typeName != ""
 }
 
 // MQTTData holds MQTT broker display data.

@@ -319,6 +319,7 @@ func (m *ManagedPLC) BuildManualTags() {
 			if parsed, err := s7.ParseAddress(sel.Name); err == nil && parsed.Count > 1 {
 				dimensions = []uint32{uint32(parsed.Count)}
 				typeCode = s7.MakeArrayType(typeCode)
+				typeName = s7.TypeName(typeCode)
 			}
 		case config.FamilyBeckhoff:
 			typeCode, ok = ads.TypeCodeFromName(sel.DataType)
@@ -336,6 +337,7 @@ func (m *ManagedPLC) BuildManualTags() {
 			if parsed, err := omron.ParseAddress(sel.Name); err == nil && parsed.Count > 1 {
 				dimensions = []uint32{uint32(parsed.Count)}
 				typeCode = omron.MakeArrayType(typeCode)
+				typeName = omron.TypeName(typeCode)
 			}
 		default:
 			typeCode, ok = logix.TypeCodeFromName(sel.DataType)

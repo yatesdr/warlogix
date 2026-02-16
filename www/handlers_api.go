@@ -485,12 +485,100 @@ func (h *Handlers) handleTagWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.engine.WriteTag(plcName, tagName, req.Value); err != nil {
+	// Convert []interface{} (from JSON decode) to typed slices
+	// so the PLC driver receives the same types as the TUI write path.
+	value := coerceWriteValue(req.Value)
+
+	if err := h.engine.WriteTag(plcName, tagName, value); err != nil {
 		http.Error(w, "Write failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// coerceWriteValue converts JSON-decoded values to typed Go values that
+// PLC drivers expect. JSON decoding produces float64 for numbers and
+// []interface{} for arrays; drivers need int32/float32/typed slices.
+func coerceWriteValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case float64:
+		// If it looks like an integer, send as int32 (DINT is most common)
+		if val == float64(int32(val)) {
+			return int32(val)
+		}
+		return float32(val)
+	case []interface{}:
+		if len(val) == 0 {
+			return val
+		}
+		// Detect element types and build typed slices
+		allInt, allFloat, allBool, allString := true, true, true, true
+		allFitIn32 := true
+		for _, elem := range val {
+			switch e := elem.(type) {
+			case float64:
+				allBool = false
+				allString = false
+				if e != float64(int64(e)) {
+					allInt = false
+				} else if e < -2147483648 || e > 2147483647 {
+					allFitIn32 = false
+				}
+			case bool:
+				allInt = false
+				allFloat = false
+				allString = false
+			case string:
+				allInt = false
+				allFloat = false
+				allBool = false
+			default:
+				allInt = false
+				allFloat = false
+				allBool = false
+				allString = false
+			}
+		}
+		if allInt {
+			if allFitIn32 {
+				out := make([]int32, len(val))
+				for i, e := range val {
+					out[i] = int32(e.(float64))
+				}
+				return out
+			}
+			out := make([]int64, len(val))
+			for i, e := range val {
+				out[i] = int64(e.(float64))
+			}
+			return out
+		}
+		if allFloat {
+			out := make([]float32, len(val))
+			for i, e := range val {
+				out[i] = float32(e.(float64))
+			}
+			return out
+		}
+		if allBool {
+			out := make([]bool, len(val))
+			for i, e := range val {
+				out[i] = e.(bool)
+			}
+			return out
+		}
+		if allString {
+			out := make([]string, len(val))
+			for i, e := range val {
+				out[i] = e.(string)
+			}
+			return out
+		}
+		return val
+	default:
+		return v
+	}
 }
 
 // DiscoveredPLCResponse represents a discovered PLC for API response.
