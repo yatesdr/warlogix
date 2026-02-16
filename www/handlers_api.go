@@ -1075,12 +1075,20 @@ func (h *Handlers) handleAvailableTags(w http.ResponseWriter, r *http.Request) {
 
 	var tags []tagInfo
 	for _, plc := range plcs {
-		for _, tag := range plc.GetTags() {
-			tags = append(tags, tagInfo{
-				PLC:  plc.Config.Name,
-				Tag:  tag.Name,
-				Type: tag.TypeName,
-			})
+		// Use the Values map: it contains every tag actually being polled,
+		// including struct-member children like Access_Card.Login_Name.
+		values := plc.GetValues()
+		if values != nil {
+			for name, tv := range values {
+				if tv == nil || tv.Error != nil {
+					continue
+				}
+				tags = append(tags, tagInfo{
+					PLC:  plc.Config.Name,
+					Tag:  name,
+					Type: tv.TypeName(),
+				})
+			}
 		}
 	}
 
@@ -1108,26 +1116,33 @@ func (h *Handlers) handlePLCTags(w http.ResponseWriter, r *http.Request) {
 
 	var tags []plcTagEntry
 
-	// Start with top-level tags
-	for _, tag := range plc.GetTags() {
-		tags = append(tags, plcTagEntry{
-			Name: tag.Name,
-			Type: tag.TypeName,
-		})
-	}
-
-	// Try to flatten struct members from live values
+	// Build from Values map: contains every tag actually being polled,
+	// including struct-member children like Access_Card.Login_Name.
 	values := plc.GetValues()
+	seen := make(map[string]bool)
 	if values != nil {
-		for _, tag := range plc.GetTags() {
-			tv, ok := values[tag.Name]
-			if !ok || tv == nil {
+		for name, tv := range values {
+			if tv == nil || tv.Error != nil {
 				continue
 			}
-			val := tv.GoValue()
-			if m, ok := val.(map[string]interface{}); ok {
-				flattenTagValue(tag.Name, m, &tags)
+			seen[name] = true
+			// Mark all parent prefixes as seen so discovered parents
+			// (e.g., Access_Card) don't appear when only a child is polled.
+			for i := range name {
+				if name[i] == '.' {
+					seen[name[:i]] = true
+				}
 			}
+			tags = append(tags, plcTagEntry{Name: name, Type: tv.TypeName()})
+		}
+	}
+
+	// Fallback: add enabled config tags not yet in Values (e.g., PLC not connected).
+	// Uses Config.Tags (explicitly configured) instead of GetTags() to avoid
+	// flooding the list with all discovered tags.
+	for _, sel := range plc.Config.Tags {
+		if sel.Enabled && !seen[sel.Name] {
+			tags = append(tags, plcTagEntry{Name: sel.Name, Type: sel.DataType})
 		}
 	}
 

@@ -504,6 +504,290 @@ var WarLink = (function() {
         };
     }
 
+    // --- Tag or Pack Picker Component ---
+
+    var tagOrPackCache = null; // module-level cache for available-tags
+
+    function TagOrPackPicker(containerEl, opts) {
+        opts = opts || {};
+        var currentValue = opts.value || '';
+        var tagPackNames = opts.tagPackNames || [];
+        var placeholder = opts.placeholder || 'Select tag or pack...';
+        var onSelect = opts.onSelect || function() {};
+        var allItems = [];
+        var filteredItems = [];
+        var highlightIndex = -1;
+        var isOpen = false;
+        var maxVisible = 200;
+        var loading = false;
+
+        // Build DOM (same structure as TagPicker)
+        var wrapper = document.createElement('div');
+        wrapper.className = 'tag-picker';
+
+        var display = document.createElement('div');
+        display.className = 'tag-picker-display';
+        display.tabIndex = 0;
+
+        var displayText = document.createElement('span');
+        displayText.className = 'tag-picker-display-text';
+        displayText.textContent = currentValue || placeholder;
+        if (!currentValue) displayText.classList.add('placeholder');
+
+        var arrow = document.createElement('span');
+        arrow.className = 'tag-picker-arrow';
+        arrow.innerHTML = '&#9662;';
+
+        display.appendChild(displayText);
+        display.appendChild(arrow);
+
+        var dropdown = document.createElement('div');
+        dropdown.className = 'tag-picker-dropdown';
+        dropdown.style.display = 'none';
+
+        var filterInput = document.createElement('input');
+        filterInput.type = 'text';
+        filterInput.className = 'tag-picker-filter';
+        filterInput.placeholder = 'Type to filter...';
+
+        var list = document.createElement('div');
+        list.className = 'tag-picker-list';
+
+        var status = document.createElement('div');
+        status.className = 'tag-picker-status';
+
+        dropdown.appendChild(filterInput);
+        dropdown.appendChild(list);
+        dropdown.appendChild(status);
+
+        wrapper.appendChild(display);
+        wrapper.appendChild(dropdown);
+        containerEl.innerHTML = '';
+        containerEl.appendChild(wrapper);
+
+        function updateDisplay() {
+            if (currentValue) {
+                displayText.textContent = currentValue;
+                displayText.classList.remove('placeholder');
+            } else {
+                displayText.textContent = placeholder;
+                displayText.classList.add('placeholder');
+            }
+        }
+
+        function updateStatus() {
+            if (loading) {
+                status.textContent = 'Loading...';
+            } else if (allItems.length === 0) {
+                status.textContent = 'No items available';
+            } else if (filteredItems.length === 0) {
+                status.textContent = 'No matching items';
+            } else if (filteredItems.length > maxVisible) {
+                status.textContent = 'Showing ' + maxVisible + ' of ' + filteredItems.length + ' items';
+            } else {
+                status.textContent = filteredItems.length + ' item' + (filteredItems.length !== 1 ? 's' : '');
+            }
+            status.style.display = '';
+        }
+
+        function buildItems(tags) {
+            allItems = [];
+            // TagPacks first
+            for (var i = 0; i < tagPackNames.length; i++) {
+                allItems.push({name: 'pack:' + tagPackNames[i], type: 'TagPack', group: 'pack'});
+            }
+            // Then individual tags
+            for (var j = 0; j < tags.length; j++) {
+                var t = tags[j];
+                allItems.push({name: t.tag, type: t.plc + ' / ' + t.type, group: 'tag'});
+            }
+        }
+
+        function fetchItems() {
+            if (tagOrPackCache) {
+                buildItems(tagOrPackCache);
+                render();
+                return;
+            }
+            loading = true;
+            render();
+            api.get('/htmx/available-tags').then(function(tags) {
+                tagOrPackCache = tags || [];
+                buildItems(tagOrPackCache);
+                loading = false;
+                render();
+            }).catch(function() {
+                tagOrPackCache = [];
+                buildItems([]);
+                loading = false;
+                render();
+            });
+        }
+
+        function render() {
+            var query = filterInput.value.toLowerCase();
+            filteredItems = [];
+
+            for (var i = 0; i < allItems.length; i++) {
+                var item = allItems[i];
+                if (!query || item.name.toLowerCase().indexOf(query) >= 0 || item.type.toLowerCase().indexOf(query) >= 0) {
+                    filteredItems.push(item);
+                }
+            }
+
+            list.innerHTML = '';
+            var limit = Math.min(filteredItems.length, maxVisible);
+            var prevGroup = null;
+
+            for (var j = 0; j < limit; j++) {
+                // Add separator between pack and tag groups
+                if (prevGroup === 'pack' && filteredItems[j].group === 'tag') {
+                    var sep = document.createElement('div');
+                    sep.style.cssText = 'border-top:1px solid var(--color-border);margin:2px 0';
+                    list.appendChild(sep);
+                }
+                prevGroup = filteredItems[j].group;
+
+                var el = document.createElement('div');
+                el.className = 'tag-picker-item';
+                if (filteredItems[j].name === currentValue) el.classList.add('current');
+                if (j === highlightIndex) el.classList.add('highlighted');
+                el.dataset.index = j;
+
+                var nameSpan = document.createElement('span');
+                nameSpan.className = 'tag-picker-item-name';
+                nameSpan.textContent = filteredItems[j].name;
+
+                var typeSpan = document.createElement('span');
+                typeSpan.className = 'tag-picker-item-type';
+                typeSpan.textContent = filteredItems[j].type;
+
+                el.appendChild(nameSpan);
+                el.appendChild(typeSpan);
+                list.appendChild(el);
+            }
+
+            if (highlightIndex >= limit) highlightIndex = limit - 1;
+            updateStatus();
+        }
+
+        function positionDropdown() {
+            wrapper.classList.remove('dropup');
+            var rect = display.getBoundingClientRect();
+            var spaceBelow = window.innerHeight - rect.bottom;
+            var dropdownHeight = Math.min(dropdown.scrollHeight, 320);
+            if (spaceBelow < dropdownHeight && rect.top > spaceBelow) {
+                wrapper.classList.add('dropup');
+            }
+        }
+
+        function open() {
+            if (isOpen) return;
+            isOpen = true;
+            wrapper.classList.add('open');
+            dropdown.style.display = '';
+            filterInput.value = '';
+            highlightIndex = -1;
+            render();
+            positionDropdown();
+            filterInput.focus();
+            var cur = list.querySelector('.tag-picker-item.current');
+            if (cur) cur.scrollIntoView({block: 'nearest'});
+        }
+
+        function close() {
+            if (!isOpen) return;
+            isOpen = false;
+            wrapper.classList.remove('open');
+            wrapper.classList.remove('dropup');
+            dropdown.style.display = 'none';
+        }
+
+        function selectIndex(idx) {
+            if (idx < 0 || idx >= filteredItems.length) return;
+            var item = filteredItems[idx];
+            currentValue = item.name;
+            updateDisplay();
+            close();
+            onSelect(item.name, item.type);
+        }
+
+        display.addEventListener('click', function() {
+            if (isOpen) { close(); } else { open(); }
+        });
+        display.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (!isOpen) open();
+            }
+        });
+
+        filterInput.addEventListener('input', function() {
+            highlightIndex = -1;
+            render();
+        });
+
+        filterInput.addEventListener('keydown', function(e) {
+            var limit = Math.min(filteredItems.length, maxVisible);
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                highlightIndex = Math.min(highlightIndex + 1, limit - 1);
+                render();
+                scrollToHighlight();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                highlightIndex = Math.max(highlightIndex - 1, 0);
+                render();
+                scrollToHighlight();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (highlightIndex >= 0) {
+                    selectIndex(highlightIndex);
+                }
+            } else if (e.key === 'Escape') {
+                close();
+                display.focus();
+            }
+        });
+
+        function scrollToHighlight() {
+            var el = list.querySelector('.tag-picker-item.highlighted');
+            if (el) el.scrollIntoView({block: 'nearest'});
+        }
+
+        list.addEventListener('click', function(e) {
+            var item = e.target.closest('.tag-picker-item');
+            if (item) {
+                selectIndex(parseInt(item.dataset.index, 10));
+            }
+        });
+
+        function onDocClick(e) {
+            if (!wrapper.contains(e.target)) {
+                close();
+            }
+        }
+        document.addEventListener('mousedown', onDocClick);
+
+        // Initial fetch
+        fetchItems();
+        updateDisplay();
+
+        return {
+            setValue: function(val) {
+                currentValue = val || '';
+                updateDisplay();
+            },
+            getValue: function() {
+                return currentValue;
+            },
+            destroy: function() {
+                document.removeEventListener('mousedown', onDocClick);
+                containerEl.innerHTML = '';
+            }
+        };
+    }
+
     // --- Theme Management ---
 
     // Stored preference: 'light', 'dark', or null (system)
@@ -575,6 +859,7 @@ var WarLink = (function() {
         api: api,
         toast: toast,
         TagPicker: TagPicker,
+        TagOrPackPicker: TagOrPackPicker,
         toggleTheme: toggleTheme
     };
 })();

@@ -108,10 +108,17 @@ function getShortName(name, isManual) {
         if (idx >= 0) return name.substring(idx + 1);
         return name;
     }
-    // Discovery mode: strip to last segment
-    var idx = name.lastIndexOf(':');
-    if (idx >= 0) name = name.substring(idx + 1);
-    idx = name.lastIndexOf('.');
+    // Discovery mode: strip "Program:" prefix to get the tag path
+    if (name.indexOf('Program:') === 0) {
+        var rest = name.substring(8);
+        var dotIdx = rest.indexOf('.');
+        if (dotIdx >= 0) {
+            name = rest.substring(dotIdx + 1);
+        } else {
+            name = rest;
+        }
+    }
+    var idx = name.lastIndexOf('.');
     if (idx >= 0) name = name.substring(idx + 1);
     return name;
 }

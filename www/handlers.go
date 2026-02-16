@@ -357,6 +357,12 @@ func (h *Handlers) handleRulesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	data["KafkaNames"] = kafkaNames
 
+	tagPackNames := make([]string, 0, len(cfg.TagPacks))
+	for _, tp := range cfg.TagPacks {
+		tagPackNames = append(tagPackNames, tp.Name)
+	}
+	data["TagPackNames"] = tagPackNames
+
 	h.renderTemplate(w, "rules.html", data)
 }
 
@@ -875,9 +881,14 @@ func getDisplayName(name string, addressBased, isManual bool) string {
 		}
 		return name
 	}
-	// Discovery mode: strip to last dot segment
-	if idx := strings.LastIndex(name, ":"); idx >= 0 {
-		name = name[idx+1:]
+	// Discovery mode: strip "Program:" prefix to get the tag path
+	if strings.HasPrefix(name, "Program:") {
+		rest := name[8:]
+		if idx := strings.Index(rest, "."); idx >= 0 {
+			name = rest[idx+1:]
+		} else {
+			name = rest
+		}
 	}
 	if idx := strings.LastIndex(name, "."); idx >= 0 {
 		name = name[idx+1:]

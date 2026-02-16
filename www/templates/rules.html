@@ -98,6 +98,10 @@
 var plcNames = [{{range $i, $name := .PLCNames}}{{if $i}},{{end}}"{{$name}}"{{end}}];
 var mqttNames = [{{range $i, $name := .MQTTNames}}{{if $i}},{{end}}"{{$name}}"{{end}}];
 var kafkaNames = [{{range $i, $name := .KafkaNames}}{{if $i}},{{end}}"{{$name}}"{{end}}];
+var tagPackNames = [{{range $i, $name := .TagPackNames}}{{if $i}},{{end}}"{{$name}}"{{end}}];
+
+// Tag or Pack picker instances: keyed by "prefix-idx"
+var tagOrPackPickers = {};
 
 // Tag cache per PLC
 var plcTagCache = {};
@@ -262,11 +266,18 @@ function renderActionFields(prefix, idx, data) {
             kafkaOpts += '<option value="' + WarLink.escapeHtml(n) + '"' + (n === kafkaVal ? ' selected' : '') + '>' + WarLink.escapeHtml(n) + '</option>';
         });
 
+        var pickerKey = prefix + '-' + idx;
+        // Destroy any previous picker for this slot
+        if (tagOrPackPickers[pickerKey]) {
+            tagOrPackPickers[pickerKey].destroy();
+            delete tagOrPackPickers[pickerKey];
+        }
+
         container.innerHTML =
             '<div class="form-row">' +
                 '<div class="form-group">' +
                     '<label>Tag or Pack</label>' +
-                    '<input type="text" id="' + prefix + '-tagpack-' + idx + '" value="' + esc(data, 'TagOrPack') + '" placeholder="tag_name or pack:pack_name">' +
+                    '<div id="' + prefix + '-tagpack-' + idx + '"></div>' +
                 '</div>' +
                 '<div class="form-group">' +
                     '<label><input type="checkbox" id="' + prefix + '-includetrig-' + idx + '"' + (data && data.IncludeTrigger ? ' checked' : '') + '> Include Trigger</label>' +
@@ -292,6 +303,12 @@ function renderActionFields(prefix, idx, data) {
                     '<input type="text" id="' + prefix + '-kafkatopic-' + idx + '" value="' + esc(data, 'KafkaTopic') + '">' +
                 '</div>' +
             '</div>';
+
+        // Instantiate tag-or-pack picker
+        tagOrPackPickers[pickerKey] = WarLink.TagOrPackPicker(
+            document.getElementById(prefix + '-tagpack-' + idx),
+            {value: (data && data.TagOrPack) || '', tagPackNames: tagPackNames}
+        );
     } else if (type === 'webhook') {
         var methods = ['POST', 'GET', 'PUT', 'PATCH'];
         var methodOpts = '';
@@ -421,7 +438,17 @@ function esc(data, field) {
 
 function removeRow(id) {
     var el = document.getElementById(id);
-    if (el) el.remove();
+    if (el) {
+        // Destroy any tag-or-pack picker in this row
+        var prefix = id.replace(/-\d+$/, '');
+        var idx = id.replace(/^[a-z]+-/, '');
+        var pickerKey = prefix + '-' + idx;
+        if (tagOrPackPickers[pickerKey]) {
+            tagOrPackPickers[pickerKey].destroy();
+            delete tagOrPackPickers[pickerKey];
+        }
+        el.remove();
+    }
 }
 
 function toggleClearedActions() {
@@ -439,6 +466,11 @@ function toggleClearedActions() {
 // --- Modal Show/Hide ---
 
 function resetModal() {
+    // Destroy all tag-or-pack pickers
+    for (var key in tagOrPackPickers) {
+        if (tagOrPackPickers[key]) tagOrPackPickers[key].destroy();
+    }
+    tagOrPackPickers = {};
     conditionIdx = 0;
     actionIdx = 0;
     plcTagCache = {};
@@ -601,7 +633,8 @@ function collectActions(containerId, prefix) {
         };
 
         if (type === 'publish') {
-            action.tag_or_pack = gv(prefix + '-tagpack-' + id);
+            var pk = tagOrPackPickers[prefix + '-' + id];
+            action.tag_or_pack = pk ? pk.getValue() : gv(prefix + '-tagpack-' + id);
             action.include_trigger = gc(prefix + '-includetrig-' + id);
             action.mqtt_broker = gv(prefix + '-mqttbroker-' + id);
             action.mqtt_topic = gv(prefix + '-mqtttopic-' + id);
