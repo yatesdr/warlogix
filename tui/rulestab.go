@@ -74,6 +74,21 @@ func (t *RulesTab) setupUI() {
 	t.condTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyTab || event.Key() == tcell.KeyBacktab {
 			t.app.app.SetFocus(t.table)
+			t.statusBar.SetText(fmt.Sprintf(" %d rules | Tab to conditions", len(t.app.config.Rules)))
+			return nil
+		}
+		switch event.Rune() {
+		case 'x':
+			t.confirmRemoveCondition()
+			return nil
+		case 'a':
+			t.showConditionForm(-1)
+			return nil
+		case 'e':
+			row, _ := t.condTable.GetSelection()
+			if row > 0 {
+				t.showConditionForm(row - 1)
+			}
 			return nil
 		}
 		return event
@@ -130,6 +145,7 @@ func (t *RulesTab) handleKeys(event *tcell.EventKey) *tcell.EventKey {
 	}
 	if event.Key() == tcell.KeyTab {
 		t.app.app.SetFocus(t.condTable)
+		t.statusBar.SetText(" Conditions: a add | e edit | x remove | Tab back to rules")
 		return nil
 	}
 	return event
@@ -475,12 +491,6 @@ func (t *RulesTab) showEditDialog() {
 		return
 	}
 
-	// Get PLC list
-	plcNames := make([]string, 0)
-	for _, plc := range t.app.config.PLCs {
-		plcNames = append(plcNames, plc.Name)
-	}
-
 	logicIdx := 0
 	if cfg.LogicMode == config.RuleLogicOR {
 		logicIdx = 1
@@ -488,75 +498,11 @@ func (t *RulesTab) showEditDialog() {
 
 	form := tview.NewForm()
 	ApplyFormTheme(form)
-	form.SetBorder(true).SetTitle(" Edit Rule ")
+	form.SetBorder(true).SetTitle(fmt.Sprintf(" Edit Rule: %s ", name))
 
 	form.AddDropDown("Logic:", []string{"AND", "OR"}, logicIdx, nil)
 	form.AddInputField("Debounce (ms):", fmt.Sprintf("%d", cfg.DebounceMS), 10, nil, nil)
 	form.AddInputField("Cooldown (ms):", fmt.Sprintf("%d", cfg.CooldownMS), 10, nil, nil)
-
-	// Conditions summary
-	condSummary := fmt.Sprintf("%d condition(s)", len(cfg.Conditions))
-	form.AddInputField("Conditions:", condSummary, 30, nil, nil)
-
-	// Add condition section
-	if len(plcNames) > 0 {
-		form.AddDropDown("+ Cond PLC:", plcNames, 0, nil)
-
-		selectedPLC := plcNames[0]
-		tagOptions := t.app.GetEnabledTags(selectedPLC)
-		if len(tagOptions) == 0 {
-			tagOptions = []string{"(no tags)"}
-		}
-
-		var condTagDropdown *tview.DropDown
-		condTagDropdown = tview.NewDropDown().SetLabel("+ Cond Tag:").SetOptions(tagOptions, nil)
-		condTagDropdown.SetCurrentOption(0)
-
-		form.GetFormItemByLabel("+ Cond PLC:").(*tview.DropDown).SetSelectedFunc(func(option string, index int) {
-			selectedPLC = option
-			newTags := t.app.GetEnabledTags(selectedPLC)
-			if len(newTags) == 0 {
-				newTags = []string{"(no tags)"}
-			}
-			if condTagDropdown != nil {
-				condTagDropdown.SetOptions(newTags, nil)
-				condTagDropdown.SetCurrentOption(0)
-			}
-		})
-		form.AddFormItem(condTagDropdown)
-
-		form.AddDropDown("+ Cond Op:", rule.ValidOperators(), 0, nil)
-		form.AddInputField("+ Cond Value:", "true", 15, nil, nil)
-		form.AddCheckbox("+ NOT:", false, nil)
-
-		form.AddButton("Add Cond", func() {
-			plcIdx, _ := form.GetFormItemByLabel("+ Cond PLC:").(*tview.DropDown).GetCurrentOption()
-			_, condTag := condTagDropdown.GetCurrentOption()
-			opIdx, _ := form.GetFormItemByLabel("+ Cond Op:").(*tview.DropDown).GetCurrentOption()
-			condValue := form.GetFormItemByLabel("+ Cond Value:").(*tview.InputField).GetText()
-			notChecked := form.GetFormItemByLabel("+ NOT:").(*tview.Checkbox).IsChecked()
-
-			if condTag == "(no tags)" {
-				return
-			}
-
-			value := parseValue(condValue)
-
-			cond := config.RuleCondition{
-				PLC:      plcNames[plcIdx],
-				Tag:      condTag,
-				Operator: rule.ValidOperators()[opIdx],
-				Value:    value,
-				Not:      notChecked,
-			}
-
-			cfg.Conditions = append(cfg.Conditions, cond)
-			condInput := form.GetFormItemByLabel("Conditions:").(*tview.InputField)
-			condInput.SetText(fmt.Sprintf("%d condition(s)", len(cfg.Conditions)))
-			t.updateConditionsList()
-			t.app.setStatus(fmt.Sprintf("Added condition: %s.%s %s %v", cond.PLC, cond.Tag, cond.Operator, cond.Value))
-		})
-	}
 
 	form.AddButton("Save", func() {
 		newLogicIdx, _ := form.GetFormItemByLabel("Logic:").(*tview.DropDown).GetCurrentOption()
@@ -592,7 +538,7 @@ func (t *RulesTab) showEditDialog() {
 		t.app.closeModal(pageName)
 	})
 
-	t.app.showFormModal(pageName, form, 70, 32, func() {
+	t.app.showFormModal(pageName, form, 55, 14, func() {
 		t.app.closeModal(pageName)
 	})
 }
@@ -610,6 +556,199 @@ func (t *RulesTab) confirmRemoveRule() {
 		}
 		t.Refresh()
 		t.app.setStatus(fmt.Sprintf("Removed rule: %s", name))
+	})
+}
+
+func (t *RulesTab) confirmRemoveCondition() {
+	if t.selectedRule == "" {
+		return
+	}
+	cfg := t.app.config.FindRule(t.selectedRule)
+	if cfg == nil {
+		return
+	}
+
+	row, _ := t.condTable.GetSelection()
+	idx := row - 1
+	if idx < 0 || idx >= len(cfg.Conditions) {
+		return
+	}
+
+	cond := cfg.Conditions[idx]
+	label := fmt.Sprintf("%s.%s %s %v", cond.PLC, cond.Tag, cond.Operator, cond.Value)
+	if cond.Not {
+		label = "NOT " + label
+	}
+
+	t.app.showConfirm("Remove Condition", fmt.Sprintf("Remove condition: %s?", label), func() {
+		cfg.Conditions = append(cfg.Conditions[:idx], cfg.Conditions[idx+1:]...)
+		if err := t.app.engine.UpdateRule(t.selectedRule, engine.RuleUpdateRequest{
+			Enabled:        cfg.Enabled,
+			Conditions:     cfg.Conditions,
+			LogicMode:      cfg.LogicMode,
+			DebounceMS:     cfg.DebounceMS,
+			CooldownMS:     cfg.CooldownMS,
+			Actions:        cfg.Actions,
+			ClearedActions: cfg.ClearedActions,
+		}); err != nil {
+			t.app.showError("Error", fmt.Sprintf("Failed to update rule: %v", err))
+			return
+		}
+		t.Refresh()
+		t.app.setStatus(fmt.Sprintf("Removed condition from %s", t.selectedRule))
+		t.app.app.SetFocus(t.condTable)
+	})
+}
+
+// showConditionForm shows a form to add (idx < 0) or edit (idx >= 0) a condition.
+func (t *RulesTab) showConditionForm(idx int) {
+	if t.selectedRule == "" {
+		return
+	}
+	cfg := t.app.config.FindRule(t.selectedRule)
+	if cfg == nil {
+		return
+	}
+
+	plcNames := make([]string, 0, len(t.app.config.PLCs))
+	for _, plc := range t.app.config.PLCs {
+		plcNames = append(plcNames, plc.Name)
+	}
+	if len(plcNames) == 0 {
+		t.app.showError("Error", "No PLCs configured.")
+		return
+	}
+
+	editing := idx >= 0 && idx < len(cfg.Conditions)
+	pageName := "cond-form"
+	title := " Add Condition "
+	if editing {
+		title = " Edit Condition "
+	}
+
+	// Defaults for add
+	plcIdx := 0
+	opIdx := 0
+	valueStr := "true"
+	notVal := false
+
+	if editing {
+		cond := cfg.Conditions[idx]
+		for i, name := range plcNames {
+			if name == cond.PLC {
+				plcIdx = i
+				break
+			}
+		}
+		ops := rule.ValidOperators()
+		for i, op := range ops {
+			if op == cond.Operator {
+				opIdx = i
+				break
+			}
+		}
+		valueStr = fmt.Sprintf("%v", cond.Value)
+		notVal = cond.Not
+	}
+
+	selectedPLC := plcNames[plcIdx]
+	tagOptions := t.app.GetEnabledTags(selectedPLC)
+	if len(tagOptions) == 0 {
+		tagOptions = []string{"(no tags)"}
+	}
+
+	// Find initial tag index for edit mode
+	tagIdx := 0
+	if editing {
+		for i, tag := range tagOptions {
+			if tag == cfg.Conditions[idx].Tag {
+				tagIdx = i
+				break
+			}
+		}
+	}
+
+	form := tview.NewForm()
+	ApplyFormTheme(form)
+	form.SetBorder(true).SetTitle(title)
+
+	form.AddDropDown("PLC:", plcNames, plcIdx, nil)
+
+	condTagDropdown := tview.NewDropDown().SetLabel("Tag:").SetOptions(tagOptions, nil)
+	condTagDropdown.SetCurrentOption(tagIdx)
+
+	form.GetFormItemByLabel("PLC:").(*tview.DropDown).SetSelectedFunc(func(option string, index int) {
+		selectedPLC = option
+		newTags := t.app.GetEnabledTags(selectedPLC)
+		if len(newTags) == 0 {
+			newTags = []string{"(no tags)"}
+		}
+		condTagDropdown.SetOptions(newTags, nil)
+		condTagDropdown.SetCurrentOption(0)
+	})
+	form.AddFormItem(condTagDropdown)
+
+	form.AddDropDown("Operator:", rule.ValidOperators(), opIdx, nil)
+	form.AddInputField("Value:", valueStr, 20, nil, nil)
+	form.AddCheckbox("NOT:", notVal, nil)
+
+	form.AddButton("Save", func() {
+		savePlcIdx, _ := form.GetFormItemByLabel("PLC:").(*tview.DropDown).GetCurrentOption()
+		_, condTag := condTagDropdown.GetCurrentOption()
+		saveOpIdx, _ := form.GetFormItemByLabel("Operator:").(*tview.DropDown).GetCurrentOption()
+		saveValue := form.GetFormItemByLabel("Value:").(*tview.InputField).GetText()
+		saveNot := form.GetFormItemByLabel("NOT:").(*tview.Checkbox).IsChecked()
+
+		if condTag == "(no tags)" || condTag == "(no tags configured)" {
+			t.app.showErrorWithFocus("Error", "A valid tag is required.", form)
+			return
+		}
+
+		cond := config.RuleCondition{
+			PLC:      plcNames[savePlcIdx],
+			Tag:      condTag,
+			Operator: rule.ValidOperators()[saveOpIdx],
+			Value:    parseValue(saveValue),
+			Not:      saveNot,
+		}
+
+		if editing {
+			cfg.Conditions[idx] = cond
+		} else {
+			cfg.Conditions = append(cfg.Conditions, cond)
+		}
+
+		if err := t.app.engine.UpdateRule(t.selectedRule, engine.RuleUpdateRequest{
+			Enabled:        cfg.Enabled,
+			Conditions:     cfg.Conditions,
+			LogicMode:      cfg.LogicMode,
+			DebounceMS:     cfg.DebounceMS,
+			CooldownMS:     cfg.CooldownMS,
+			Actions:        cfg.Actions,
+			ClearedActions: cfg.ClearedActions,
+		}); err != nil {
+			t.app.showError("Error", fmt.Sprintf("Failed to update rule: %v", err))
+			return
+		}
+
+		t.app.closeModal(pageName)
+		t.Refresh()
+		verb := "Added"
+		if editing {
+			verb = "Updated"
+		}
+		t.app.setStatus(fmt.Sprintf("%s condition on %s: %s.%s %s %v", verb, t.selectedRule, cond.PLC, cond.Tag, cond.Operator, cond.Value))
+		t.app.app.SetFocus(t.condTable)
+	})
+
+	form.AddButton("Cancel", func() {
+		t.app.closeModal(pageName)
+		t.app.app.SetFocus(t.condTable)
+	})
+
+	t.app.showFormModal(pageName, form, 60, 18, func() {
+		t.app.closeModal(pageName)
+		t.app.app.SetFocus(t.condTable)
 	})
 }
 

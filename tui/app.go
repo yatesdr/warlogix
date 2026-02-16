@@ -407,7 +407,7 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'T': // TagPacks
 		a.switchToTab(2)
 		return nil
-	case 'R': // Rules
+	case 'V': // Events
 		a.switchToTab(3)
 		return nil
 	case 'E': // wEb
@@ -416,7 +416,7 @@ func (a *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'M': // MQTT
 		a.switchToTab(5)
 		return nil
-	case 'V': // Valkey
+	case 'Y': // ValkeY
 		a.switchToTab(6)
 		return nil
 	case 'K': // Kafka
@@ -479,10 +479,10 @@ func (a *App) updateTabsDisplay() {
 		{"", "P", "LCs"},           // PLCs
 		{"Repu", "B", "lisher"},    // Republisher
 		{"", "T", "agPacks"},       // TagPacks
-		{"", "R", "ules"},          // Rules
+		{"E", "V", "ents"},         // Events
 		{"W", "E", "b"},            // Web
 		{"", "M", "QTT"},           // MQTT
-		{"", "V", "alkey"},         // Valkey
+		{"Valke", "Y", ""},         // Valkey
 		{"", "K", "afka"},          // Kafka
 		{"", "D", "ebug"},          // Debug
 	}
@@ -490,7 +490,7 @@ func (a *App) updateTabsDisplay() {
 	text := ""
 	for i, name := range a.tabNames {
 		if i > 0 {
-			// Use diamond separator between PLC-side tabs (Rules) and Services (Web)
+			// Use diamond separator between PLC-side tabs (Events) and Services (Web)
 			if name == TabWeb { // Diamond separator between PLC-side tabs and Services
 				text += th.TagTextDim + "  │ " + th.TagAccent + "◆" + th.TagTextDim + " │  " + th.TagReset
 			} else {

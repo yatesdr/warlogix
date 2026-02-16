@@ -872,7 +872,7 @@ const (
 	TabPLCs    = "PLCs"
 	TabBrowser = "Republisher"
 	TabPacks   = "TagPacks"
-	TabRules   = "Rules"
+	TabRules   = "Events"
 	TabWeb     = "Web"
 	TabMQTT    = "MQTT"
 	TabValkey  = "Valkey"
