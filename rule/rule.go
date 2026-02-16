@@ -85,6 +85,9 @@ type Rule struct {
 	lastAggregateResult bool
 	lastEdgeTime        time.Time
 
+	// Error dedup — suppress repeated identical error logs
+	lastErrMsg string
+
 	httpClient *http.Client
 	logFn      func(format string, args ...interface{})
 }
@@ -315,11 +318,19 @@ func (r *Rule) evaluateAggregate() (bool, error) {
 func (r *Rule) checkArmed() {
 	aggregate, err := r.evaluateAggregate()
 	if err != nil {
-		r.log("error evaluating conditions: %v", err)
+		msg := err.Error()
+		r.mu.Lock()
+		dup := msg == r.lastErrMsg
+		r.lastErrMsg = msg
+		r.mu.Unlock()
+		if !dup {
+			r.log("error evaluating conditions: %v", err)
+		}
 		return
 	}
 
 	r.mu.Lock()
+	r.lastErrMsg = ""
 	wasTrue := r.lastAggregateResult
 	r.lastAggregateResult = aggregate
 

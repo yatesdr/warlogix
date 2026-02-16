@@ -1259,7 +1259,7 @@ func (h *Handlers) getDebugLogs() []string {
 	messages := store.GetMessages()
 	lines := make([]string, len(messages))
 	for i, msg := range messages {
-		ts := msg.Timestamp.Format("15:04:05")
+		ts := msg.Timestamp.Format("2006-01-02 15:04:05")
 		if msg.Level != "" {
 			lines[i] = fmt.Sprintf("[%s] [%s] %s", ts, msg.Level, msg.Message)
 		} else {
@@ -1285,7 +1285,7 @@ func (h *Handlers) getDebugLogEntries() []DebugLogEntry {
 	entries := make([]DebugLogEntry, len(messages))
 	for i, msg := range messages {
 		entries[i] = DebugLogEntry{
-			Timestamp: msg.Timestamp.Format("15:04:05"),
+			Timestamp: msg.Timestamp.Format("2006-01-02 15:04:05"),
 			Level:     msg.Level,
 			Message:   msg.Message,
 		}

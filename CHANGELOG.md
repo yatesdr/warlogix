@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.9] - 2026-02-16
+
+### Added
+- **TUI Condition CRUD**: Add, edit, and delete rule conditions directly from the
+  conditions table (`a`/`e`/`x` keys). Status bar shows available keys when focused.
+- **Web UI Light Mode**: Proper `color-scheme` support so native form controls
+  (checkboxes, selects, scrollbars) respect the active theme. Added `accent-color`
+  theming for checkboxes and `.checkbox-label` styles.
+
+### Changed
+- **TUI Edit Dialog**: Simplified to rule-level settings only (logic, debounce,
+  cooldown). Condition management moved to the conditions table.
+- **Web UI Modals**: Use a subtly raised surface color with border for better
+  contrast against the page background in both light and dark modes.
+- **Web UI Forms**: Explicit `background` and `color` on all form inputs and
+  selects prevents OS dark-mode bleed-through in light mode.
+- **Debug Log Timestamps**: Consistent `YYYY-MM-DD HH:MM:SS` format for both
+  initial page load and live SSE updates.
+
+### Fixed
+- **Rule Error Log Spam**: Deduplicate repeated evaluation errors so the same
+  error (e.g. type mismatch) is logged once instead of every 100ms.
+- **Web UI Dark Mode**: Replaced hardcoded hex colors in dark-mode form overrides
+  with CSS variables for consistency.
+
 ## [0.2.8] - 2026-02-15
 
 ### Added

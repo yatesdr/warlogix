@@ -1,9 +1,11 @@
 /* Warlink Web UI - Clean Modern Theme */
 
 :root {
+    color-scheme: light;
     --color-bg: #f8f9fa;
     --color-bg-dark: #e9ecef;
     --color-surface: #ffffff;
+    --color-surface-raised: #f5f7fa;
     --color-border: #dee2e6;
     --color-text: #212529;
     --color-text-muted: #6c757d;
@@ -19,9 +21,11 @@
 }
 
 [data-theme="dark"] {
+    color-scheme: dark;
     --color-bg: #161b22;
     --color-bg-dark: #0d1117;
     --color-surface: #1c2128;
+    --color-surface-raised: #252c35;
     --color-border: #30363d;
     --color-text: #c9d1d9;
     --color-text-muted: #8b949e;
@@ -127,9 +131,9 @@
 
 [data-theme="dark"] .form-group input,
 [data-theme="dark"] .form-group select {
-    background: #0d1117;
-    color: #c9d1d9;
-    border-color: #30363d;
+    background: var(--color-bg-dark);
+    color: var(--color-text);
+    border-color: var(--color-border);
 }
 
 [data-theme="dark"] .form-group input:focus,
@@ -138,8 +142,8 @@
 }
 
 [data-theme="dark"] .filter-bar select {
-    background: #0d1117;
-    color: #c9d1d9;
+    background: var(--color-bg-dark);
+    color: var(--color-text);
 }
 
 [data-theme="dark"] .plc-detail.plc-family {
@@ -175,13 +179,13 @@
 
 [data-theme="dark"] .plc-picker-filter,
 [data-theme="dark"] .tag-picker-filter {
-    background: #0d1117;
-    color: #c9d1d9;
+    background: var(--color-bg-dark);
+    color: var(--color-text);
 }
 
 [data-theme="dark"] .add-member-row select {
-    background: #0d1117;
-    color: #c9d1d9;
+    background: var(--color-bg-dark);
+    color: var(--color-text);
 }
 
 [data-theme="dark"] .member-ignore-label input[type="checkbox"]:checked + span {
@@ -733,6 +737,8 @@ main.container {
     width: 100%;
     padding: 0.5rem 0.75rem;
     font-size: 1rem;
+    background: var(--color-surface);
+    color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: var(--radius);
     transition: border-color 0.15s, box-shadow 0.15s;
@@ -780,7 +786,8 @@ main.container {
 }
 
 .modal-content {
-    background: var(--color-surface);
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border);
     border-radius: var(--radius);
     box-shadow: var(--shadow-lg);
     width: 100%;
@@ -873,6 +880,19 @@ main.container {
 .form-group input[type="checkbox"] {
     width: auto;
     margin-right: 0.5rem;
+    accent-color: var(--color-primary);
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    cursor: pointer;
+    color: var(--color-text);
+}
+
+.checkbox-label input[type="checkbox"] {
+    accent-color: var(--color-primary);
 }
 
 .text-danger {
@@ -999,6 +1019,7 @@ main.container {
     font-size: 0.8125rem;
     outline: none;
     background: var(--color-bg);
+    color: var(--color-text);
     box-sizing: border-box;
 }
 
@@ -2166,6 +2187,7 @@ button.service-toggle:active {
     border: 1px solid var(--color-border);
     border-radius: var(--radius);
     background: var(--color-surface);
+    color: var(--color-text);
     flex: 1;
     min-width: 0;
 }
@@ -2292,6 +2314,7 @@ button.service-toggle:active {
     font-size: 0.875rem;
     outline: none;
     background: var(--color-bg);
+    color: var(--color-text);
     box-sizing: border-box;
 }
 
@@ -2412,7 +2435,7 @@ button.service-toggle:active {
 }
 
 [data-theme="dark"] .form-group textarea {
-    background: #0d1117;
-    color: #c9d1d9;
-    border-color: #30363d;
+    background: var(--color-bg-dark);
+    color: var(--color-text);
+    border-color: var(--color-border);
 }
