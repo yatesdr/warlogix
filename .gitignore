@@ -2,6 +2,7 @@
 /warlink
 /warlink.exe
 /warlogix
+/warlink-autotest
 *.exe
 *.exe~
 *.dll
