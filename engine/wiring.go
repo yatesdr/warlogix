@@ -10,7 +10,6 @@ import (
 	"warlink/plcman"
 	"warlink/tagpack"
 	"warlink/valkey"
-	"warlink/warcry"
 )
 
 // plcDataProvider implements tagpack.PLCDataProvider using the PLC manager.
@@ -45,8 +44,8 @@ func (p *plcDataProvider) GetPLCMetadata(plcName string) tagpack.PLCMetadata {
 	return meta
 }
 
-// setupValueChangeHandlers sets up the value change callback for publishing to MQTT, Valkey, Kafka, and Warcry.
-func setupValueChangeHandlers(manager *plcman.Manager, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, packMgr *tagpack.Manager, warcryMgr *warcry.Server) {
+// setupValueChangeHandlers sets up the value change callback for publishing to MQTT, Valkey, and Kafka.
+func setupValueChangeHandlers(manager *plcman.Manager, mqttMgr *mqtt.Manager, valkeyMgr *valkey.Manager, kafkaMgr *kafka.Manager, packMgr *tagpack.Manager) {
 	manager.SetOnValueChange(func(changes []plcman.ValueChange) {
 		mqttRunning := mqttMgr.AnyRunning()
 		valkeyRunning := valkeyMgr.AnyRunning()
@@ -96,14 +95,6 @@ func setupValueChangeHandlers(manager *plcman.Manager, mqttMgr *mqtt.Manager, va
 					if !c.NoKafka {
 						kafkaMgr.Publish(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, c.Writable, true)
 					}
-				}
-			}()
-		}
-
-		if warcryMgr != nil && warcryMgr.HasClients() {
-			go func() {
-				for _, c := range changesCopy {
-					warcryMgr.BroadcastTag(c.PLCName, c.TagName, c.Alias, c.Address, c.TypeName, c.Value, c.Writable)
 				}
 			}()
 		}
@@ -207,9 +198,6 @@ func (e *Engine) publishAllHealth() {
 		if e.kafkaMgr != nil {
 			e.kafkaMgr.PublishHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
 		}
-		if e.warcryMgr != nil && e.warcryMgr.HasClients() {
-			e.warcryMgr.BroadcastHealth(plc.Config.Name, health.Driver, health.Online, health.Status, health.Error)
-		}
 	}
 }
 
@@ -220,46 +208,6 @@ func (e *Engine) updateMQTTPLCNamesInternal() {
 		plcNames[i] = plc.Name
 	}
 	e.mqttMgr.SetPLCNames(plcNames)
-}
-
-// warcryPLCAdapter implements warcry.PLCProvider using the PLC manager.
-type warcryPLCAdapter struct {
-	mgr *plcman.Manager
-}
-
-func (a warcryPLCAdapter) GetAllCurrentValues() []warcry.TagSnapshot {
-	values := a.mgr.GetAllCurrentValues()
-	result := make([]warcry.TagSnapshot, len(values))
-	for i, v := range values {
-		result[i] = warcry.TagSnapshot{
-			PLCName: v.PLCName, TagName: v.TagName, Alias: v.Alias,
-			Address: v.Address, TypeName: v.TypeName, Value: v.Value, Writable: v.Writable,
-		}
-	}
-	return result
-}
-
-func (a warcryPLCAdapter) ListPLCNames() []string {
-	plcs := a.mgr.ListPLCs()
-	names := make([]string, len(plcs))
-	for i, p := range plcs {
-		names[i] = p.Config.Name
-	}
-	return names
-}
-
-// warcryPackAdapter implements warcry.PackProvider using the tagpack manager.
-type warcryPackAdapter struct {
-	mgr *tagpack.Manager
-}
-
-func (a warcryPackAdapter) ListPacks() []warcry.PackInfo {
-	packs := a.mgr.ListPacks()
-	result := make([]warcry.PackInfo, len(packs))
-	for i, p := range packs {
-		result[i] = warcry.PackInfo{Name: p.Name, Enabled: p.Enabled, Members: p.Members}
-	}
-	return result
 }
 
 // buildKafkaRuntimeConfig converts a config.KafkaConfig to a kafka.Config.

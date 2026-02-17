@@ -11,7 +11,6 @@ import (
 	"warlink/rule"
 	"warlink/tagpack"
 	"warlink/valkey"
-	"warlink/warcry"
 )
 
 // LogFunc is the logging callback signature. Engine never imports the tui package.
@@ -37,7 +36,6 @@ type Engine struct {
 	kafkaMgr   *kafka.Manager
 	ruleMgr    *rule.Manager
 	packMgr    *tagpack.Manager
-	warcryMgr  *warcry.Server
 
 	Events *EventBus
 
@@ -103,9 +101,6 @@ func (e *Engine) Start() {
 			logging.DebugLog("tagpack", "Publishing to Valkey channel: %s", info.ValkeyChannel)
 			e.valkeyMgr.PublishRaw(info.ValkeyChannel, data)
 		}
-		if e.warcryMgr != nil && e.warcryMgr.HasClients() {
-			e.warcryMgr.BroadcastTagPack(info.Config.Name, data)
-		}
 	})
 	e.packMgr.SetLogFunc(func(format string, args ...interface{}) {
 		e.logFn(format, args...)
@@ -120,22 +115,8 @@ func (e *Engine) Start() {
 	e.ruleMgr.SetMQTTManager(e.mqttMgr)
 	e.ruleMgr.SetNamespace(cfg.Namespace)
 
-	// Create warcry connector server
-	e.warcryMgr = warcry.NewServer()
-	e.warcryMgr.SetLogFunc(func(format string, args ...interface{}) {
-		e.logFn(format, args...)
-	})
-	e.warcryMgr.SetNamespace(cfg.Namespace)
-	e.warcryMgr.SetPLCProvider(warcryPLCAdapter{mgr: e.plcMan})
-	e.warcryMgr.SetPackProvider(warcryPackAdapter{mgr: e.packMgr})
-	if cfg.Warcry.Enabled && cfg.Warcry.Listen != "" {
-		if err := e.warcryMgr.Start(cfg.Warcry.Listen, cfg.Warcry.BufferSize); err != nil {
-			e.logFn("Warcry connector failed to start: %v", err)
-		}
-	}
-
 	// Wire value change handlers
-	setupValueChangeHandlers(e.plcMan, e.mqttMgr, e.valkeyMgr, e.kafkaMgr, e.packMgr, e.warcryMgr)
+	setupValueChangeHandlers(e.plcMan, e.mqttMgr, e.valkeyMgr, e.kafkaMgr, e.packMgr)
 
 	// Wire write handlers
 	setupWriteHandlers(cfg, e.plcMan, e.mqttMgr, e.valkeyMgr, e.kafkaMgr)
@@ -209,9 +190,6 @@ func (e *Engine) Stop() {
 	if e.kafkaMgr != nil {
 		e.kafkaMgr.StopAll()
 	}
-	if e.warcryMgr != nil {
-		e.warcryMgr.Stop()
-	}
 	if e.plcMan != nil {
 		e.plcMan.Stop()
 		e.plcMan.DisconnectAll()
@@ -242,7 +220,6 @@ func (e *Engine) GetValkeyMgr() *valkey.Manager    { return e.valkeyMgr }
 func (e *Engine) GetKafkaMgr() *kafka.Manager      { return e.kafkaMgr }
 func (e *Engine) GetRuleMgr() *rule.Manager         { return e.ruleMgr }
 func (e *Engine) GetPackMgr() *tagpack.Manager     { return e.packMgr }
-func (e *Engine) GetWarcryMgr() *warcry.Server      { return e.warcryMgr }
 
 // saveConfig is a helper that locks, saves, and unlocks.
 func (e *Engine) saveConfig() error {

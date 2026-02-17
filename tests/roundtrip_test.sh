@@ -4,7 +4,7 @@
 #
 # Tests the full publish + write-back cycle for every service:
 #   1. Write a DINT value via REST API to each PLC
-#   2. Verify that value propagated to: REST, MQTT, Valkey, Kafka, Warcry
+#   2. Verify that value propagated to: REST, MQTT, Valkey, Kafka
 #   3. Write a different value back through each service and verify the PLC accepted it
 #
 # For each PLC, the script discovers available DINT tags at runtime and
@@ -29,9 +29,6 @@ MQTT_PORT="1883"
 VALKEY_HOST="127.0.0.1"
 VALKEY_PORT="6379"
 KAFKA_BROKER="localhost:9092"
-WARCRY_HOST="127.0.0.1"
-WARCRY_PORT="9999"
-
 MAX_DINT_ATTEMPTS=5
 PROPAGATION_WAIT=4   # seconds to wait for a value to propagate
 POLL_CYCLE_WAIT=2    # seconds to wait for PLC poll cycle
@@ -106,7 +103,7 @@ rest_read() {
 }
 
 # ── Service availability flags ────────────────────────────────────────────
-HAVE_MQTT=false; HAVE_VALKEY=false; HAVE_KAFKA=false; HAVE_WARCRY=false
+HAVE_MQTT=false; HAVE_VALKEY=false; HAVE_KAFKA=false
 
 check_services() {
     section "Service Availability"
@@ -154,14 +151,6 @@ check_services() {
         fi
     else
         skip "kcat not installed (brew install kcat)"
-    fi
-
-    # Warcry
-    if (echo '{"type":"get_config"}' | nc -w2 "$WARCRY_HOST" "$WARCRY_PORT") >/dev/null 2>&1; then
-        HAVE_WARCRY=true
-        pass "Warcry reachable (${WARCRY_HOST}:${WARCRY_PORT})"
-    else
-        skip "Warcry not reachable at ${WARCRY_HOST}:${WARCRY_PORT}"
     fi
 }
 
@@ -392,48 +381,6 @@ verify_kafka() {
     rm -f "$tmpfile"
 }
 
-verify_warcry() {
-    local plc=$1 tag=$2 expected=$3
-    if [ "$HAVE_WARCRY" != true ]; then skip "Warcry: not available"; return; fi
-
-    # Send a list_tags query and parse the response
-    local tmpfile="/tmp/wl_warcry_verify_$$"
-    (echo '{"type":"list_tags"}'; sleep 2) | nc -w3 "$WARCRY_HOST" "$WARCRY_PORT" > "$tmpfile" 2>/dev/null || true
-
-    if [ ! -s "$tmpfile" ]; then
-        fail "Warcry: no response to list_tags"
-        rm -f "$tmpfile"
-        return
-    fi
-
-    # The response has multiple JSON lines.  Find the tag_list message.
-    local tag_list_line
-    tag_list_line=$(grep '"tag_list"' "$tmpfile" 2>/dev/null | head -1)
-    if [ -z "$tag_list_line" ]; then
-        # Maybe it's in a snapshot message
-        tag_list_line=$(grep '"snapshot"' "$tmpfile" 2>/dev/null | head -1)
-    fi
-
-    if [ -n "$tag_list_line" ]; then
-        # Search the tags array for our plc + tag
-        local val
-        val=$(echo "$tag_list_line" | jq -r "
-            .tags[]
-            | select(.plc == \"${plc}\" and (.tag == \"${tag}\" or .alias == \"${tag}\"))
-            | .value" 2>/dev/null | head -1)
-        if [ "$val" = "$expected" ]; then
-            pass "Warcry: ${plc}/${tag} value = ${val}"
-        elif [ -n "$val" ] && [ "$val" != "null" ]; then
-            fail "Warcry: ${plc}/${tag} expected ${expected}, got ${val}"
-        else
-            fail "Warcry: ${plc}/${tag} not found in tag list"
-        fi
-    else
-        fail "Warcry: could not parse tag list response"
-    fi
-    rm -f "$tmpfile"
-}
-
 # ── Write-back via each service ───────────────────────────────────────────
 
 writeback_rest() {
@@ -557,7 +504,6 @@ test_plc_roundtrip() {
     verify_mqtt    "$plc" "$tag" "$test_val"
     verify_valkey  "$plc" "$tag" "$test_val"
     verify_kafka   "$plc" "$tag" "$test_val"
-    verify_warcry  "$plc" "$tag" "$test_val"
 
     # Step 4: Write-back from each service
     echo ""
@@ -579,9 +525,6 @@ test_plc_roundtrip() {
     test_writeback_service "MQTT"   "$plc" "$tag" "$wb_mqtt"
     test_writeback_service "Valkey" "$plc" "$tag" "$wb_valkey"
     test_writeback_service "Kafka"  "$plc" "$tag" "$wb_kafka"
-
-    # Warcry is read-only
-    skip "Warcry writeback: not supported (read-only streaming protocol)"
 
     # Step 5: Restore original value
     info "Restoring original value (${orig}) on ${plc}/${tag}..."
@@ -630,7 +573,7 @@ cleanup() {
         wait "$WARLINK_PID" 2>/dev/null
     fi
     # Clean up temp files
-    rm -f /tmp/wl_kafka_verify_$$ /tmp/wl_warcry_verify_$$
+    rm -f /tmp/wl_kafka_verify_$$
 }
 trap cleanup EXIT
 
@@ -669,7 +612,6 @@ main() {
     echo "  MQTT:      ${MQTT_HOST}:${MQTT_PORT}"
     echo "  Valkey:    ${VALKEY_HOST}:${VALKEY_PORT}"
     echo "  Kafka:     ${KAFKA_BROKER}"
-    echo "  Warcry:    ${WARCRY_HOST}:${WARCRY_PORT}"
     echo ""
 
     maybe_start_warlink "$@"
