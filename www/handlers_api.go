@@ -217,6 +217,10 @@ func (h *Handlers) handlePLCUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	go func() {
+		_ = h.engine.ReconnectPLC(name)
+	}()
+
 	w.WriteHeader(http.StatusOK)
 }
 

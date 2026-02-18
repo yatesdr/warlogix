@@ -766,15 +766,15 @@ function addFromDetected(ip, family, productName, amsNetId) {
 }
 
 // Show/hide the "Auto-discover Tags" checkbox based on family/protocol.
-// S7: always hide and uncheck (no tag discovery support)
+// S7, PLC-5: always hide and uncheck (no tag discovery support)
 // Omron FINS: hide and uncheck (FINS doesn't support discovery)
-// Omron EIP, Logix, Micro800, Beckhoff: show
+// Omron EIP, Logix, Micro800, Beckhoff, SLC 500, MicroLogix: show
 function updateDiscoverTagsVisibility(prefix) {
     var family = document.getElementById(prefix + '-family').value;
     var discoverGroup = document.getElementById(prefix + '-discover-tags').closest('.form-group');
     var discoverCheck = document.getElementById(prefix + '-discover-tags');
 
-    if (family === 's7' || family === 'slc500' || family === 'plc5' || family === 'micrologix') {
+    if (family === 's7' || family === 'plc5') {
         discoverGroup.style.display = 'none';
         discoverCheck.checked = false;
     } else if (family === 'omron') {

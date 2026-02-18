@@ -91,9 +91,7 @@ func (e *Engine) UpdateTag(plcName, tagName string, req TagUpdateRequest) error 
 		return fmt.Errorf("%w: %v", ErrSaveFailed, err)
 	}
 
-	if !tagFound {
-		e.plcMan.RefreshManualTags(plcName)
-	}
+	e.plcMan.RefreshManualTags(plcName)
 
 	e.emit(EventTagUpdated, TagEvent{PLCName: plcName, TagName: tagName})
 	return nil
@@ -135,9 +133,7 @@ func (e *Engine) CreateOrUpdateTag(plcName, tagName string, req TagCreateOrUpdat
 		return false, fmt.Errorf("%w: %v", ErrSaveFailed, err)
 	}
 
-	if !tagFound {
-		e.plcMan.RefreshManualTags(plcName)
-	}
+	e.plcMan.RefreshManualTags(plcName)
 
 	if tagFound {
 		e.emit(EventTagUpdated, TagEvent{PLCName: plcName, TagName: tagName})
