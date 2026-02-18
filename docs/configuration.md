@@ -84,6 +84,17 @@ plcs:
         enabled: true
         writable: true
 
+  # Allen-Bradley SLC-500 (experimental, manual tags with data table addresses)
+  - name: SLC500
+    address: 192.168.1.50
+    family: slc500
+    enabled: true
+    tags:
+      - name: "N7:0"
+        alias: ProductCount
+        data_type: INT
+        enabled: true
+
 web:
   enabled: true
   host: 0.0.0.0
@@ -170,7 +181,7 @@ ui:
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique identifier for the PLC |
 | `address` | string | Yes | IP address or hostname |
-| `family` | string | Yes | `logix`, `micro800`, `s7`, `beckhoff`, `omron` |
+| `family` | string | Yes | `logix`, `micro800`, `slc500`, `plc5`, `micrologix`, `s7`, `beckhoff`, `omron` |
 | `slot` | int | No | CPU slot number (default: 0) |
 | `connection_path` | string | No | CIP route path for Logix (see [PLC Setup](plc-setup.md#connection-path-cip-routing)) |
 | `enabled` | bool | No | Auto-connect on startup (default: false) |
@@ -217,6 +228,35 @@ When empty (the default), WarLink routes to backplane port 1 at the configured s
 - EIP uses symbolic tag names and supports automatic tag discovery (tags and types are discovered, but UDT/structure members are not unpacked)
 - FINS fields (`fins_port`, `fins_node`, etc.) are ignored when using EIP
 - EIP uses TCP port 44818 (standard EtherNet/IP port)
+
+### PCCC-specific Fields (SLC-500, PLC/5, MicroLogix) — Experimental
+
+> **Experimental:** PCCC support is untested against real hardware.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `connection_path` | string | No | CIP route for gateway routing (e.g., through a ControlLogix backplane) |
+
+Tags use data table addresses (e.g., `N7:0`, `F8:5`, `T4:0.ACC`) and must always include a `data_type`. Supported types: INT, FLOAT, BINARY, TIMER, COUNTER, CONTROL, STRING, LONG.
+
+**Example:**
+```yaml
+- name: SLC500
+  address: 192.168.1.50
+  family: slc500
+  enabled: true
+  tags:
+    - name: "N7:0"
+      alias: Counter
+      data_type: INT
+      enabled: true
+    - name: "F8:0"
+      alias: Temperature
+      data_type: FLOAT
+      enabled: true
+```
+
+See [PLC Setup - SLC-500 / PLC-5 / MicroLogix](plc-setup.md#allen-bradley-slc-500--plc-5--micrologix-experimental) for details.
 
 ## Tag Configuration
 

@@ -15,6 +15,7 @@ import (
 	"github.com/yatesdr/plcio/logging"
 	"github.com/yatesdr/plcio/logix"
 	"github.com/yatesdr/plcio/omron"
+	"github.com/yatesdr/plcio/pccc"
 	"github.com/yatesdr/plcio/s7"
 )
 
@@ -339,6 +340,12 @@ func (m *ManagedPLC) BuildManualTags() {
 				typeCode = omron.MakeArrayType(typeCode)
 				typeName = omron.TypeName(typeCode)
 			}
+		case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+			typeCode, ok = pccc.TypeCodeFromName(sel.DataType)
+			if !ok {
+				typeCode = pccc.TypeInteger
+			}
+			typeName = pccc.TypeName(typeCode)
 		default:
 			typeCode, ok = logix.TypeCodeFromName(sel.DataType)
 			if !ok {
@@ -740,6 +747,8 @@ func (w *PLCWorker) poll() {
 						resolvedName = ads.TypeName(v.DataType)
 					case config.FamilyOmron:
 						resolvedName = omron.TypeName(v.DataType)
+					case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+						resolvedName = pccc.TypeName(v.DataType)
 					default:
 						resolvedName = logix.TypeName(v.DataType)
 					}
@@ -755,6 +764,8 @@ func (w *PLCWorker) poll() {
 								_, canPersist = ads.TypeCodeFromName(resolvedName)
 							case config.FamilyOmron:
 								_, canPersist = omron.TypeCodeFromName(resolvedName)
+							case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+								_, canPersist = pccc.TypeCodeFromName(resolvedName)
 							default:
 								_, canPersist = logix.TypeCodeFromName(resolvedName)
 							}
@@ -825,6 +836,8 @@ func (w *PLCWorker) resolveManualTagTypes() {
 		defaultTypeCode = ads.TypeInt32
 	case config.FamilyOmron:
 		defaultTypeCode = omron.TypeWord
+	case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+		defaultTypeCode = pccc.TypeInteger
 	default:
 		defaultTypeCode = logix.TypeDINT
 	}
@@ -920,6 +933,8 @@ func (w *PLCWorker) resolveManualTagTypes() {
 			typeName = ads.TypeName(dataType)
 		case config.FamilyOmron:
 			typeName = omron.TypeName(dataType)
+		case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+			typeName = pccc.TypeName(dataType)
 		default:
 			typeName = logix.TypeName(dataType)
 		}
@@ -958,6 +973,8 @@ func (w *PLCWorker) resolveManualTagTypes() {
 							_, canPersist = ads.TypeCodeFromName(r.TypeName)
 						case config.FamilyOmron:
 							_, canPersist = omron.TypeCodeFromName(r.TypeName)
+						case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+							_, canPersist = pccc.TypeCodeFromName(r.TypeName)
 						default:
 							_, canPersist = logix.TypeCodeFromName(r.TypeName)
 						}

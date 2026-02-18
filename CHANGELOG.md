@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.10] - 2026-02-18
+
+### Added
+- **PCCC Family Support (Experimental)**: Added support for Allen-Bradley legacy PLC
+  families using PCCC-over-EtherNet/IP: SLC-500, PLC/5, and MicroLogix. These appear
+  as separate families (`slc500`, `plc5`, `micrologix`) in the TUI, Web UI, and config.
+  Tags use data table addressing (e.g., `N7:0`, `F8:5`, `T4:0.ACC`). No tag discovery
+  (address-based only). Optional connection path field for CIP gateway routing.
+  **This feature is untested against real hardware and should be considered experimental.**
+
 ## [0.2.9] - 2026-02-16
 
 ### Added

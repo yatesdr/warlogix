@@ -6,11 +6,16 @@ This guide covers PLC-specific configuration, capabilities, and troubleshooting 
 
 | Family | Models | Tag Discovery | Protocol | Batching |
 |--------|--------|---------------|----------|----------|
-| **Allen-Bradley** | ControlLogix (1756), CompactLogix (1769), Micro800 | Automatic | EtherNet/IP (CIP) | Yes (MSP) |
+| **Allen-Bradley Logix** | ControlLogix (1756), CompactLogix (1769), Micro800 | Automatic | EtherNet/IP (CIP) | Yes (MSP) |
+| **Allen-Bradley SLC-500** | SLC 5/03, 5/04, 5/05 | Manual | PCCC over EtherNet/IP | No |
+| **Allen-Bradley PLC/5** | PLC-5 series | Manual | PCCC over EtherNet/IP | No |
+| **Allen-Bradley MicroLogix** | MicroLogix 1000/1100/1200/1400/1500 | Manual | PCCC over EtherNet/IP | No |
 | **Siemens** | S7-300/400/1200/1500 | Manual | S7comm | Yes (PDU) |
 | **Beckhoff** | TwinCAT 2/3 | Automatic | ADS | Yes (SumUp) |
 | **Omron FINS** | CS1, CJ1/2, CP1, CV | Manual | FINS/TCP, FINS/UDP | Yes (Multi-read) |
 | **Omron EIP** | NJ, NX1/102/502/702 | Automatic (no UDT members) | EtherNet/IP (CIP) | Yes (MSP) |
+
+> **Note:** SLC-500, PLC/5, and MicroLogix support is experimental and untested against real hardware. Please report issues if you test with these PLCs.
 
 ---
 
@@ -154,6 +159,106 @@ Same as ControlLogix - EtherNet/IP enabled by default.
 - Tag discovery is automatic
 - Slot is typically 0
 - Some older firmware may have limited tag support
+
+---
+
+## Allen-Bradley SLC-500 / PLC-5 / MicroLogix (Experimental)
+
+> **Experimental:** PCCC family support is untested against real hardware. The PCCC-over-EtherNet/IP protocol is implemented but has not been validated with physical PLCs. Please report any issues.
+
+### Overview
+
+These three Allen-Bradley legacy families all use the PCCC (Programmable Controller Communication Commands) protocol tunneled over EtherNet/IP. They appear as separate families in WarLink because users identify with the specific product line.
+
+| Family | Config Value | Models |
+|--------|-------------|--------|
+| SLC-500 | `slc500` | SLC 5/03, 5/04, 5/05 |
+| PLC/5 | `plc5` | PLC-5 series |
+| MicroLogix | `micrologix` | MicroLogix 1000, 1100, 1200, 1400, 1500 |
+
+### PLC-Side Setup
+
+- PLC must have an Ethernet interface (built-in or via 1761-NET-ENI, 1747-AENTR, etc.)
+- TCP port 44818 must be accessible from the WarLink host
+
+### WarLink Configuration
+
+```yaml
+- name: SLC500
+  address: 192.168.1.50
+  family: slc500
+  enabled: true
+  tags:
+    - name: "N7:0"
+      alias: Counter
+      data_type: INT
+      enabled: true
+    - name: "F8:0"
+      alias: Temperature
+      data_type: FLOAT
+      enabled: true
+```
+
+```yaml
+- name: MicroLogix1400
+  address: 192.168.1.51
+  family: micrologix
+  enabled: true
+  tags:
+    - name: "N7:0"
+      alias: ProductCount
+      data_type: INT
+      enabled: true
+```
+
+### Connection Path (CIP Routing)
+
+If the PCCC PLC is accessed through a ControlLogix gateway (e.g., via a 1756-DHRIO or ENxT bridging to DH+ or DH-485), you can specify a CIP connection path to route through the gateway:
+
+```yaml
+- name: RemoteSLC
+  address: 192.168.1.100          # IP of the ControlLogix gateway
+  family: slc500
+  connection_path: "1,2,3,10"     # Backplane to slot 2 (DHRIO), DH+ channel A, station 10
+  enabled: true
+```
+
+For direct Ethernet connections, leave `connection_path` empty.
+
+### Tag Addressing (Data Table Addresses)
+
+PCCC PLCs use data table addressing. Tags must be configured manually:
+
+| File Type | Format | Example | Description |
+|-----------|--------|---------|-------------|
+| Integer (N) | `N<file>:<element>` | `N7:0` | 16-bit signed integer |
+| Float (F) | `F<file>:<element>` | `F8:5` | 32-bit IEEE float |
+| Binary (B) | `B<file>:<element>` | `B3:0` | 16-bit binary/bit |
+| Timer (T) | `T<file>:<element>` | `T4:0` | Timer (PRE, ACC, control) |
+| Counter (C) | `C<file>:<element>` | `C5:0` | Counter (PRE, ACC, control) |
+| Control (R) | `R<file>:<element>` | `R6:0` | Control structure |
+| String (ST) | `ST<file>:<element>` | `ST9:0` | 82-character string |
+| Long (L) | `L<file>:<element>` | `L10:0` | 32-bit signed integer |
+
+**Sub-element access for Timer/Counter:** `T4:0.ACC` (accumulated value), `T4:0.PRE` (preset), `C5:0.ACC`
+
+**Always specify `data_type`** when adding PCCC tags. Supported types: INT, FLOAT, BINARY, TIMER, COUNTER, CONTROL, STRING, LONG.
+
+### Notes
+
+- No automatic tag discovery (all tags must be added manually)
+- Use aliases for friendly names in published messages
+- Byte order is little-endian (EtherNet/IP native)
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Connection timeout | Verify IP and TCP 44818 connectivity |
+| No response | Ensure PLC has an Ethernet interface (not just serial DH-485/DH+) |
+| Wrong values | Check data table file number and element number |
+| Type mismatch | Verify `data_type` matches the actual file type in the PLC program |
+| Gateway routing fails | Verify connection path matches the physical network topology |
 
 ---
 
@@ -552,7 +657,8 @@ All PLC families support these common data types:
 | Siemens S7 | Big-endian |
 | Omron FINS | Big-endian |
 | Omron EIP | Little-endian |
-| Allen-Bradley | Little-endian |
+| Allen-Bradley Logix | Little-endian |
+| Allen-Bradley PCCC (SLC-500/PLC-5/MicroLogix) | Little-endian |
 | Beckhoff | Little-endian |
 
 WarLink automatically handles byte order conversion for known types. Unknown types (UDTs without templates) are returned as raw byte arrays in the PLC's native order.
@@ -561,7 +667,7 @@ WarLink automatically handles byte order conversion for known types. Unknown typ
 
 ## Tag Aliases
 
-For PLCs with address-based tags (S7, Omron), use aliases for friendly names:
+For PLCs with address-based tags (S7, Omron, SLC-500/PLC-5/MicroLogix), use aliases for friendly names:
 
 ```yaml
 tags:

@@ -17,6 +17,7 @@ import (
 	"warlink/engine"
 	"github.com/yatesdr/plcio/logix"
 	"github.com/yatesdr/plcio/omron"
+	"github.com/yatesdr/plcio/pccc"
 	"warlink/rule"
 	"github.com/yatesdr/plcio/s7"
 	"warlink/tui"
@@ -456,6 +457,10 @@ func (h *Handlers) handlePLCTypeNames(w http.ResponseWriter, r *http.Request) {
 	case config.FamilyBeckhoff:
 		typeNames = ads.SupportedTypeNames()
 		addressLabel = "Tag Name"
+	case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+		typeNames = pccc.SupportedTypeNames()
+		addressBased = true
+		addressLabel = "Data Table Address"
 	default:
 		typeNames = logix.SupportedTypeNames()
 		addressLabel = "Tag Name"

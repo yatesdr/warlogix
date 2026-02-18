@@ -4,6 +4,8 @@ go 1.24.0
 
 require github.com/yatesdr/plcio v0.1.1
 
+replace github.com/yatesdr/plcio => ../plcio
+
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gdamore/tcell/v2 v2.8.1

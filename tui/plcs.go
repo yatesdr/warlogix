@@ -863,7 +863,7 @@ type plcFormState struct {
 	finsUnit    string // Unit number (usually 0)
 }
 
-var familyOptions = []string{"logix", "micro800", "s7", "beckhoff", "omron"}
+var familyOptions = []string{"logix", "micro800", "s7", "beckhoff", "omron", "slc500", "plc5", "micrologix"}
 var omronProtocolOptions = []string{"fins", "eip"}
 
 func (t *PLCsTab) showAddDialogWithDevice(dev *driver.DiscoveredDevice) {
@@ -998,6 +998,8 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 				return err == nil || text == ""
 			}, nil)
 		}
+	case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+		form.AddInputField("Conn Path:", state.connectionPath, 30, nil, nil)
 	}
 
 	// Poll rate field (common to all families)
@@ -1345,6 +1347,8 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 				return err == nil || text == ""
 			}, nil)
 		}
+	case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+		form.AddInputField("Conn Path:", state.connectionPath, 30, nil, nil)
 	}
 
 	// Poll rate field (common to all families)
@@ -1620,6 +1624,10 @@ func (t *PLCsTab) showInfoDialog() {
 	case config.FamilyBeckhoff:
 		info += th.Label("AMS Net ID", plc.Config.AmsNetId) + "\n"
 		info += fmt.Sprintf("%sAMS Port:%s %d\n", th.TagAccent, th.TagReset, plc.Config.AmsPort)
+	case config.FamilySLC500, config.FamilyPLC5, config.FamilyMicroLogix:
+		if plc.Config.ConnectionPath != "" {
+			info += th.Label("Conn Path", plc.Config.ConnectionPath) + "\n"
+		}
 	default:
 		info += fmt.Sprintf("%sSlot:%s %d\n", th.TagAccent, th.TagReset, plc.Config.Slot)
 		if plc.Config.ConnectionPath != "" {

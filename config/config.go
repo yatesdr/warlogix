@@ -29,11 +29,14 @@ type PLCConfig = driver.PLCConfig
 type TagSelection = driver.TagSelection
 
 const (
-	FamilyLogix    = driver.FamilyLogix
-	FamilyMicro800 = driver.FamilyMicro800
-	FamilyS7       = driver.FamilyS7
-	FamilyOmron    = driver.FamilyOmron
-	FamilyBeckhoff = driver.FamilyBeckhoff
+	FamilyLogix     = driver.FamilyLogix
+	FamilyMicro800  = driver.FamilyMicro800
+	FamilyS7        = driver.FamilyS7
+	FamilyOmron     = driver.FamilyOmron
+	FamilyBeckhoff  = driver.FamilyBeckhoff
+	FamilySLC500    = driver.FamilySLC500
+	FamilyPLC5      = driver.FamilyPLC5
+	FamilyMicroLogix = driver.FamilyMicroLogix
 )
 
 // Config holds the complete application configuration.

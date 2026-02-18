@@ -65,6 +65,9 @@
                         <select id="edit-family" name="family">
                             <option value="logix">Allen-Bradley Logix</option>
                             <option value="micro800">Allen-Bradley Micro800</option>
+                            <option value="slc500">SLC-500</option>
+                            <option value="plc5">PLC/5</option>
+                            <option value="micrologix">MicroLogix</option>
                             <option value="s7">Siemens S7</option>
                             <option value="beckhoff">Beckhoff TwinCAT</option>
                             <option value="omron">Omron</option>
@@ -158,6 +161,18 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- PCCC-specific fields (SLC-500, PLC/5, MicroLogix) -->
+                <div id="pccc-fields" class="family-fields" style="display:none">
+                    <h4>PCCC Routing</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="edit-pccc-connection-path">Connection Path</label>
+                            <input type="text" id="edit-pccc-connection-path" name="pccc_connection_path" placeholder="Optional">
+                            <small class="form-hint">CIP route for gateway routing, e.g. through a ControlLogix backplane</small>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn" onclick="WarLink.hideModal('plc-edit-modal')">Cancel</button>
@@ -186,6 +201,9 @@
                         <select id="add-family" name="family" onchange="updateAddFamilyFields()">
                             <option value="logix">Allen-Bradley Logix</option>
                             <option value="micro800">Allen-Bradley Micro800</option>
+                            <option value="slc500">SLC-500</option>
+                            <option value="plc5">PLC/5</option>
+                            <option value="micrologix">MicroLogix</option>
                             <option value="s7">Siemens S7</option>
                             <option value="beckhoff">Beckhoff TwinCAT</option>
                             <option value="omron">Omron</option>
@@ -288,6 +306,18 @@
                         <div class="form-group">
                             <label for="add-fins-unit">FINS Unit</label>
                             <input type="number" id="add-fins-unit" name="fins_unit" min="0" max="255" value="0">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PCCC-specific fields (SLC-500, PLC/5, MicroLogix) -->
+                <div id="add-pccc-fields" class="family-fields" style="display:none">
+                    <h4>PCCC Routing</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="add-pccc-connection-path">Connection Path</label>
+                            <input type="text" id="add-pccc-connection-path" name="pccc_connection_path" placeholder="Optional">
+                            <small class="form-hint">CIP route for gateway routing, e.g. through a ControlLogix backplane</small>
                         </div>
                     </div>
                 </div>
@@ -417,6 +447,9 @@ function showEditModal(name) {
             document.getElementById('edit-connection-path').value = data.connection_path || '';
             document.getElementById('edit-connection-path').placeholder = '1,' + (data.slot || 0);
 
+            // PCCC fields
+            document.getElementById('edit-pccc-connection-path').value = data.connection_path || '';
+
             // Beckhoff fields
             document.getElementById('edit-ams-net-id').value = data.ams_net_id || '';
             document.getElementById('edit-ams-port').value = data.ams_port || 851;
@@ -438,9 +471,11 @@ function showEditModal(name) {
 
 function updateFamilyFields() {
     var family = document.getElementById('edit-family').value;
+    var isPCCC = (family === 'slc500' || family === 'plc5' || family === 'micrologix');
     document.getElementById('logix-fields').style.display = (family === 'logix') ? 'block' : 'none';
     document.getElementById('beckhoff-fields').style.display = family === 'beckhoff' ? 'block' : 'none';
     document.getElementById('omron-fields').style.display = family === 'omron' ? 'block' : 'none';
+    document.getElementById('pccc-fields').style.display = isPCCC ? 'block' : 'none';
     updateDiscoverTagsVisibility('edit');
 }
 
@@ -470,6 +505,11 @@ function savePLC(e) {
         discover_tags: document.getElementById('edit-discover-tags').checked,
         connection_path: document.getElementById('edit-connection-path').value
     };
+    // Use PCCC connection path field for PCCC families
+    var editFamily = data.family;
+    if (editFamily === 'slc500' || editFamily === 'plc5' || editFamily === 'micrologix') {
+        data.connection_path = document.getElementById('edit-pccc-connection-path').value;
+    }
 
     WarLink.api.put('/htmx/plcs/' + encodeURIComponent(name), data)
         .then(function() {
@@ -507,9 +547,11 @@ function showAddPLCModal() {
 
 function updateAddFamilyFields() {
     var family = document.getElementById('add-family').value;
+    var isPCCC = (family === 'slc500' || family === 'plc5' || family === 'micrologix');
     document.getElementById('add-logix-fields').style.display = (family === 'logix') ? 'block' : 'none';
     document.getElementById('add-beckhoff-fields').style.display = family === 'beckhoff' ? 'block' : 'none';
     document.getElementById('add-omron-fields').style.display = family === 'omron' ? 'block' : 'none';
+    document.getElementById('add-pccc-fields').style.display = isPCCC ? 'block' : 'none';
     updateDiscoverTagsVisibility('add');
 }
 
@@ -538,6 +580,11 @@ function addPLC(e) {
         discover_tags: document.getElementById('add-discover-tags').checked,
         connection_path: document.getElementById('add-connection-path').value
     };
+    // Use PCCC connection path field for PCCC families
+    var addFamily = data.family;
+    if (addFamily === 'slc500' || addFamily === 'plc5' || addFamily === 'micrologix') {
+        data.connection_path = document.getElementById('add-pccc-connection-path').value;
+    }
 
     WarLink.api.post('/htmx/plcs', data)
         .then(function() {
@@ -691,6 +738,9 @@ function formatFamily(family) {
     var families = {
         'logix': 'Allen-Bradley Logix',
         'micro800': 'Allen-Bradley Micro800',
+        'slc500': 'SLC-500',
+        'plc5': 'PLC/5',
+        'micrologix': 'MicroLogix',
         's7': 'Siemens S7',
         'beckhoff': 'Beckhoff TwinCAT',
         'omron': 'Omron'
@@ -724,7 +774,7 @@ function updateDiscoverTagsVisibility(prefix) {
     var discoverGroup = document.getElementById(prefix + '-discover-tags').closest('.form-group');
     var discoverCheck = document.getElementById(prefix + '-discover-tags');
 
-    if (family === 's7') {
+    if (family === 's7' || family === 'slc500' || family === 'plc5' || family === 'micrologix') {
         discoverGroup.style.display = 'none';
         discoverCheck.checked = false;
     } else if (family === 'omron') {

@@ -92,6 +92,7 @@ Different PLC families use different byte orders:
 | Omron FINS | FINS TCP/UDP | Big-endian |
 | Omron EIP | EtherNet/IP (CIP) | Little-endian |
 | Allen-Bradley Logix | EtherNet/IP (CIP) | Little-endian |
+| Allen-Bradley PCCC (SLC-500/PLC-5/MicroLogix) | PCCC over EtherNet/IP | Little-endian |
 | Beckhoff TwinCAT | ADS | Little-endian |
 
 **Note:** Omron NJ/NX series using EtherNet/IP (CIP) are little-endian, matching Allen-Bradley. Older Omron PLCs using FINS are big-endian.
@@ -183,7 +184,7 @@ When you enable a UDT tag, WarLink automatically ignores common volatile types:
 - Only Timestamp changes → No message published
 - Both change → Message published with both values
 
-## Manual Tags (S7/Omron FINS)
+## Manual Tags (S7/Omron FINS/PCCC)
 
 For PLCs without automatic discovery, add tags manually in the Browser tab (press `a`). Specify the address and data type when prompted.
 
@@ -211,6 +212,21 @@ For PLCs without automatic discovery, add tags manually in the Browser tab (pres
 Bit access: `DM100.5` (bit 5)
 Arrays: `DM100[10]` (10 words)
 
+### PCCC Addressing (SLC-500/PLC-5/MicroLogix) — Experimental
+
+| File Type | Format | Example |
+|-----------|--------|---------|
+| Integer | `N<file>:<element>` | `N7:0` |
+| Float | `F<file>:<element>` | `F8:5` |
+| Binary | `B<file>:<element>` | `B3:0` |
+| Timer | `T<file>:<element>` | `T4:0` |
+| Counter | `C<file>:<element>` | `C5:0` |
+| Control | `R<file>:<element>` | `R6:0` |
+| String | `ST<file>:<element>` | `ST9:0` |
+| Long | `L<file>:<element>` | `L10:0` |
+
+Sub-elements: `T4:0.ACC` (timer accumulated), `T4:0.PRE` (timer preset), `C5:0.ACC`
+
 ## Tag Aliases
 
-For address-based PLCs (S7, Omron FINS), aliases give friendly names to memory addresses. When adding a manual tag, set an alias in the edit dialog. The alias appears in all published messages instead of the raw address.
+For address-based PLCs (S7, Omron FINS, SLC-500/PLC-5/MicroLogix), aliases give friendly names to memory addresses. When adding a manual tag, set an alias in the edit dialog. The alias appears in all published messages instead of the raw address.

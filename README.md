@@ -9,7 +9,7 @@ At its heart WarLink is a TUI (Text User Interface) gateway for industrial PLCs,
 
 
 
-> **BETA** - Allen-Bradley and Siemens support is well-tested. Beckhoff is stable but requires more testing, and Omron support is still experimental.
+> **BETA** - Allen-Bradley Logix and Siemens support is well-tested. Beckhoff is stable but requires more testing, Omron support is still experimental, and PCCC family support (SLC-500, PLC/5, MicroLogix) is untested/experimental.
 
 
 <img width="916" height="548" alt="image" src="https://github.com/user-attachments/assets/26355fa0-95bc-4987-b6c1-2420e5c60d71" />
@@ -103,7 +103,10 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 
 | Family | Models | Tag Discovery | Protocol | Support Level |
 |--------|--------|---------------|----------|---------------|
-| Allen-Bradley | ControlLogix, CompactLogix, Micro800 | Automatic | EtherNet/IP | Tested on Micro820, L7, L8 |
+| Allen-Bradley Logix | ControlLogix, CompactLogix, Micro800 | Automatic | EtherNet/IP | Tested on Micro820, L7, L8 |
+| Allen-Bradley SLC-500 | SLC 5/03, 5/04, 5/05 | Manual | PCCC over EtherNet/IP | Experimental (untested) |
+| Allen-Bradley PLC/5 | PLC-5 series | Manual | PCCC over EtherNet/IP | Experimental (untested) |
+| Allen-Bradley MicroLogix | MicroLogix 1000/1100/1200/1400/1500 | Manual | PCCC over EtherNet/IP | Experimental (untested) |
 | Siemens | S7-300/400/1200/1500 | Manual | S7comm | Tested on S7-1200 |
 | Beckhoff | TwinCAT 2/3 | Automatic | ADS | Tested on CX9020 |
 | Omron (FINS) | CS1, CJ1/2, CP1 | Manual | FINS TCP/UDP | Tested on CP1 |
@@ -164,7 +167,7 @@ Run `warlink --stress-test-republishing` to benchmark your system.
 --config <path>              Path to config file (default: ~/.warlink/config.yaml)
 --namespace <name>           Set instance namespace (saved to config)
 --log <path>                 Write debug messages to a file
---log-debug [filter]         Enable protocol debugging (omron,ads,logix,s7,mqtt,kafka,valkey,tui)
+--log-debug [filter]         Enable protocol debugging (omron,ads,logix,pccc,s7,mqtt,kafka,valkey,tui)
 -d, --no-tui                 Headless mode (no local TUI)
 -p <port>                    HTTP listen port (overrides config)
 --host <addr>                HTTP bind address (overrides config)
