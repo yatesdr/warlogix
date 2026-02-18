@@ -464,7 +464,7 @@ func (h *Handlers) getPLCsData() []PLCData {
 			StatusClass:    statusClass,
 			Enabled:        plc.Config.Enabled,
 			ConnectionPath: plc.Config.ConnectionPath,
-			TagCount:       len(plc.Config.Tags),
+			TagCount:       len(plc.GetTags()),
 			// Beckhoff fields
 			AmsNetId:    plc.Config.AmsNetId,
 			AmsPort:     int(plc.Config.AmsPort),
