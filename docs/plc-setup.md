@@ -34,6 +34,83 @@ No special configuration required - EtherNet/IP is enabled by default.
   enabled: true
 ```
 
+### Connection Path (CIP Routing)
+
+The connection path controls how CIP messages are routed from the device at **address** to the target CPU. It uses comma-separated port/address pairs in the same format as Rockwell Automation tools and Ignition.
+
+**When to use it:**
+- Connecting through an EN2T, EN3T, or other communication module to reach a remote chassis
+- Multi-hop routing across backplane and Ethernet segments
+- Any topology where the CPU is not directly at the IP address you're connecting to
+
+**When you don't need it:**
+- Direct connection to a CompactLogix (CPU has the IP address) — leave blank, defaults to `1,{slot}`
+- Direct connection to a ControlLogix CPU's Ethernet port — leave blank
+
+#### Default Behavior
+
+When the connection path is **empty** (the default), WarLink routes to `1,{slot}` — backplane port 1, the configured slot number. This is equivalent to a direct connection to the CPU in the local chassis. For most CompactLogix and simple ControlLogix setups, **you do not need to set a connection path**.
+
+#### Format
+
+```
+port,address[,port,address,...]
+```
+
+Each pair is a CIP port segment:
+- **Port** — a number 0–15 identifying the interface (1 = backplane, 2 = Ethernet)
+- **Address** — a slot number (0–255) or an IP address for Ethernet hops
+
+#### Examples
+
+**Direct connection to slot 0 (equivalent to the default):**
+```yaml
+- name: CompactLogix
+  address: 192.168.1.100
+  family: logix
+  slot: 0
+  # connection_path not needed — defaults to 1,0
+  enabled: true
+```
+
+**ControlLogix CPU in slot 2:**
+```yaml
+- name: ControlLogix
+  address: 192.168.1.100
+  family: logix
+  slot: 2
+  # connection_path not needed — defaults to 1,2
+  enabled: true
+```
+
+**Through an EN2T in slot 4 to a remote chassis at 192.168.1.1, CPU in slot 0:**
+```yaml
+- name: RemotePLC
+  address: 10.2.1.50               # IP of the LOCAL gateway (must be reachable)
+  family: logix
+  connection_path: "1,4,2,192.168.1.1,1,0"
+  enabled: true
+```
+
+The route is: backplane → slot 4 (EN2T) → Ethernet to 192.168.1.1 → backplane → slot 0 (CPU).
+
+**Important:** The `address` field must be the IP of a device you can reach directly via TCP. The connection path routes *from that device* through the CIP network. If the target CPU is not directly reachable, set `address` to the local gateway and use the connection path to reach the remote CPU.
+
+**Three-hop route through two Ethernet bridges:**
+```yaml
+- name: DeepPLC
+  address: 10.2.1.50
+  family: logix
+  connection_path: "1,4,2,172.16.0.1,1,2,2,192.168.100.10,1,0"
+  enabled: true
+```
+
+The route is: backplane → slot 4 → Ethernet to 172.16.0.1 → backplane → slot 2 → Ethernet to 192.168.100.10 → backplane → slot 0.
+
+#### Connection Size
+
+When routing through communication modules, the Large Forward Open (4002 bytes) may not be supported. WarLink automatically falls back to the Standard Forward Open (504 bytes). This is normal and means smaller batch reads (~10-12 tags per round trip instead of ~50), but everything functions correctly.
+
 ### Tag Addressing
 
 Tags are discovered automatically. Use the Tag Browser to select which to publish.
@@ -47,10 +124,12 @@ Tags are discovered automatically. Use the Tag Browser to select which to publis
 
 | Issue | Solution |
 |-------|----------|
-| Connection timeout | Verify IP and ping connectivity |
+| Connection timeout | Verify IP and ping connectivity to the `address` |
 | Connection refused | Check firewall allows port 44818 |
 | No tags discovered | Ensure PLC is in Run mode |
 | Wrong slot | For ControlLogix, check CPU slot in chassis |
+| Timeout with connection path | The `address` must be the local gateway IP, not the remote CPU |
+| Large Forward Open rejected | Normal for routed paths — falls back to 504-byte connection |
 
 ---
 

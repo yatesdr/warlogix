@@ -13,6 +13,7 @@ plcs:
     address: 192.168.1.100
     family: logix
     slot: 0
+    # connection_path: "1,0"         # CIP route (default: 1,{slot}). Only set for multi-hop routing.
     enabled: true                    # Auto-connect on startup
     health_check_enabled: true       # Publish health status (default: true)
     poll_rate: 500ms                 # Per-PLC poll rate (overrides global)
@@ -171,10 +172,19 @@ ui:
 | `address` | string | Yes | IP address or hostname |
 | `family` | string | Yes | `logix`, `micro800`, `s7`, `beckhoff`, `omron` |
 | `slot` | int | No | CPU slot number (default: 0) |
+| `connection_path` | string | No | CIP route path for Logix (see [PLC Setup](plc-setup.md#connection-path-cip-routing)) |
 | `enabled` | bool | No | Auto-connect on startup (default: false) |
 | `health_check_enabled` | bool | No | Publish health status (default: true) |
 | `poll_rate` | duration | No | Per-PLC poll rate (overrides global) |
 | `tags` | list | No | Tags to publish |
+
+### Logix-specific Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `connection_path` | string | No | CIP route as comma-separated port,address pairs (e.g., `1,4,2,192.168.1.1,1,0`) |
+
+When empty (the default), WarLink routes to backplane port 1 at the configured slot (`1,{slot}`). Only set this when routing through communication modules or across chassis. See [Connection Path](plc-setup.md#connection-path-cip-routing) for details and examples.
 
 ### Beckhoff-specific Fields
 
