@@ -66,6 +66,7 @@ func (e *Engine) CreatePLC(req PLCCreateRequest) error {
 		Name:               req.Name,
 		Address:            req.Address,
 		Slot:               req.Slot,
+		ConnectionPath:     req.ConnectionPath,
 		Enabled:            req.Enabled,
 		HealthCheckEnabled: req.HealthCheckEnabled,
 		DiscoverTags:       req.DiscoverTags,
@@ -108,6 +109,7 @@ func (e *Engine) UpdatePLC(name string, req PLCUpdateRequest) error {
 
 	plcCfg.Address = req.Address
 	plcCfg.Slot = req.Slot
+	plcCfg.ConnectionPath = req.ConnectionPath
 	plcCfg.Enabled = req.Enabled
 	plcCfg.HealthCheckEnabled = req.HealthCheckEnabled
 	plcCfg.Family = req.Family

@@ -11,6 +11,7 @@ type PLCCreateRequest struct {
 	Name               string
 	Address            string
 	Slot               byte
+	ConnectionPath     string
 	Family             config.PLCFamily
 	Enabled            bool
 	HealthCheckEnabled *bool
@@ -30,6 +31,7 @@ type PLCCreateRequest struct {
 type PLCUpdateRequest struct {
 	Address            string
 	Slot               byte
+	ConnectionPath     string
 	Family             config.PLCFamily
 	Enabled            bool
 	HealthCheckEnabled *bool

@@ -751,6 +751,13 @@ main.container {
     box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.15);
 }
 
+.form-hint {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--color-muted);
+}
+
 .form-actions {
     display: flex;
     gap: 0.5rem;

@@ -427,6 +427,7 @@ type PLCData struct {
 	TagCount    int
 	PollRate    string
 	ConnectionMode string
+	ConnectionPath string
 	// Family-specific fields
 	AmsNetId    string
 	AmsPort     int
@@ -455,14 +456,15 @@ func (h *Handlers) getPLCsData() []PLCData {
 		}
 
 		pd := PLCData{
-			Name:        plc.Config.Name,
-			Address:     plc.Config.Address,
-			Slot:        int(plc.Config.Slot),
-			Family:      plc.Config.GetFamily().String(),
-			Status:      status.String(),
-			StatusClass: statusClass,
-			Enabled:     plc.Config.Enabled,
-			TagCount:    len(plc.Config.Tags),
+			Name:           plc.Config.Name,
+			Address:        plc.Config.Address,
+			Slot:           int(plc.Config.Slot),
+			Family:         plc.Config.GetFamily().String(),
+			Status:         status.String(),
+			StatusClass:    statusClass,
+			Enabled:        plc.Config.Enabled,
+			ConnectionPath: plc.Config.ConnectionPath,
+			TagCount:       len(plc.Config.Tags),
 			// Beckhoff fields
 			AmsNetId:    plc.Config.AmsNetId,
 			AmsPort:     int(plc.Config.AmsPort),

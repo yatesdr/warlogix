@@ -14,6 +14,7 @@ type PLCHTTPRequest struct {
 	Name               string `json:"name"`
 	Address            string `json:"address"`
 	Slot               int    `json:"slot"`
+	ConnectionPath     string `json:"connection_path"`
 	Family             string `json:"family"`
 	Enabled            bool   `json:"enabled"`
 	HealthCheckEnabled *bool  `json:"health_check_enabled"`
@@ -32,7 +33,7 @@ type PLCHTTPRequest struct {
 // ToCreateRequest converts to an engine PLCCreateRequest.
 func (r PLCHTTPRequest) ToCreateRequest() PLCCreateRequest {
 	req := PLCCreateRequest{
-		Name: r.Name, Address: r.Address, Slot: byte(r.Slot),
+		Name: r.Name, Address: r.Address, Slot: byte(r.Slot), ConnectionPath: r.ConnectionPath,
 		Enabled: r.Enabled, HealthCheckEnabled: r.HealthCheckEnabled,
 		DiscoverTags: r.DiscoverTags,
 		AmsNetId: r.AmsNetId, AmsPort: uint16(r.AmsPort),
@@ -58,7 +59,7 @@ func (r PLCHTTPRequest) ToCreateRequest() PLCCreateRequest {
 // ToUpdateRequest converts to an engine PLCUpdateRequest.
 func (r PLCHTTPRequest) ToUpdateRequest() PLCUpdateRequest {
 	req := PLCUpdateRequest{
-		Address: r.Address, Slot: byte(r.Slot),
+		Address: r.Address, Slot: byte(r.Slot), ConnectionPath: r.ConnectionPath,
 		Enabled: r.Enabled, HealthCheckEnabled: r.HealthCheckEnabled,
 		DiscoverTags: r.DiscoverTags,
 		AmsNetId: r.AmsNetId, AmsPort: uint16(r.AmsPort),

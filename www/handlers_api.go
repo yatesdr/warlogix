@@ -235,6 +235,7 @@ func (h *Handlers) handlePLCGet(w http.ResponseWriter, r *http.Request) {
 		"name":                 plcCfg.Name,
 		"address":              plcCfg.Address,
 		"slot":                 plcCfg.Slot,
+		"connection_path":      plcCfg.ConnectionPath,
 		"family":               plcCfg.GetFamily().String(),
 		"enabled":              plcCfg.Enabled,
 		"health_check_enabled": plcCfg.HealthCheckEnabled == nil || *plcCfg.HealthCheckEnabled,

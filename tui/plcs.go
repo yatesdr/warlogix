@@ -843,12 +843,13 @@ func (t *PLCsTab) showAddDialog() {
 
 // plcFormState holds the current state of the PLC form for rebuilding
 type plcFormState struct {
-	family      int
-	name        string
-	address     string
-	slot        string
-	amsNetId    string
-	amsPort     string
+	family         int
+	name           string
+	address        string
+	slot           string
+	connectionPath string // Logix CIP route, e.g. "1,0" or "1,1,2,192.168.100.1"
+	amsNetId       string
+	amsPort        string
 	protocol    int    // 0=fins (default), 1=eip - used for Omron PLCs
 	pollRateMs  string // Poll rate in milliseconds (250-10000, empty = use global)
 	timeoutMs   string // Connection timeout in milliseconds (empty = driver default)
@@ -949,7 +950,13 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 
 	// Family-specific fields
 	switch family {
-	case config.FamilyLogix, config.FamilyMicro800:
+	case config.FamilyLogix:
+		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+			_, err := strconv.Atoi(text)
+			return err == nil || text == ""
+		}, nil)
+		form.AddInputField("Conn Path:", state.connectionPath, 30, nil, nil)
+	case config.FamilyMicro800:
 		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
 			_, err := strconv.Atoi(text)
 			return err == nil || text == ""
@@ -1078,6 +1085,7 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 			Name:               state.name,
 			Address:            state.address,
 			Slot:               byte(slot),
+			ConnectionPath:     state.connectionPath,
 			Family:             family,
 			Protocol:           protocol,
 			Enabled:            state.autoConnect,
@@ -1110,6 +1118,8 @@ func (t *PLCsTab) buildAddForm(state *plcFormState) {
 		formHeight += 2 // "Discover tags" checkbox
 	}
 	switch family {
+	case config.FamilyLogix:
+		formHeight += 2 // Extra field for Logix (Conn Path)
 	case config.FamilyBeckhoff:
 		formHeight += 2 // Extra fields for Beckhoff (AMS Net ID, AMS Port)
 	case config.FamilyOmron:
@@ -1135,6 +1145,9 @@ func (t *PLCsTab) saveAddFormState(form *tview.Form, state *plcFormState, family
 	}
 	if item := form.GetFormItemByLabel("Slot:"); item != nil {
 		state.slot = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Conn Path:"); item != nil {
+		state.connectionPath = item.(*tview.InputField).GetText()
 	}
 	if item := form.GetFormItemByLabel("AMS Net ID:"); item != nil {
 		state.amsNetId = item.(*tview.InputField).GetText()
@@ -1226,11 +1239,12 @@ func (t *PLCsTab) showEditDialog() {
 
 	state := &editFormState{
 		plcFormState: plcFormState{
-			family:       selectedFamily,
-			name:         cfg.Name,
-			address:      cfg.Address,
-			slot:         strconv.Itoa(int(cfg.Slot)),
-			amsNetId:     cfg.AmsNetId,
+			family:         selectedFamily,
+			name:           cfg.Name,
+			address:        cfg.Address,
+			slot:           strconv.Itoa(int(cfg.Slot)),
+			connectionPath: cfg.ConnectionPath,
+			amsNetId:       cfg.AmsNetId,
 			amsPort:      amsPort,
 			protocol:     protocolIndex,
 			pollRateMs:   pollRateMs,
@@ -1283,7 +1297,13 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 
 	// Family-specific fields
 	switch family {
-	case config.FamilyLogix, config.FamilyMicro800:
+	case config.FamilyLogix:
+		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
+			_, err := strconv.Atoi(text)
+			return err == nil || text == ""
+		}, nil)
+		form.AddInputField("Conn Path:", state.connectionPath, 30, nil, nil)
+	case config.FamilyMicro800:
 		form.AddInputField("Slot:", state.slot, 5, func(text string, lastChar rune) bool {
 			_, err := strconv.Atoi(text)
 			return err == nil || text == ""
@@ -1411,6 +1431,7 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		if err := t.app.engine.UpdatePLC(state.originalName, engine.PLCUpdateRequest{
 			Address:            state.address,
 			Slot:               byte(slot),
+			ConnectionPath:     state.connectionPath,
 			Family:             family,
 			Protocol:           protocol,
 			Enabled:            state.autoConnect,
@@ -1453,6 +1474,8 @@ func (t *PLCsTab) buildEditForm(state *editFormState) {
 		formHeight += 2 // "Discover tags" checkbox
 	}
 	switch family {
+	case config.FamilyLogix:
+		formHeight += 2 // Extra field for Logix (Conn Path)
 	case config.FamilyBeckhoff:
 		formHeight += 2 // Extra fields for Beckhoff (AMS Net ID, AMS Port)
 	case config.FamilyOmron:
@@ -1478,6 +1501,9 @@ func (t *PLCsTab) saveEditFormState(form *tview.Form, state *editFormState, fami
 	}
 	if item := form.GetFormItemByLabel("Slot:"); item != nil {
 		state.slot = item.(*tview.InputField).GetText()
+	}
+	if item := form.GetFormItemByLabel("Conn Path:"); item != nil {
+		state.connectionPath = item.(*tview.InputField).GetText()
 	}
 	if item := form.GetFormItemByLabel("AMS Net ID:"); item != nil {
 		state.amsNetId = item.(*tview.InputField).GetText()
@@ -1596,6 +1622,9 @@ func (t *PLCsTab) showInfoDialog() {
 		info += fmt.Sprintf("%sAMS Port:%s %d\n", th.TagAccent, th.TagReset, plc.Config.AmsPort)
 	default:
 		info += fmt.Sprintf("%sSlot:%s %d\n", th.TagAccent, th.TagReset, plc.Config.Slot)
+		if plc.Config.ConnectionPath != "" {
+			info += th.Label("Conn Path", plc.Config.ConnectionPath) + "\n"
+		}
 	}
 
 	info += th.Label("Status", plc.GetStatus().String()) + "\n"

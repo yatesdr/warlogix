@@ -100,6 +100,18 @@
                     </div>
                 </div>
 
+                <!-- Logix-specific fields -->
+                <div id="logix-fields" class="family-fields" style="display:none">
+                    <h4>Logix Routing</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="edit-connection-path">Connection Path</label>
+                            <input type="text" id="edit-connection-path" name="connection_path" placeholder="1,0">
+                            <small class="form-hint">Port,address pairs. Default: 1,{slot}. Multi-hop example: 1,1,2,192.168.100.1,1,0</small>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Beckhoff-specific fields -->
                 <div id="beckhoff-fields" class="family-fields" style="display:none">
                     <h4>Beckhoff Settings</h4>
@@ -218,6 +230,18 @@
                             <input type="checkbox" id="add-discover-tags" name="discover_tags" checked>
                             Auto-discover Tags
                         </label>
+                    </div>
+                </div>
+
+                <!-- Logix-specific fields -->
+                <div id="add-logix-fields" class="family-fields" style="display:none">
+                    <h4>Logix Routing</h4>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="add-connection-path">Connection Path</label>
+                            <input type="text" id="add-connection-path" name="connection_path" placeholder="1,0">
+                            <small class="form-hint">Port,address pairs. Default: 1,{slot}. Multi-hop example: 1,1,2,192.168.100.1,1,0</small>
+                        </div>
                     </div>
                 </div>
 
@@ -348,6 +372,9 @@ function showInfoFromRow(btn) {
     }
 
     // Family-specific info
+    if (d.connectionPath) {
+        html += '<tr><th>Connection Path</th><td>' + WarLink.escapeHtml(d.connectionPath) + '</td></tr>';
+    }
     if (d.family === 'Beckhoff') {
         if (d.amsNetId) {
             html += '<tr><th>AMS Net ID</th><td>' + WarLink.escapeHtml(d.amsNetId) + '</td></tr>';
@@ -386,6 +413,10 @@ function showEditModal(name) {
             document.getElementById('edit-poll-rate').value = data.poll_rate !== '0s' ? data.poll_rate : '';
             document.getElementById('edit-timeout').value = data.timeout !== '0s' ? data.timeout : '5s';
 
+            // Logix fields
+            document.getElementById('edit-connection-path').value = data.connection_path || '';
+            document.getElementById('edit-connection-path').placeholder = '1,' + (data.slot || 0);
+
             // Beckhoff fields
             document.getElementById('edit-ams-net-id').value = data.ams_net_id || '';
             document.getElementById('edit-ams-port').value = data.ams_port || 851;
@@ -407,6 +438,7 @@ function showEditModal(name) {
 
 function updateFamilyFields() {
     var family = document.getElementById('edit-family').value;
+    document.getElementById('logix-fields').style.display = (family === 'logix') ? 'block' : 'none';
     document.getElementById('beckhoff-fields').style.display = family === 'beckhoff' ? 'block' : 'none';
     document.getElementById('omron-fields').style.display = family === 'omron' ? 'block' : 'none';
     updateDiscoverTagsVisibility('edit');
@@ -435,7 +467,8 @@ function savePLC(e) {
         fins_node: parseInt(document.getElementById('edit-fins-node').value) || 0,
         fins_unit: parseInt(document.getElementById('edit-fins-unit').value) || 0,
         health_check_enabled: document.getElementById('edit-health-check').checked,
-        discover_tags: document.getElementById('edit-discover-tags').checked
+        discover_tags: document.getElementById('edit-discover-tags').checked,
+        connection_path: document.getElementById('edit-connection-path').value
     };
 
     WarLink.api.put('/htmx/plcs/' + encodeURIComponent(name), data)
@@ -474,6 +507,7 @@ function showAddPLCModal() {
 
 function updateAddFamilyFields() {
     var family = document.getElementById('add-family').value;
+    document.getElementById('add-logix-fields').style.display = (family === 'logix') ? 'block' : 'none';
     document.getElementById('add-beckhoff-fields').style.display = family === 'beckhoff' ? 'block' : 'none';
     document.getElementById('add-omron-fields').style.display = family === 'omron' ? 'block' : 'none';
     updateDiscoverTagsVisibility('add');
@@ -501,7 +535,8 @@ function addPLC(e) {
         fins_node: parseInt(document.getElementById('add-fins-node').value) || 0,
         fins_unit: parseInt(document.getElementById('add-fins-unit').value) || 0,
         health_check_enabled: document.getElementById('add-health-check').checked,
-        discover_tags: document.getElementById('add-discover-tags').checked
+        discover_tags: document.getElementById('add-discover-tags').checked,
+        connection_path: document.getElementById('add-connection-path').value
     };
 
     WarLink.api.post('/htmx/plcs', data)
