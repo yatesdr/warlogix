@@ -1334,6 +1334,7 @@ main.container {
 /* PLC Groups */
 .plc-group {
     margin-bottom: 0.25rem;
+    display: none;
 }
 
 .plc-header-bar {

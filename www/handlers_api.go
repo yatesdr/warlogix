@@ -280,6 +280,7 @@ func (h *Handlers) handlePLCDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.invalidateRepubCache(name)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -373,6 +374,7 @@ func (h *Handlers) handleTagUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.invalidateRepubCache(plcName)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -400,6 +402,7 @@ func (h *Handlers) handleTagPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.invalidateRepubCache(plcName)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -415,6 +418,7 @@ func (h *Handlers) handleTagDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.invalidateRepubCache(plcName)
 	w.WriteHeader(http.StatusOK)
 }
 

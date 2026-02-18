@@ -1,7 +1,6 @@
 package www
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -550,6 +549,90 @@ type RepublisherTag struct {
 	PublishedChildCount int                       // Number of published (enabled) children
 }
 
+// tagConfigEntry holds per-tag configuration extracted from PLCConfig.Tags.
+type tagConfigEntry struct {
+	Alias         string
+	Enabled       bool
+	Writable      bool
+	IgnoreChanges []string
+}
+
+// repubCacheEntry caches precomputed config lookup maps for a PLC.
+type repubCacheEntry struct {
+	configMap    map[string]*tagConfigEntry
+	childTagsMap map[string]map[string]PublishedChild
+	configLen    int // len(plc.Config.Tags) at build time
+	tagsLen      int // len(discovered tags) at build time
+}
+
+// getRepubCache returns cached configMap and childTagsMap for a PLC,
+// rebuilding if the cache is stale or missing.
+func (h *Handlers) getRepubCache(plcName string, configTags []config.TagSelection, tagNameSet map[string]bool) (map[string]*tagConfigEntry, map[string]map[string]PublishedChild) {
+	configLen := len(configTags)
+	tagsLen := len(tagNameSet)
+
+	h.repubCacheMu.RLock()
+	entry, ok := h.repubCache[plcName]
+	h.repubCacheMu.RUnlock()
+
+	if ok && entry.configLen == configLen && entry.tagsLen == tagsLen {
+		return entry.configMap, entry.childTagsMap
+	}
+
+	// Rebuild
+	configMap := make(map[string]*tagConfigEntry, len(configTags))
+	childTagsMap := make(map[string]map[string]PublishedChild)
+
+	for i := range configTags {
+		sel := &configTags[i]
+		configMap[sel.Name] = &tagConfigEntry{
+			Alias:         sel.Alias,
+			Enabled:       sel.Enabled,
+			Writable:      sel.Writable,
+			IgnoreChanges: sel.IgnoreChanges,
+		}
+
+		// Check if this config entry is a child of a known tag.
+		// Walk backwards through dots to find the longest parent prefix.
+		name := sel.Name
+		for idx := len(name) - 1; idx >= 0; idx-- {
+			if name[idx] == '.' {
+				prefix := name[:idx]
+				if tagNameSet[prefix] {
+					childPath := name[idx+1:]
+					if childTagsMap[prefix] == nil {
+						childTagsMap[prefix] = make(map[string]PublishedChild)
+					}
+					childTagsMap[prefix][childPath] = PublishedChild{
+						Enabled:  sel.Enabled,
+						Writable: sel.Writable,
+					}
+					break
+				}
+			}
+		}
+	}
+
+	h.repubCacheMu.Lock()
+	h.repubCache[plcName] = &repubCacheEntry{
+		configMap:    configMap,
+		childTagsMap: childTagsMap,
+		configLen:    configLen,
+		tagsLen:      tagsLen,
+	}
+	h.repubCacheMu.Unlock()
+
+	return configMap, childTagsMap
+}
+
+// invalidateRepubCache clears cached config maps for a PLC so they are
+// rebuilt on the next page load.
+func (h *Handlers) invalidateRepubCache(plcName string) {
+	h.repubCacheMu.Lock()
+	delete(h.repubCache, plcName)
+	h.repubCacheMu.Unlock()
+}
+
 func (h *Handlers) getRepublisherData() []RepublisherPLC {
 	manager := h.managers.GetPLCMan()
 	plcs := manager.ListPLCs()
@@ -623,53 +706,8 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 			tags = filtered
 		}
 
-		// Build config lookup map for enabled/writable/ignored settings
-		configMap := make(map[string]*struct {
-			Alias         string
-			Enabled       bool
-			Writable      bool
-			IgnoreChanges []string
-		})
-		// Build map of parent tag -> published children.
-		// Match child paths against the actual tag list to find the correct parent,
-		// since tags like "Program:MainProgram.HMI_Edit.Member" have the parent
-		// "Program:MainProgram.HMI_Edit", not "Program:MainProgram".
-		childTagsMap := make(map[string]map[string]PublishedChild)
-		for i := range plc.Config.Tags {
-			sel := &plc.Config.Tags[i]
-			configMap[sel.Name] = &struct {
-				Alias         string
-				Enabled       bool
-				Writable      bool
-				IgnoreChanges []string
-			}{
-				Alias:         sel.Alias,
-				Enabled:       sel.Enabled,
-				Writable:      sel.Writable,
-				IgnoreChanges: sel.IgnoreChanges,
-			}
-
-			// Check if this config entry is a child of a known tag.
-			// Walk backwards through dots to find the longest parent prefix
-			// that exists in the tag list.
-			name := sel.Name
-			for idx := len(name) - 1; idx >= 0; idx-- {
-				if name[idx] == '.' {
-					prefix := name[:idx]
-					if tagNameSet[prefix] {
-						childPath := name[idx+1:]
-						if childTagsMap[prefix] == nil {
-							childTagsMap[prefix] = make(map[string]PublishedChild)
-						}
-						childTagsMap[prefix][childPath] = PublishedChild{
-							Enabled:  sel.Enabled,
-							Writable: sel.Writable,
-						}
-						break
-					}
-				}
-			}
-		}
+		// Get config lookup maps (cached per PLC, rebuilt on config change)
+		configMap, childTagsMap := h.getRepubCache(plc.Config.Name, plc.Config.Tags, tagNameSet)
 
 		// Build program prefix set for Beckhoff-style grouping
 		programPrefixes := make(map[string]bool)
@@ -767,12 +805,7 @@ func (h *Handlers) getRepublisherData() []RepublisherPLC {
 // buildRepublisherTag creates a RepublisherTag from runtime and config data.
 func (h *Handlers) buildRepublisherTag(
 	tagName, typeName string,
-	configMap map[string]*struct {
-		Alias         string
-		Enabled       bool
-		Writable      bool
-		IgnoreChanges []string
-	},
+	configMap map[string]*tagConfigEntry,
 	childTagsMap map[string]map[string]PublishedChild,
 	values map[string]*plcman.TagValue,
 	lastChanged map[string]time.Time,
@@ -816,7 +849,7 @@ func (h *Handlers) buildRepublisherTag(
 	// Determine struct type from type name (works even without values)
 	rt.IsStruct = isStructType(rt.Type)
 
-	// Get value data if available
+	// Get value data if available (JSON is lazy-loaded on demand via ensureTagValue)
 	if v, ok := values[tagName]; ok && v != nil {
 		goVal := v.GoValue()
 		rt.Value = formatTagValue(goVal)
@@ -825,13 +858,6 @@ func (h *Handlers) buildRepublisherTag(
 		if m, ok := goVal.(map[string]interface{}); ok {
 			rt.IsStruct = true
 			rt.FieldCount = len(m)
-		}
-
-		// Create compact JSON representation
-		if jsonBytes, err := json.Marshal(goVal); err == nil {
-			rt.JSONValue = string(jsonBytes)
-		} else {
-			rt.JSONValue = fmt.Sprintf("%v", goVal)
 		}
 	}
 

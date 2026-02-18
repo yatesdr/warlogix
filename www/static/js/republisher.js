@@ -1558,7 +1558,7 @@ function initPLCSelector() {
     // If only one PLC, hide selector and show it
     if (groups.length === 1) {
         selector.style.display = 'none';
-        groups[0].style.display = '';
+        groups[0].style.display = 'block';
         selectedPLC = groups[0].dataset.plc;
         return;
     }
@@ -1639,7 +1639,7 @@ function initPLCSelector() {
 
     // Show/hide PLC groups based on selection
     groups.forEach(function(group) {
-        group.style.display = (group.dataset.plc === selectedPLC) ? '' : 'none';
+        group.style.display = (group.dataset.plc === selectedPLC) ? 'block' : 'none';
     });
 
     localStorage.setItem('republisher-selected-plc', selectedPLC);
@@ -1802,7 +1802,7 @@ function selectPLC(plcName) {
 
     // Show/hide PLC groups
     document.querySelectorAll('.plc-group').forEach(function(group) {
-        group.style.display = (group.dataset.plc === plcName) ? '' : 'none';
+        group.style.display = (group.dataset.plc === plcName) ? 'block' : 'none';
     });
 }
 

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -20,13 +21,15 @@ type WebServer interface {
 
 // Handlers holds all HTTP handlers for the web UI.
 type Handlers struct {
-	cfg       *config.WebUIConfig
-	managers  engine.Managers
-	engine    *engine.Engine
-	webServer WebServer
-	sessions  *sessionStore
-	tmpl      *template.Template
-	eventHub  *EventHub
+	cfg          *config.WebUIConfig
+	managers     engine.Managers
+	engine       *engine.Engine
+	webServer    WebServer
+	sessions     *sessionStore
+	tmpl         *template.Template
+	eventHub     *EventHub
+	repubCacheMu sync.RWMutex
+	repubCache   map[string]*repubCacheEntry
 }
 
 // newHandlers creates a new handlers instance.
@@ -37,7 +40,8 @@ func newHandlers(cfg *config.WebUIConfig, managers engine.Managers, eng *engine.
 		engine:    eng,
 		webServer: ws,
 		sessions:  newSessionStore(cfg.SessionSecret),
-		eventHub:  newEventHub(),
+		eventHub:   newEventHub(),
+		repubCache: make(map[string]*repubCacheEntry),
 	}
 
 	// Parse templates
