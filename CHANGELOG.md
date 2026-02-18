@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.13] - 2026-02-18
+
+### Added
+- **PCCC Data Table Discovery**: SLC 500 and MicroLogix PLCs now support automatic
+  data table discovery via the file directory (system file 0). The "Discover Tags"
+  checkbox is available in both the TUI and Web UI for these families. PLC-5 remains
+  manual-only (no file directory support).
+
+### Fixed
+- **WebUI PLC Edit Reconnect**: Editing a PLC's family or address in the Web UI now
+  triggers a reconnect so the new driver takes effect immediately. Previously, changes
+  were saved to config but the runtime connection was not refreshed.
+- **WebUI Tag DataType Edit**: Editing a tag's DataType in the Web UI now refreshes
+  the runtime tag list immediately. Previously, changes were saved but the tag browser
+  continued using the stale type until restart.
+
+## [0.2.12] - 2026-02-18
+
+### Added
+- **PCCC Family Support (Experimental)**: Added support for Allen-Bradley legacy PLC
+  families using PCCC-over-EtherNet/IP: SLC-500, PLC/5, and MicroLogix. These appear
+  as separate families (`slc500`, `plc5`, `micrologix`) in the TUI, Web UI, and config.
+  Tags use data table addressing (e.g., `N7:0`, `F8:5`, `T4:0.ACC`). Optional connection
+  path field for CIP gateway routing.
+  **This feature is untested against real hardware and should be considered experimental.**
+- **Connection Path Documentation**: Added documentation for the Logix CIP connection
+  path field with routing examples.
+
+## [0.2.11] - 2026-02-18
+
+### Added
+- **Connection Path Field**: Added connection path field for Logix PLCs in the Web UI,
+  TUI, and REST API for multi-hop CIP routing through communication modules.
+
+### Fixed
+- **PLCs Tab Tag Count**: Fixed PLCs tab showing 0 tags for auto-discovered PLCs.
+
+### Changed
+- **Tag Tree Performance**: Optimized tag tree loading with lazy-load JSON values and
+  cached config maps for faster rendering with large tag lists.
+
 ## [0.2.10] - 2026-02-18
 
 ### Added

@@ -7,9 +7,9 @@ This guide covers PLC-specific configuration, capabilities, and troubleshooting 
 | Family | Models | Tag Discovery | Protocol | Batching |
 |--------|--------|---------------|----------|----------|
 | **Allen-Bradley Logix** | ControlLogix (1756), CompactLogix (1769), Micro800 | Automatic | EtherNet/IP (CIP) | Yes (MSP) |
-| **Allen-Bradley SLC-500** | SLC 5/03, 5/04, 5/05 | Manual | PCCC over EtherNet/IP | No |
+| **Allen-Bradley SLC-500** | SLC 5/03, 5/04, 5/05 | Automatic (file directory) | PCCC over EtherNet/IP | No |
 | **Allen-Bradley PLC/5** | PLC-5 series | Manual | PCCC over EtherNet/IP | No |
-| **Allen-Bradley MicroLogix** | MicroLogix 1000/1100/1200/1400/1500 | Manual | PCCC over EtherNet/IP | No |
+| **Allen-Bradley MicroLogix** | MicroLogix 1000/1100/1200/1400/1500 | Automatic (file directory) | PCCC over EtherNet/IP | No |
 | **Siemens** | S7-300/400/1200/1500 | Manual | S7comm | Yes (PDU) |
 | **Beckhoff** | TwinCAT 2/3 | Automatic | ADS | Yes (SumUp) |
 | **Omron FINS** | CS1, CJ1/2, CP1, CV | Manual | FINS/TCP, FINS/UDP | Yes (Multi-read) |
@@ -244,9 +244,14 @@ PCCC PLCs use data table addressing. Tags must be configured manually:
 
 **Always specify `data_type`** when adding PCCC tags. Supported types: INT, FLOAT, BINARY, TIMER, COUNTER, CONTROL, STRING, LONG.
 
+### Tag Discovery
+
+SLC 500 and MicroLogix support automatic data table discovery. Enable the "Discover Tags" checkbox when adding or editing the PLC. Discovery reads the file directory (system file 0) and enumerates all configured data files with their type and element count (e.g., N7 with 50 elements, F8 with 10 elements).
+
+PLC-5 does **not** support discovery — all tags must be added manually.
+
 ### Notes
 
-- No automatic tag discovery (all tags must be added manually)
 - Use aliases for friendly names in published messages
 - Byte order is little-endian (EtherNet/IP native)
 

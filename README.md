@@ -104,9 +104,9 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 | Family | Models | Tag Discovery | Protocol | Support Level |
 |--------|--------|---------------|----------|---------------|
 | Allen-Bradley Logix | ControlLogix, CompactLogix, Micro800 | Automatic | EtherNet/IP | Tested on Micro820, L7, L8 |
-| Allen-Bradley SLC-500 | SLC 5/03, 5/04, 5/05 | Manual | PCCC over EtherNet/IP | Experimental (untested) |
+| Allen-Bradley SLC-500 | SLC 5/03, 5/04, 5/05 | Automatic (file directory) | PCCC over EtherNet/IP | Experimental (untested) |
 | Allen-Bradley PLC/5 | PLC-5 series | Manual | PCCC over EtherNet/IP | Experimental (untested) |
-| Allen-Bradley MicroLogix | MicroLogix 1000/1100/1200/1400/1500 | Manual | PCCC over EtherNet/IP | Experimental (untested) |
+| Allen-Bradley MicroLogix | MicroLogix 1000/1100/1200/1400/1500 | Automatic (file directory) | PCCC over EtherNet/IP | Experimental (untested) |
 | Siemens | S7-300/400/1200/1500 | Manual | S7comm | Tested on S7-1200 |
 | Beckhoff | TwinCAT 2/3 | Automatic | ADS | Tested on CX9020 |
 | Omron (FINS) | CS1, CJ1/2, CP1 | Manual | FINS TCP/UDP | Tested on CP1 |
