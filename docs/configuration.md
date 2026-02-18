@@ -229,9 +229,7 @@ When empty (the default), WarLink routes to backplane port 1 at the configured s
 - FINS fields (`fins_port`, `fins_node`, etc.) are ignored when using EIP
 - EIP uses TCP port 44818 (standard EtherNet/IP port)
 
-### PCCC-specific Fields (SLC-500, PLC/5, MicroLogix) — Experimental
-
-> **Experimental:** PCCC support is untested against real hardware.
+### PCCC-specific Fields (SLC-500, PLC/5, MicroLogix)
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|

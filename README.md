@@ -9,7 +9,7 @@ At its heart WarLink is a TUI (Text User Interface) gateway for industrial PLCs,
 
 
 
-> **BETA** - Allen-Bradley Logix and Siemens support is well-tested. Beckhoff is stable but requires more testing, Omron support is still experimental, and PCCC family support (SLC-500, PLC/5, MicroLogix) is untested/experimental.
+> **BETA** - Allen-Bradley Logix and Siemens support is well-tested. Beckhoff is stable but requires more testing. Omron, SLC-500, and MicroLogix are moderately tested. PLC/5 is untested.
 
 
 <img width="916" height="548" alt="image" src="https://github.com/user-attachments/assets/26355fa0-95bc-4987-b6c1-2420e5c60d71" />
@@ -104,9 +104,9 @@ Configuration is stored at `~/.warlink/config.yaml` and created automatically on
 | Family | Models | Tag Discovery | Protocol | Support Level |
 |--------|--------|---------------|----------|---------------|
 | Allen-Bradley Logix | ControlLogix, CompactLogix, Micro800 | Automatic | EtherNet/IP | Tested on Micro820, L7, L8 |
-| Allen-Bradley SLC-500 | SLC 5/03, 5/04, 5/05 | Automatic (file directory) | PCCC over EtherNet/IP | Experimental (untested) |
-| Allen-Bradley PLC/5 | PLC-5 series | Manual | PCCC over EtherNet/IP | Experimental (untested) |
-| Allen-Bradley MicroLogix | MicroLogix 1000/1100/1200/1400/1500 | Automatic (file directory) | PCCC over EtherNet/IP | Experimental (untested) |
+| Allen-Bradley SLC-500 | SLC 5/03, 5/04, 5/05 | Automatic (file directory) | PCCC over EtherNet/IP | Tested on SLC 5/05 |
+| Allen-Bradley PLC/5 | PLC-5 series | Manual | PCCC over EtherNet/IP | Untested |
+| Allen-Bradley MicroLogix | MicroLogix 1000/1100/1200/1400/1500 | Automatic (file directory) | PCCC over EtherNet/IP | Tested on MicroLogix 1400 |
 | Siemens | S7-300/400/1200/1500 | Manual | S7comm | Tested on S7-1200 |
 | Beckhoff | TwinCAT 2/3 | Automatic | ADS | Tested on CX9020 |
 | Omron (FINS) | CS1, CJ1/2, CP1 | Manual | FINS TCP/UDP | Tested on CP1 |
@@ -135,6 +135,7 @@ Simulated publishing test with 50 PLCs × 100 tags (5,000 total tags) on localho
 | Beckhoff ADS | Yes (SumUp) | 1,000-5,000 tags/sec |
 | Omron FINS | Yes (Multi-read) | 300-1,500 tags/sec |
 | Omron EIP | Yes (MSP) | 500-2,000 tags/sec |
+| Allen-Bradley PCCC | Yes (contiguous) | Tested on SLC 5/05, MicroLogix 1400 |
 
 Run `warlink --stress-test-republishing` to benchmark your system.
 

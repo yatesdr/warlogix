@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.14] - 2026-02-18
+
+### Changed
+- **PCCC Batch Reads**: Contiguous full-element reads in the same data file are
+  now batched into single PCCC round-trips automatically (via plcio v0.1.5).
+  A PLC with 50 integer tags in N7 now reads them in one command instead of
+  fifty. Sub-element and bit reads remain individual.
+
 ## [0.2.13] - 2026-02-18
 
 ### Added

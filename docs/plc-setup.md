@@ -15,7 +15,7 @@ This guide covers PLC-specific configuration, capabilities, and troubleshooting 
 | **Omron FINS** | CS1, CJ1/2, CP1, CV | Manual | FINS/TCP, FINS/UDP | Yes (Multi-read) |
 | **Omron EIP** | NJ, NX1/102/502/702 | Automatic (no UDT members) | EtherNet/IP (CIP) | Yes (MSP) |
 
-> **Note:** SLC-500, PLC/5, and MicroLogix support is experimental and untested against real hardware. Please report issues if you test with these PLCs.
+> **Note:** SLC-500 and MicroLogix support is moderately tested. PLC/5 is untested. Please report issues.
 
 ---
 
@@ -162,9 +162,9 @@ Same as ControlLogix - EtherNet/IP enabled by default.
 
 ---
 
-## Allen-Bradley SLC-500 / PLC-5 / MicroLogix (Experimental)
+## Allen-Bradley SLC-500 / PLC-5 / MicroLogix
 
-> **Experimental:** PCCC family support is untested against real hardware. The PCCC-over-EtherNet/IP protocol is implemented but has not been validated with physical PLCs. Please report any issues.
+> SLC-500 and MicroLogix have been tested with physical hardware. PLC/5 support is untested. Please report any issues.
 
 ### Overview
 
