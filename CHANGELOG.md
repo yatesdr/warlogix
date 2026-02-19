@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.2.15] - 2026-02-18
+## [0.2.15] - 2026-02-19
 
 ### Added
 - **REST API SSE Stream**: New `GET /api/events` endpoint streams real-time PLC
@@ -11,6 +11,15 @@ All notable changes to this project will be documented in this file.
   `health` (periodic health checks). Supports `?types=` and `?plc=` query
   parameter filters. No authentication required, consistent with the REST API
   design for SCADA integration.
+- **All Known Tags Endpoint**: New `GET /api/{plc}/all-tags` returns every tag
+  known to warlink — discovered, configured, or both — with config state
+  (`enabled`, `writable`, `no_rest`, `no_mqtt`, `no_kafka`, `no_valkey`) and
+  current value when enabled. Deduplicated across discovered and manual tag lists.
+- **Single-Tag PATCH Endpoint**: New `PATCH /api/{plc}/tags/{tag}` updates a
+  tag's configuration flags via partial JSON (`enabled`, `writable`, `no_rest`,
+  `no_mqtt`, `no_kafka`, `no_valkey`). Auto-creates the config entry if the tag
+  doesn't exist yet, enabling external applications to activate discovered tags
+  without editing YAML.
 
 ## [0.2.14] - 2026-02-18
 

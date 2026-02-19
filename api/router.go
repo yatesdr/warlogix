@@ -64,6 +64,20 @@ type WriteResponse struct {
 	Timestamp string      `json:"timestamp"`
 }
 
+// AllTagEntry is the JSON response for a single tag in the all-tags endpoint.
+type AllTagEntry struct {
+	Name       string      `json:"name"`
+	Type       string      `json:"type,omitempty"`
+	Configured bool        `json:"configured"`
+	Enabled    bool        `json:"enabled"`
+	Writable   bool        `json:"writable"`
+	NoREST     bool        `json:"no_rest,omitempty"`
+	NoMQTT     bool        `json:"no_mqtt,omitempty"`
+	NoKafka    bool        `json:"no_kafka,omitempty"`
+	NoValkey   bool        `json:"no_valkey,omitempty"`
+	Value      interface{} `json:"value,omitempty"`
+}
+
 // handlers holds the API handler functions.
 type handlers struct {
 	managers        engine.Managers
@@ -103,8 +117,10 @@ func NewRouter(managers engine.Managers) (chi.Router, func()) {
 		r.Get("/health", h.handlePLCHealth)
 		r.Get("/programs", h.handlePrograms)
 		r.Get("/programs/{program}/tags", h.handleProgramTags)
+		r.Get("/all-tags", h.handleAllKnownTags)
 		r.Get("/tags", h.handleAllTags)
 		r.Get("/tags/*", h.handleSingleTag)
+		r.Patch("/tags/{tag}", h.handleUpdateTag)
 		r.Post("/write", h.handleWrite)
 	})
 
@@ -582,4 +598,83 @@ func (h *handlers) handlePackDetails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, pv)
+}
+
+func (h *handlers) handleAllKnownTags(w http.ResponseWriter, r *http.Request) {
+	plcName := chi.URLParam(r, "plc")
+	plcName, _ = url.PathUnescape(plcName)
+
+	manager := h.managers.GetPLCMan()
+	plc := manager.GetPLC(plcName)
+	if plc == nil {
+		h.writeError(w, http.StatusNotFound, "PLC not found")
+		return
+	}
+
+	// Build config lookup by tag name
+	configMap := make(map[string]*config.TagSelection, len(plc.Config.Tags))
+	for i := range plc.Config.Tags {
+		configMap[plc.Config.Tags[i].Name] = &plc.Config.Tags[i]
+	}
+
+	values := plc.GetValues()
+	discovered := plc.GetTags()
+
+	seen := make(map[string]bool, len(discovered)+len(plc.Config.Tags))
+	result := make([]AllTagEntry, 0, len(discovered)+len(plc.Config.Tags))
+
+	// Start with discovered tags, overlay config state
+	for _, tag := range discovered {
+		seen[tag.Name] = true
+		entry := AllTagEntry{
+			Name:     tag.Name,
+			Type:     tag.TypeName,
+			Writable: tag.Writable,
+		}
+		if sel, ok := configMap[tag.Name]; ok {
+			entry.Configured = true
+			entry.Enabled = sel.Enabled
+			entry.Writable = sel.Writable
+			entry.NoREST = sel.NoREST
+			entry.NoMQTT = sel.NoMQTT
+			entry.NoKafka = sel.NoKafka
+			entry.NoValkey = sel.NoValkey
+		}
+		if entry.Enabled {
+			if v, ok := values[tag.Name]; ok {
+				entry.Value = v.GoValue()
+			}
+		}
+		result = append(result, entry)
+	}
+
+	// Append configured tags not found in discovered list (e.g. S7 address-based tags)
+	for i := range plc.Config.Tags {
+		sel := &plc.Config.Tags[i]
+		if seen[sel.Name] {
+			continue
+		}
+		entry := AllTagEntry{
+			Name:       sel.Name,
+			Configured: true,
+			Enabled:    sel.Enabled,
+			Writable:   sel.Writable,
+			NoREST:     sel.NoREST,
+			NoMQTT:     sel.NoMQTT,
+			NoKafka:    sel.NoKafka,
+			NoValkey:   sel.NoValkey,
+		}
+		if sel.DataType != "" {
+			entry.Type = sel.DataType
+		}
+		if entry.Enabled {
+			if v, ok := values[sel.Name]; ok {
+				entry.Type = v.TypeName()
+				entry.Value = v.GoValue()
+			}
+		}
+		result = append(result, entry)
+	}
+
+	h.writeJSON(w, result)
 }

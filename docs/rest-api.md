@@ -135,6 +135,92 @@ Returns a single tag value. Tag names with slashes are supported.
 }
 ```
 
+### All Known Tags (Discovery)
+
+```
+GET /{plc}/all-tags
+```
+
+Returns every tag known to warlink for a PLC — discovered, configured, or both — deduplicated. Includes config state and current value for enabled tags. Useful for external applications that need to discover available tags and then selectively enable them.
+
+**Response:**
+```json
+[
+  {
+    "name": "Counter",
+    "type": "DINT",
+    "configured": true,
+    "enabled": true,
+    "writable": false,
+    "value": 42
+  },
+  {
+    "name": "UnconfiguredTag",
+    "type": "REAL",
+    "configured": false,
+    "enabled": false,
+    "writable": true
+  },
+  {
+    "name": "DisabledTag",
+    "type": "INT",
+    "configured": true,
+    "enabled": false,
+    "writable": false,
+    "no_mqtt": true
+  }
+]
+```
+
+**Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Tag name |
+| `type` | string | Data type (from discovery or config) |
+| `configured` | bool | Whether this tag has a config entry |
+| `enabled` | bool | Whether the tag is enabled for polling |
+| `writable` | bool | Whether the tag is writable |
+| `no_rest` | bool | Omitted when false. Excludes tag from `GET /{plc}/tags` |
+| `no_mqtt` | bool | Omitted when false. Excludes tag from MQTT publishing |
+| `no_kafka` | bool | Omitted when false. Excludes tag from Kafka publishing |
+| `no_valkey` | bool | Omitted when false. Excludes tag from Valkey publishing |
+| `value` | any | Current value (only present when tag is enabled and has a value) |
+
+### Update Tag Config
+
+```
+PATCH /{plc}/tags/{tag}
+```
+
+Updates a single tag's configuration flags. All fields are optional — only provided fields are changed. If the tag does not have a config entry, one is auto-created.
+
+**Request:**
+```json
+{
+  "enabled": true,
+  "writable": false,
+  "no_rest": false,
+  "no_mqtt": false,
+  "no_kafka": false,
+  "no_valkey": false
+}
+```
+
+**Response:**
+```json
+{
+  "status": "updated"
+}
+```
+
+**Example — enable a discovered tag for polling:**
+```bash
+curl -X PATCH http://localhost:8080/api/MainPLC/tags/DiscoveredTag \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
 ### PLC Health
 
 ```
@@ -361,6 +447,18 @@ curl http://localhost:8080/MainPLC/health
 **cURL - Stream all SSE events:**
 ```bash
 curl -N http://localhost:8080/api/events
+```
+
+**cURL - List all known tags (including unconfigured):**
+```bash
+curl http://localhost:8080/api/MainPLC/all-tags
+```
+
+**cURL - Enable a discovered tag:**
+```bash
+curl -X PATCH http://localhost:8080/api/MainPLC/tags/NewTag \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
 ```
 
 **cURL - Stream only value changes from a specific PLC:**

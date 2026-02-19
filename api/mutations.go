@@ -24,6 +24,46 @@ func (h *handlers) requireEngine(w http.ResponseWriter) bool {
 	return true
 }
 
+// --- Tag Update ---
+
+// TagUpdateAPIRequest is the JSON request for PATCH /api/{plc}/tags/{tag}.
+type TagUpdateAPIRequest struct {
+	Enabled  *bool `json:"enabled"`
+	Writable *bool `json:"writable"`
+	NoREST   *bool `json:"no_rest"`
+	NoMQTT   *bool `json:"no_mqtt"`
+	NoKafka  *bool `json:"no_kafka"`
+	NoValkey *bool `json:"no_valkey"`
+}
+
+func (h *handlers) handleUpdateTag(w http.ResponseWriter, r *http.Request) {
+	if !h.requireEngine(w) {
+		return
+	}
+	plcName, _ := url.PathUnescape(chi.URLParam(r, "plc"))
+	tagName, _ := url.PathUnescape(chi.URLParam(r, "tag"))
+
+	var req TagUpdateAPIRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	engineReq := engine.TagUpdateRequest{
+		Enabled:  req.Enabled,
+		Writable: req.Writable,
+		NoREST:   req.NoREST,
+		NoMQTT:   req.NoMQTT,
+		NoKafka:  req.NoKafka,
+		NoValkey: req.NoValkey,
+	}
+	if err := h.engine.UpdateTag(plcName, tagName, engineReq); err != nil {
+		h.writeEngineError(w, err)
+		return
+	}
+	h.writeJSON(w, map[string]string{"status": "updated"})
+}
+
 // --- PLC ---
 
 func (h *handlers) handleCreatePLC(w http.ResponseWriter, r *http.Request) {
