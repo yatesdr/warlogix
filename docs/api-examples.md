@@ -136,6 +136,45 @@ for message in pubsub.listen():
         print(f"Changed: {data['tag']} = {data['value']}")
 ```
 
+### SSE Stream Consumer
+
+```python
+import requests
+
+def stream_events(base_url="http://localhost:8080", types=None, plc=None):
+    """Stream real-time PLC events via Server-Sent Events."""
+    params = {}
+    if types:
+        params["types"] = ",".join(types)
+    if plc:
+        params["plc"] = plc
+
+    response = requests.get(
+        f"{base_url}/api/events",
+        params=params,
+        stream=True,
+        headers={"Accept": "text/event-stream"}
+    )
+
+    event_type = None
+    for line in response.iter_lines(decode_unicode=True):
+        if line.startswith("event: "):
+            event_type = line[7:]
+        elif line.startswith("data: "):
+            data = json.loads(line[6:])
+            print(f"[{event_type}] {data}")
+        # Empty line = end of event frame
+
+# Stream all events
+stream_events()
+
+# Stream only value changes from a specific PLC
+stream_events(types=["value-change"], plc="Line1_PLC")
+
+# Stream health and status changes
+stream_events(types=["health", "status-change"])
+```
+
 ### REST API Client
 
 ```python
@@ -275,6 +314,45 @@ subscriber.on('message', (channel, message) => {
 readTag('Line1_PLC', 'Counter').then(data => {
     console.log(`Counter = ${data.value}`);
 });
+```
+
+### SSE Stream Consumer (EventSource)
+
+```javascript
+// Stream all events
+const source = new EventSource('http://localhost:8080/api/events');
+
+// Or with filters
+// const source = new EventSource('http://localhost:8080/api/events?types=value-change,health&plc=Line1_PLC');
+
+source.addEventListener('connected', (e) => {
+    console.log('Connected:', JSON.parse(e.data));
+});
+
+source.addEventListener('value-change', (e) => {
+    const data = JSON.parse(e.data);
+    console.log(`Tag: ${data.plc}/${data.tag} = ${data.value} (${data.type})`);
+});
+
+source.addEventListener('tagpack', (e) => {
+    const data = JSON.parse(e.data);
+    console.log(`Pack: ${data.name}`);
+    Object.entries(data.tags).forEach(([key, tag]) => {
+        console.log(`  ${key} = ${tag.value}`);
+    });
+});
+
+source.addEventListener('status-change', (e) => {
+    const data = JSON.parse(e.data);
+    console.log(`PLC ${data.plc}: ${data.status} (${data.tagCount} tags)`);
+});
+
+source.addEventListener('health', (e) => {
+    const data = JSON.parse(e.data);
+    console.log(`Health: ${data.plc} ${data.online ? 'ONLINE' : 'OFFLINE'}`);
+});
+
+source.onerror = () => console.log('Connection lost, reconnecting...');
 ```
 
 ### REST API (fetch)
@@ -556,6 +634,19 @@ redis-cli SUBSCRIBE "factory:Line1_PLC:changes"
 # Write request (push to queue)
 redis-cli RPUSH "factory:writes" \
   '{"factory":"factory","plc":"Line1_PLC","tag":"Setpoint","value":100}'
+```
+
+### SSE (curl)
+
+```bash
+# Stream all events
+curl -N http://localhost:8080/api/events
+
+# Stream only value changes
+curl -N "http://localhost:8080/api/events?types=value-change"
+
+# Stream health and status for a specific PLC
+curl -N "http://localhost:8080/api/events?types=health,status-change&plc=Line1_PLC"
 ```
 
 ### REST (curl)

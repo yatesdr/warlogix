@@ -30,8 +30,9 @@ type Server struct {
 	running  bool
 	mu       sync.RWMutex
 
-	// Cleanup function for web UI resources (e.g. SSE event hub)
-	uiCleanup func()
+	// Cleanup functions for SSE event hubs and listeners
+	apiCleanup func()
+	uiCleanup  func()
 
 	// Unsecured deadline timer
 	deadlineTimer *time.Timer
@@ -67,7 +68,9 @@ func (s *Server) setupRoutes() {
 
 	// Mount REST API at /api
 	if s.config.API.Enabled {
-		r.Mount("/api", api.NewRouter(s.managers))
+		apiRouter, apiCleanup := api.NewRouter(s.managers)
+		s.apiCleanup = apiCleanup
+		r.Mount("/api", apiRouter)
 	}
 
 	// Mount Web UI at root
@@ -145,7 +148,13 @@ func (s *Server) Stop() error {
 		return nil
 	}
 
-	// Stop SSE event hub and other UI resources
+	// Stop API SSE hub and listeners
+	if s.apiCleanup != nil {
+		s.apiCleanup()
+		s.apiCleanup = nil
+	}
+
+	// Stop UI SSE event hub and other resources
 	if s.uiCleanup != nil {
 		s.uiCleanup()
 		s.uiCleanup = nil
@@ -177,6 +186,17 @@ func (s *Server) Address() string {
 func (s *Server) Reload(cfg *config.WebConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Clean up old SSE hubs/listeners before rebuilding routes
+	if s.apiCleanup != nil {
+		s.apiCleanup()
+		s.apiCleanup = nil
+	}
+	if s.uiCleanup != nil {
+		s.uiCleanup()
+		s.uiCleanup = nil
+	}
+
 	s.config = cfg
 	s.setupRoutes()
 	if s.server != nil {

@@ -1,14 +1,19 @@
 package tagpack
 
 import (
+	"fmt"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"warlink/config"
 	"github.com/yatesdr/plcio/logging"
 	"warlink/namespace"
 )
+
+// PublishListenerID is a unique identifier for a registered publish listener.
+type PublishListenerID string
 
 const (
 	// DebounceMs is the debounce time for pack publishing (250ms).
@@ -45,6 +50,11 @@ type Manager struct {
 	config      *config.Config // Reference to config for dynamic lookup
 	builder     *namespace.Builder
 
+	// Multi-listener support
+	publishListeners   map[PublishListenerID]PublishCallback
+	publishListenersMu sync.RWMutex
+	listenerCounter    uint64
+
 	// Debounce tracking
 	pendingMu sync.Mutex
 	pending   map[string]time.Time // pack name -> first trigger time
@@ -57,12 +67,13 @@ type Manager struct {
 // NewManager creates a new TagPack manager.
 func NewManager(cfg *config.Config, provider PLCDataProvider) *Manager {
 	m := &Manager{
-		packs:    make(map[string]*config.TagPackConfig),
-		pending:  make(map[string]time.Time),
-		provider: provider,
-		config:   cfg,
-		builder:  namespace.New(cfg.Namespace, ""),
-		stopChan: make(chan struct{}),
+		packs:            make(map[string]*config.TagPackConfig),
+		pending:          make(map[string]time.Time),
+		publishListeners: make(map[PublishListenerID]PublishCallback),
+		provider:         provider,
+		config:           cfg,
+		builder:          namespace.New(cfg.Namespace, ""),
+		stopChan:         make(chan struct{}),
 	}
 
 	// Load packs from config
@@ -99,6 +110,23 @@ func (m *Manager) SetOnPublish(callback PublishCallback) {
 	m.mu.Lock()
 	m.onPublish = callback
 	m.mu.Unlock()
+}
+
+// AddOnPublishListener registers an additional publish callback.
+// Returns a PublishListenerID that can be used to remove the listener.
+func (m *Manager) AddOnPublishListener(cb PublishCallback) PublishListenerID {
+	m.publishListenersMu.Lock()
+	defer m.publishListenersMu.Unlock()
+	id := PublishListenerID(fmt.Sprintf("pub-%d", atomic.AddUint64(&m.listenerCounter, 1)))
+	m.publishListeners[id] = cb
+	return id
+}
+
+// RemoveOnPublishListener removes a previously registered publish listener.
+func (m *Manager) RemoveOnPublishListener(id PublishListenerID) {
+	m.publishListenersMu.Lock()
+	defer m.publishListenersMu.Unlock()
+	delete(m.publishListeners, id)
 }
 
 // Reload reloads pack configurations from config.
@@ -306,8 +334,15 @@ func (m *Manager) publishPack(packName string) {
 		ValkeyChannel: builder.ValkeyPackChannel(packName),
 	}
 
-	// Call the publish callback
+	// Call the primary publish callback
 	callback(info)
+
+	// Call additional publish listeners
+	m.publishListenersMu.RLock()
+	for _, listener := range m.publishListeners {
+		go listener(info)
+	}
+	m.publishListenersMu.RUnlock()
 }
 
 // GetPackValue returns the current value of a pack without publishing.

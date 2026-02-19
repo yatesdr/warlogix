@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.15] - 2026-02-18
+
+### Added
+- **REST API SSE Stream**: New `GET /api/events` endpoint streams real-time PLC
+  data as Server-Sent Events. Event types: `value-change` (tag value changes),
+  `tagpack` (TagPack publishes), `status-change` (PLC connect/disconnect), and
+  `health` (periodic health checks). Supports `?types=` and `?plc=` query
+  parameter filters. No authentication required, consistent with the REST API
+  design for SCADA integration.
+
 ## [0.2.14] - 2026-02-18
 
 ### Changed

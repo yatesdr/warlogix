@@ -199,6 +199,78 @@ Returns current values for all tags in a TagPack.
 }
 ```
 
+### Server-Sent Events (SSE)
+
+```
+GET /events
+```
+
+Streams real-time PLC data as Server-Sent Events. Provides tag value changes, tagpack publishes, PLC connection status, and health updates. No authentication required.
+
+**Query Parameters:**
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `types` | Comma-separated event type filter. Omit to receive all types. | `?types=value-change,health` |
+| `plc` | Filter PLC-specific events to a single PLC. Non-PLC events (e.g. `tagpack`) pass through. | `?plc=MainPLC` |
+
+**Event Types:**
+
+| Event | Trigger | Frequency |
+|-------|---------|-----------|
+| `value-change` | Tag value changes during poll cycle | Per changed tag, every poll (~1s) |
+| `tagpack` | TagPack debounced publish | 250ms after member tag changes |
+| `status-change` | PLC connects, disconnects, or errors | On connection state transitions |
+| `health` | PLC health check | Every 10s (2s initial delay) |
+
+**Initial event** (sent on connect):
+```
+event: connected
+data: {"id":"api-1234567890"}
+```
+
+**`value-change` event:**
+```json
+{"plc": "MainPLC", "tag": "Counter", "value": 42, "type": "DINT"}
+```
+
+**`tagpack` event:**
+```json
+{
+  "name": "ProductionMetrics",
+  "timestamp": "2024-01-15T10:30:00.123Z",
+  "tags": {
+    "MainPLC.Counter": {"value": 42, "type": "DINT", "plc": "MainPLC"},
+    "MainPLC.Temperature": {"value": 72.5, "type": "REAL", "plc": "MainPLC"}
+  }
+}
+```
+
+**`status-change` event:**
+```json
+{
+  "plc": "MainPLC",
+  "status": "connected",
+  "tagCount": 24,
+  "productName": "1769-L33ER CompactLogix 5370",
+  "vendor": "Rockwell Automation/Allen-Bradley",
+  "connectionMode": "Connected"
+}
+```
+
+**`health` event:**
+```json
+{
+  "plc": "MainPLC",
+  "driver": "logix",
+  "online": true,
+  "status": "connected",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+A keepalive comment (`: keepalive`) is sent every 30 seconds to prevent proxy timeouts.
+
 ### Write Tag
 
 ```
@@ -284,4 +356,14 @@ curl -X POST http://localhost:8080/MainPLC/write \
 **cURL - Check health:**
 ```bash
 curl http://localhost:8080/MainPLC/health
+```
+
+**cURL - Stream all SSE events:**
+```bash
+curl -N http://localhost:8080/api/events
+```
+
+**cURL - Stream only value changes from a specific PLC:**
+```bash
+curl -N "http://localhost:8080/api/events?types=value-change&plc=MainPLC"
 ```

@@ -66,19 +66,29 @@ type WriteResponse struct {
 
 // handlers holds the API handler functions.
 type handlers struct {
-	managers engine.Managers
-	engine   *engine.Engine
+	managers        engine.Managers
+	engine          *engine.Engine
+	hub             *eventHub
+	valueListenerID plcman.ListenerID
+	changeListenerID plcman.ListenerID
+	packListenerID  tagpack.PublishListenerID
 }
 
 // NewRouter creates the REST API router.
-func NewRouter(managers engine.Managers) chi.Router {
+// Returns the router and a cleanup function that stops the SSE hub and removes listeners.
+func NewRouter(managers engine.Managers) (chi.Router, func()) {
 	r := chi.NewRouter()
-	h := &handlers{managers: managers}
+	h := &handlers{managers: managers, hub: newEventHub()}
 
 	// Capture engine if managers is *engine.Engine
 	if eng, ok := managers.(*engine.Engine); ok {
 		h.engine = eng
 	}
+
+	cleanup := h.setupSSE()
+
+	// SSE endpoint
+	r.Get("/events", h.handleSSE)
 
 	// Root - list PLCs
 	r.Get("/", h.handleListPLCs)
@@ -149,7 +159,7 @@ func NewRouter(managers engine.Managers) chi.Router {
 		r.Patch("/{name}/members/{index}", h.handleToggleTagPackMemberIgnore)
 	})
 
-	return r
+	return r, cleanup
 }
 
 func (h *handlers) writeJSON(w http.ResponseWriter, v interface{}) {
