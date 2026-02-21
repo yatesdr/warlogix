@@ -67,6 +67,7 @@ type WriteResponse struct {
 // AllTagEntry is the JSON response for a single tag in the all-tags endpoint.
 type AllTagEntry struct {
 	Name       string      `json:"name"`
+	MemLoc     string      `json:"memloc,omitempty"`
 	Type       string      `json:"type,omitempty"`
 	Configured bool        `json:"configured"`
 	Enabled    bool        `json:"enabled"`
@@ -540,9 +541,18 @@ func (h *handlers) handleWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve alias to memloc — the driver needs the actual address
+	writeTag := req.Tag
+	for _, tag := range plc.Config.Tags {
+		if tag.Alias != "" && tag.Alias == req.Tag {
+			writeTag = tag.Name
+			break
+		}
+	}
+
 	resultChan := make(chan error, 1)
 	go func() {
-		resultChan <- manager.WriteTag(plc.Config.Name, req.Tag, req.Value)
+		resultChan <- manager.WriteTag(plc.Config.Name, writeTag, req.Value)
 	}()
 
 	var writeErr error
@@ -639,6 +649,10 @@ func (h *handlers) handleAllKnownTags(w http.ResponseWriter, r *http.Request) {
 			entry.NoMQTT = sel.NoMQTT
 			entry.NoKafka = sel.NoKafka
 			entry.NoValkey = sel.NoValkey
+			if sel.Alias != "" {
+				entry.MemLoc = tag.Name
+				entry.Name = sel.Alias
+			}
 		}
 		if entry.Enabled {
 			if v, ok := values[tag.Name]; ok {
@@ -654,8 +668,15 @@ func (h *handlers) handleAllKnownTags(w http.ResponseWriter, r *http.Request) {
 		if seen[sel.Name] {
 			continue
 		}
+		name := sel.Name
+		memloc := ""
+		if sel.Alias != "" {
+			name = sel.Alias
+			memloc = sel.Name
+		}
 		entry := AllTagEntry{
-			Name:       sel.Name,
+			Name:       name,
+			MemLoc:     memloc,
 			Configured: true,
 			Enabled:    sel.Enabled,
 			Writable:   sel.Writable,

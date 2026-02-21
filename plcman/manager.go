@@ -119,7 +119,7 @@ func (m *ManagedPLC) GetTagInfo(tagName string) (bool, bool) {
 		return false, false
 	}
 	for _, tag := range m.Config.Tags {
-		if tag.Name == tagName {
+		if tag.Name == tagName || (tag.Alias != "" && tag.Alias == tagName) {
 			return true, tag.Writable
 		}
 	}
