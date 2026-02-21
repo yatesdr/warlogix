@@ -176,7 +176,8 @@ Returns every tag known to warlink for a PLC — discovered, configured, or both
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Tag name |
+| `name` | string | Tag name (alias when configured, otherwise address/tag name) |
+| `memloc` | string | Memory location/address, present only when tag has an alias |
 | `type` | string | Data type (from discovery or config) |
 | `configured` | bool | Whether this tag has a config entry |
 | `enabled` | bool | Whether the tag is enabled for polling |
@@ -299,6 +300,8 @@ Streams real-time PLC data as Server-Sent Events. Provides tag value changes, ta
 |-----------|-------------|---------|
 | `types` | Comma-separated event type filter. Omit to receive all types. | `?types=value-change,health` |
 | `plc` | Filter PLC-specific events to a single PLC. Non-PLC events (e.g. `tagpack`) pass through. | `?plc=MainPLC` |
+| `plcs` | Comma-separated list of PLCs to include. Use instead of `plc` when monitoring multiple PLCs. | `?plcs=PLC1,PLC2` |
+| `tags` | Comma-separated tag name filter. Only value-change events for these tags are delivered. Non-tag events pass through. | `?tags=Counter,Temperature` |
 
 **Event Types:**
 
@@ -318,6 +321,11 @@ data: {"id":"api-1234567890"}
 **`value-change` event:**
 ```json
 {"plc": "MainPLC", "tag": "Counter", "value": 42, "type": "DINT"}
+```
+
+For aliased tags (S7, Omron), `tag` is the alias and `memloc` contains the address:
+```json
+{"plc": "S7_PLC", "tag": "device_status", "memloc": "DB1.16", "value": 1234, "type": "DWORD"}
 ```
 
 **`tagpack` event:**
@@ -464,4 +472,9 @@ curl -X PATCH http://localhost:8080/api/MainPLC/tags/NewTag \
 **cURL - Stream only value changes from a specific PLC:**
 ```bash
 curl -N "http://localhost:8080/api/events?types=value-change&plc=MainPLC"
+```
+
+**cURL - Stream specific tags across multiple PLCs:**
+```bash
+curl -N "http://localhost:8080/api/events?plcs=PLC1,PLC2&tags=Counter,Temperature"
 ```

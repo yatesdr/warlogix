@@ -49,6 +49,18 @@ func (h *handlers) handleUpdateTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve alias to memloc — engine.UpdateTag matches on config Name (address)
+	resolvedTag := tagName
+	manager := h.managers.GetPLCMan()
+	if plc := manager.GetPLC(plcName); plc != nil {
+		for _, tag := range plc.Config.Tags {
+			if tag.Alias != "" && tag.Alias == tagName {
+				resolvedTag = tag.Name
+				break
+			}
+		}
+	}
+
 	engineReq := engine.TagUpdateRequest{
 		Enabled:  req.Enabled,
 		Writable: req.Writable,
@@ -57,7 +69,7 @@ func (h *handlers) handleUpdateTag(w http.ResponseWriter, r *http.Request) {
 		NoKafka:  req.NoKafka,
 		NoValkey: req.NoValkey,
 	}
-	if err := h.engine.UpdateTag(plcName, tagName, engineReq); err != nil {
+	if err := h.engine.UpdateTag(plcName, resolvedTag, engineReq); err != nil {
 		h.writeEngineError(w, err)
 		return
 	}

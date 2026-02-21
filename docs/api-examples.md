@@ -141,13 +141,17 @@ for message in pubsub.listen():
 ```python
 import requests
 
-def stream_events(base_url="http://localhost:8080", types=None, plc=None):
+def stream_events(base_url="http://localhost:8080", types=None, plc=None, plcs=None, tags=None):
     """Stream real-time PLC events via Server-Sent Events."""
     params = {}
     if types:
         params["types"] = ",".join(types)
     if plc:
         params["plc"] = plc
+    if plcs:
+        params["plcs"] = ",".join(plcs)
+    if tags:
+        params["tags"] = ",".join(tags)
 
     response = requests.get(
         f"{base_url}/api/events",
@@ -170,6 +174,9 @@ stream_events()
 
 # Stream only value changes from a specific PLC
 stream_events(types=["value-change"], plc="Line1_PLC")
+
+# Stream specific tags from multiple PLCs
+stream_events(types=["value-change"], plcs=["PLC1", "PLC2"], tags=["Counter", "Temperature"])
 
 # Stream health and status changes
 stream_events(types=["health", "status-change"])
@@ -322,8 +329,10 @@ readTag('Line1_PLC', 'Counter').then(data => {
 // Stream all events
 const source = new EventSource('http://localhost:8080/api/events');
 
-// Or with filters
+// With filters (single PLC, specific event types)
 // const source = new EventSource('http://localhost:8080/api/events?types=value-change,health&plc=Line1_PLC');
+// With multi-PLC and tag filters
+// const source = new EventSource('http://localhost:8080/api/events?plcs=PLC1,PLC2&tags=Counter,Temperature');
 
 source.addEventListener('connected', (e) => {
     console.log('Connected:', JSON.parse(e.data));
@@ -647,6 +656,9 @@ curl -N "http://localhost:8080/api/events?types=value-change"
 
 # Stream health and status for a specific PLC
 curl -N "http://localhost:8080/api/events?types=health,status-change&plc=Line1_PLC"
+
+# Stream specific tags from multiple PLCs
+curl -N "http://localhost:8080/api/events?plcs=PLC1,PLC2&tags=Counter,Temperature"
 ```
 
 ### REST (curl)

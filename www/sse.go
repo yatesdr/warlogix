@@ -292,11 +292,15 @@ func (h *Handlers) setupEventListeners() {
 	// Listen for value changes
 	plcMan.AddOnValueChangeListener(func(changes []plcman.ValueChange) {
 		for _, change := range changes {
+			tag := change.TagName
+			if change.Alias != "" {
+				tag = change.Alias
+			}
 			h.eventHub.Broadcast(SSEEvent{
 				Type: "value-change",
 				Data: ValueUpdate{
 					PLC:   change.PLCName,
-					Tag:   change.TagName,
+					Tag:   tag,
 					Value: change.Value,
 					Type:  change.TypeName,
 				},

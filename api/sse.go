@@ -26,15 +26,17 @@ const (
 type sseEvent struct {
 	Type string
 	PLC  string // set when event is PLC-specific (for filtering)
+	Tag  string // set when event is tag-specific (for filtering)
 	Data interface{}
 }
 
 // apiValueUpdate is the JSON payload for value-change events.
 type apiValueUpdate struct {
-	PLC   string      `json:"plc"`
-	Tag   string      `json:"tag"`
-	Value interface{} `json:"value"`
-	Type  string      `json:"type,omitempty"`
+	PLC    string      `json:"plc"`
+	Tag    string      `json:"tag"`
+	MemLoc string      `json:"memloc,omitempty"`
+	Value  interface{} `json:"value"`
+	Type   string      `json:"type,omitempty"`
 }
 
 // apiStatusUpdate is the JSON payload for status-change events.
@@ -167,6 +169,20 @@ func (h *handlers) handleSSE(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	plcFilter := r.URL.Query().Get("plc")
+	var plcsFilter map[string]bool
+	if plcs := r.URL.Query().Get("plcs"); plcs != "" {
+		plcsFilter = make(map[string]bool)
+		for _, p := range strings.Split(plcs, ",") {
+			plcsFilter[strings.TrimSpace(p)] = true
+		}
+	}
+	var tagFilter map[string]bool
+	if tags := r.URL.Query().Get("tags"); tags != "" {
+		tagFilter = make(map[string]bool)
+		for _, t := range strings.Split(tags, ",") {
+			tagFilter[strings.TrimSpace(t)] = true
+		}
+	}
 
 	clientID := fmt.Sprintf("api-%d", time.Now().UnixNano())
 	client := &apiSSEClient{
@@ -203,6 +219,13 @@ func (h *handlers) handleSSE(w http.ResponseWriter, r *http.Request) {
 			if plcFilter != "" && event.PLC != "" && event.PLC != plcFilter {
 				continue
 			}
+			if plcsFilter != nil && event.PLC != "" && !plcsFilter[event.PLC] {
+				continue
+			}
+			// Apply tag filter (only to tag-specific events)
+			if tagFilter != nil && event.Tag != "" && !tagFilter[event.Tag] {
+				continue
+			}
 			data, err := json.Marshal(event.Data)
 			if err != nil {
 				continue
@@ -228,14 +251,22 @@ func (h *handlers) setupSSE() func() {
 			if change.NoREST {
 				continue
 			}
+			tag := change.TagName
+			memloc := ""
+			if change.Alias != "" {
+				tag = change.Alias
+				memloc = change.TagName
+			}
 			h.hub.Broadcast(sseEvent{
 				Type: eventValueChange,
 				PLC:  change.PLCName,
+				Tag:  tag,
 				Data: apiValueUpdate{
-					PLC:   change.PLCName,
-					Tag:   change.TagName,
-					Value: change.Value,
-					Type:  change.TypeName,
+					PLC:    change.PLCName,
+					Tag:    tag,
+					MemLoc: memloc,
+					Value:  change.Value,
+					Type:   change.TypeName,
 				},
 			})
 		}

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.16] - 2026-02-21
+
+### Fixed
+- **Tag Alias in SSE Events**: Non-auto-discover PLCs (S7, Omron) were sending the
+  memory location (e.g. `DB1.16`) as the tag name in SSE `value-change` events.
+  Now sends the configured alias as `tag` with the address in a new `memloc` field.
+- **Tag Alias in All-Tags Endpoint**: `GET /api/{plc}/all-tags` now returns the
+  alias as `name` and the address as `memloc` for aliased tags.
+- **Write/Update by Alias**: `POST /{plc}/write` and `PATCH /{plc}/tags/{tag}`
+  now accept tag aliases, resolving them to the underlying memory address
+  before dispatching to the PLC driver or config layer.
+
+### Added
+- **SSE Tag Filter**: New `?tags=tag1,tag2` query parameter on `GET /api/events`
+  filters value-change events to specific tag names.
+- **SSE Multi-PLC Filter**: New `?plcs=plc1,plc2` query parameter on
+  `GET /api/events` filters events to multiple PLCs. The existing `?plc=` single
+  PLC filter is preserved.
+
 ## [0.2.15] - 2026-02-19
 
 ### Added
