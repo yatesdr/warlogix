@@ -519,6 +519,10 @@ var WarLink = (function() {
 
     var tagOrPackCache = null; // module-level cache for available-tags
 
+    function invalidateTagOrPackCache() {
+        tagOrPackCache = null;
+    }
+
     function TagOrPackPicker(containerEl, opts) {
         opts = opts || {};
         var currentValue = opts.value || '';
@@ -785,6 +789,17 @@ var WarLink = (function() {
         updateDisplay();
 
         return {
+            refresh: function() {
+                fetchItems();
+            },
+            setTagPackNames: function(names) {
+                tagPackNames = names || [];
+                if (loading) return;
+                if (tagOrPackCache) {
+                    buildItems(tagOrPackCache);
+                    render();
+                }
+            },
             setValue: function(val) {
                 currentValue = val || '';
                 updateDisplay();
@@ -872,6 +887,7 @@ var WarLink = (function() {
         TagPicker: TagPicker,
         TagOrPackPicker: TagOrPackPicker,
         invalidateTagPickerCache: invalidateTagPickerCache,
+        invalidateTagOrPackCache: invalidateTagOrPackCache,
         toggleTheme: toggleTheme
     };
 })();
