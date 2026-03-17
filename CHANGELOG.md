@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.17] - 2026-03-16
+
+### Fixed
+- **TagPack PLC/Tag Picker Refresh**: The TagPack member picker now updates its
+  PLC and published-tag options in place after PLC creation and tag publishing,
+  without requiring a full browser refresh and without resetting the current
+  page expand/collapse state.
+- **PCCC SLC Discovery Compatibility**: Updated `plcio` to `v0.1.6`, which
+  falls back to EtherNet/IP identity data when some SLC-500 controllers reject
+  the PCCC diagnostic probe used during tag discovery.
+
 ## [0.2.16] - 2026-02-21
 
 ### Fixed

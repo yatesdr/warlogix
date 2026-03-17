@@ -216,6 +216,14 @@ var WarLink = (function() {
 
     var tagPickerCache = {};
 
+    function invalidateTagPickerCache(plcName) {
+        if (plcName) {
+            delete tagPickerCache[plcName];
+            return;
+        }
+        tagPickerCache = {};
+    }
+
     function TagPicker(containerEl, opts) {
         opts = opts || {};
         var currentPLC = opts.plc || '';
@@ -488,6 +496,9 @@ var WarLink = (function() {
                 currentPLC = plcName;
                 currentValue = '';
                 updateDisplay();
+                fetchTags();
+            },
+            refresh: function() {
                 fetchTags();
             },
             setValue: function(val) {
@@ -860,6 +871,7 @@ var WarLink = (function() {
         toast: toast,
         TagPicker: TagPicker,
         TagOrPackPicker: TagOrPackPicker,
+        invalidateTagPickerCache: invalidateTagPickerCache,
         toggleTheme: toggleTheme
     };
 })();

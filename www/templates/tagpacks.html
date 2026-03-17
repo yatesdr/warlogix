@@ -135,10 +135,11 @@ function toggleExpand(headerEl) {
     var item = headerEl.closest('.tagpack-item');
     item.classList.toggle('collapsed');
 
-    // Load PLCs for add-member dropdown on first expand
+    // Refresh PLCs for the add-member dropdown whenever the pack is opened,
+    // but leave the rest of the page state untouched.
     if (!item.classList.contains('collapsed')) {
         var plcSelect = item.querySelector('.add-member-plc');
-        if (plcSelect && plcSelect.options.length <= 1) {
+        if (plcSelect) {
             loadPLCsForItem(plcSelect);
         }
         // Initialize tag picker if not yet done
@@ -356,6 +357,7 @@ function reloadPackMembers(packName) {
 }
 
 function loadPLCsForItem(plcSelect) {
+    var previousValue = plcSelect.value;
     WarLink.api.get('/htmx/available-tags').then(function(tags) {
         var plcs = {};
         (tags || []).forEach(function(t) { plcs[t.plc] = true; });
@@ -363,12 +365,43 @@ function loadPLCsForItem(plcSelect) {
         Object.keys(plcs).sort().forEach(function(name) {
             plcSelect.innerHTML += '<option value="' + WarLink.escapeHtml(name) + '">' + WarLink.escapeHtml(name) + '</option>';
         });
+
+        if (previousValue && plcs[previousValue]) {
+            plcSelect.value = previousValue;
+        } else if (previousValue) {
+            plcSelect.value = '';
+            onMemberPLCChange(plcSelect);
+        }
+    });
+}
+
+function refreshVisiblePLCPickers() {
+    document.querySelectorAll('.tagpack-item:not(.collapsed) .add-member-plc').forEach(function(plcSelect) {
+        loadPLCsForItem(plcSelect);
+    });
+}
+
+function refreshPickersForPLC(plcName) {
+    if (!plcName) return;
+    WarLink.invalidateTagPickerCache(plcName);
+    document.querySelectorAll('.tagpack-item .add-member-plc').forEach(function(plcSelect) {
+        if (plcSelect.value !== plcName) return;
+        var item = plcSelect.closest('.tagpack-item');
+        if (!item) return;
+        var picker = memberTagPickers[item.dataset.name];
+        if (picker && typeof picker.refresh === 'function') {
+            picker.refresh();
+        }
     });
 }
 
 // SSE for entity changes from other tabs
 WarLink.createSSE('/events/republisher', {
     onEntityChange: function(data) {
+        if (data.entityType === 'plc') {
+            refreshVisiblePLCPickers();
+            return;
+        }
         if (data.entityType !== 'tagpack') return;
         if (data.action === 'remove') {
             var name = data.name;
@@ -389,6 +422,11 @@ WarLink.createSSE('/events/republisher', {
         if (data.action === 'update') {
             reloadPackState(data.name);
         }
+    },
+    onConfigChange: function(data) {
+        if (!data || !data.plc) return;
+        refreshVisiblePLCPickers();
+        refreshPickersForPLC(data.plc);
     }
 });
 
